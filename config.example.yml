@@ -1,0 +1,37 @@
+steamKey: <your steam key> # https://steamcommunity.com/dev/apikey
+pinnedPackages:
+  ssri: 8.0.1
+  cacache: 15.3.0
+  passport-steam: 1.0.17
+  minipass-fetch: 2.1.2
+  express-rate-limit: 6.7.0
+version: latest
+mods:
+- screepsmod-mongo
+- screepsmod-auth
+- screepsmod-admin-utils
+bots:
+  simplebot: "screepsbot-zeswarm"
+extraPackages:
+  morgan: "*"
+localMods: ./mods
+backup:
+  dirs:
+  - tests
+serverConfig:
+  welcomeText:  |
+    <style>.header h1{  text-align: center; }</style>
+    <div class="header">
+    <h1>Test Server</h1>
+    Welcome to the Screeps test server.<br>
+    Mods include screepsmod-auth and several custom mods to enable email notifications, control tickrate, power banks, portals, and other internal improvements.<br><br>
+    <div style="text-align: center">
+    This server is for testing purposes only. <br>
+    </div>  
+  tickRate: 200
+  socketUpdateRate: 200
+  maxCPU: 20
+  baseCPU: 20
+  stepCPU: 10
+  shardName: 'test1'
+  
