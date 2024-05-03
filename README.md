@@ -1,6 +1,6 @@
 # Screepy
 
-It's like teemy but with extra S
+Timmy like Screeps AI
 
 ## Install
 
@@ -10,6 +10,16 @@ Then Run:
 
 ```bash
 npm install
+```
+
+Push to Screeps server with the following commands:
+
+```bash
+npm run push-main
+npm run push-sim
+npm run push-seasonal
+npm run push-pserver
+npm run push-screepsplus
 ```
 
 ## Run dev server
