@@ -46,11 +46,14 @@ class Miner {
             }
             sources[targetId].miners.push(creep.name);
             creep.memory.targetId = targetId;
+            log.debug("Miner", `${creep.name} assigned to source ${targetId}`);
 
             const source = Game.getObjectById(targetId);
             if (source) {
                 this.ensureContainerForSource(source, creep.room);
             }
+        } else {
+            log.warn("Miner", `${creep.name} could not find available source. Sources in memory: ${sourceIds.length}`);
         }
     }
 
