@@ -1,4 +1,5 @@
 import { logCpu, logCpuStart } from "utils/logCPU";
+import { log } from "utils/logger";
 
 interface Module {
   name: string;
@@ -22,11 +23,11 @@ export function runModuleManager(modules: Module[], cpuLimit: number, debug = fa
     remainingCpu -= currentCpuUsed;
 
     if (!module.mandatory && remainingCpu < 0) {
-      console.log(Game.time, "CPU limit reached, skipping module:", module.name);
+      log.warn("ModuleManager", "CPU limit reached, skipping module:", module.name);
       continue; // Exits the loop entirely if CPU limit is exceeded for non-mandatory modules
     }
     if (module.threshold && Game.cpu.bucket < module.threshold) {
-      console.log(Game.time, "Low CPU bucket, skipping module:", module.name);
+      log.warn("ModuleManager", "Low CPU bucket, skipping module:", module.name);
       continue; // Skips to the next module
     }
     const lastRanAt = lastRun.get(module.name) ?? 0;
@@ -36,9 +37,9 @@ export function runModuleManager(modules: Module[], cpuLimit: number, debug = fa
         if (debug) logCpu(module.name, currentCpuUsed);
         lastRun.set(module.name, Game.time);
       } catch (error) {
-        console.log(`Error in module ${module.name}:`, (error as Error).stack);
+        log.error("ModuleManager", `Error in module ${module.name}:`, (error as Error).stack);
         if (module.mandatory) {
-          console.log(`Attempting to rerun mandatory module ${module.name} due to error.`);
+          log.warn("ModuleManager", `Attempting to rerun mandatory module ${module.name} due to error.`);
           module.fn(); // Rerun mandatory modules immediately if they fail
         }
       }

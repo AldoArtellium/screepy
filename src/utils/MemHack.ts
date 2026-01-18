@@ -13,8 +13,8 @@ const MemHack = {
         (global as any).Memory = this.memory;
         (RawMemory as any)._parsed = this.memory;
     }
-}
+};
 
 MemHack.register();
 
-export default MemHack
+export default MemHack;

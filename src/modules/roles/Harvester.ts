@@ -1,88 +1,87 @@
-type CreepAction = 'withdraw' | 'transfer' | 'pickup' | 'harvest';
+import {
+    ENERGY_THRESHOLDS,
+    findEnergySource,
+    findEnergyTarget,
+    idleNearSpawn,
+    REUSE_PATH,
+    updateEnergyState
+} from "../../utils/creepUtils";
 
+/**
+ * Harvester role - Basic energy gathering
+ * Flexible role: accepts tasks when available, falls back to role behavior
+ *
+ * Phase-aware behavior:
+ * - Phase 0 (EMERGENCY): Harvest directly from sources
+ * - Phase 1+ with miners: Pick up from containers/dropped resources only
+ */
 class Harvester {
     static run(creep: Creep) {
-        if (creep.store.getFreeCapacity() === 0) {
-            creep.memory.state = 'working';
-        } else if (creep.store.getUsedCapacity() === 0) {
-            creep.memory.state = 'idle';
-        }
+        const state = updateEnergyState(creep);
 
-        if (creep.memory.state !== 'working') {
+        if (state === "acquiring") {
+            creep.memory.state = "acquiring";
             this.harvestEnergy(creep);
         } else {
-            this.deliverEnergy(creep);
+            // Try to deliver - if no target, switch to acquiring
+            const hasTarget = this.deliverEnergy(creep);
+            if (hasTarget) {
+                creep.memory.state = "executing";
+            } else {
+                creep.memory.state = "acquiring";
+                this.harvestEnergy(creep);
+            }
         }
     }
 
-    static harvestEnergy(creep: Creep) {
-        // Attempt to withdraw from containers
-        const container = creep.pos.findClosestByPath(FIND_STRUCTURES, {
-            filter: s => s.structureType === STRUCTURE_CONTAINER &&
-                         s.store.getUsedCapacity(RESOURCE_ENERGY) > 200
+    private static harvestEnergy(creep: Creep) {
+        const room = creep.room;
+        const phase = room.memory.phase ?? 0;
+        const minerCount = Memory.spawn?.currentCounts?.miner ?? 0;
+
+        // In EMERGENCY phase (0) or when no miners exist, harvest directly from sources
+        const includeSources = phase === 0 || minerCount === 0;
+
+        const target = findEnergySource(creep, {
+            includeSources,
+            includeStorage: phase >= 4,
+            storageMinEnergy: 1000
         });
-        if (container) {
-            this.moveToAndInteract(creep, container, 'withdraw', RESOURCE_ENERGY);
+
+        if (!target) {
+            idleNearSpawn(creep);  // Truly idle only when no sources AND no delivery targets
             return;
         }
 
-        // Attempt to pick up dropped resources
-        const droppedResource = creep.pos.findClosestByPath(FIND_DROPPED_RESOURCES, {
-            filter: r => r.resourceType === RESOURCE_ENERGY
-        });
-        if (droppedResource) {
-            this.moveToAndInteract(creep, droppedResource, 'pickup');
-            return;
-        }
-
-        // Harvest from the most energy-rich source
-        const source = creep.pos.findClosestByPath(FIND_SOURCES_ACTIVE);
-        if (source) {
-            this.moveToAndInteract(creep, source, 'harvest');
-        }
+        this.moveToAndInteract(creep, target);
     }
 
-    static deliverEnergy(creep: Creep) {
-        // Deliver to closest needy structure
-        const target = creep.pos.findClosestByPath(FIND_STRUCTURES, {
-            filter: s => (s.structureType === STRUCTURE_SPAWN ||
-                          s.structureType === STRUCTURE_EXTENSION ||
-                          s.structureType === STRUCTURE_TOWER ||
-                          s.structureType === STRUCTURE_STORAGE) &&
-                         s.store.getFreeCapacity(RESOURCE_ENERGY) > 0
-        });
+    private static deliverEnergy(creep: Creep): boolean {
+        const target = findEnergyTarget(creep);
+
         if (target) {
-            this.moveToAndInteract(creep, target, 'transfer', RESOURCE_ENERGY);
-            return;
+            if (creep.pos.isNearTo(target)) {
+                creep.transfer(target, RESOURCE_ENERGY);
+            } else {
+                creep.moveTo(target, { reusePath: REUSE_PATH, visualizePathStyle: { stroke: "#ffaa00" } });
+            }
+            return true;
         }
 
-        // No valid target found, set to idle
-        creep.memory.state = 'idle';
+        return false;
     }
 
-    static moveToAndInteract(creep: Creep, target: Structure | Resource | Source, action: CreepAction, resourceType: ResourceConstant = RESOURCE_ENERGY) {
-        let actionResult: ScreepsReturnCode;
-
-        switch (action) {
-            case 'withdraw':
-            case 'transfer':
-                actionResult = creep[action](target as Structure<StructureConstant>, resourceType);
-                break;
-            case 'pickup':
-            case 'harvest':
-                actionResult = creep[action](target as any);
-                break;
-            default:
-                throw new Error(`Invalid action: ${action}`);
-        }
-
-        if (actionResult === ERR_NOT_IN_RANGE) {
-            creep.memory.state = 'moving';
-            creep.moveTo(target, { visualizePathStyle: { stroke: '#ffaa00' } });
-        } else if (actionResult === OK) {
-            creep.memory.state = 'working';
+    private static moveToAndInteract(creep: Creep, target: Structure | Resource | Source) {
+        if (creep.pos.isNearTo(target)) {
+            if ("resourceType" in target) {
+                creep.pickup(target);
+            } else if ("store" in target) {
+                creep.withdraw(target as StructureContainer | StructureStorage, RESOURCE_ENERGY);
+            } else if ("energy" in target) {
+                creep.harvest(target as Source);
+            }
         } else {
-            creep.memory.state = 'error'; // Handle unexpected results
+            creep.moveTo(target, { reusePath: REUSE_PATH, visualizePathStyle: { stroke: "#ffaa00" } });
         }
     }
 }
