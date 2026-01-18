@@ -24,8 +24,24 @@ class Miner {
         // Ensure room memory is initialized
         const roomMemory = ensureRoomMemory(creep.room.name);
         const sources = roomMemory.sources ?? {};
-        const sourceIds = Object.keys(sources) as Id<Source>[];
+        let sourceIds = Object.keys(sources) as Id<Source>[];
         let targetId: Id<Source> | undefined;
+
+        // If sources memory is empty, populate it from the room
+        if (sourceIds.length === 0) {
+            const roomSources = creep.room.find(FIND_SOURCES);
+            for (const source of roomSources) {
+                if (!sources[source.id]) {
+                    sources[source.id] = {
+                        distance: 0,
+                        miners: []
+                    };
+                }
+            }
+            roomMemory.sources = sources;
+            sourceIds = Object.keys(sources) as Id<Source>[];
+            log.debug("Miner", `Populated sources memory with ${sourceIds.length} sources`);
+        }
 
         for (const sourceId of sourceIds) {
             const sourceData = sources[sourceId];

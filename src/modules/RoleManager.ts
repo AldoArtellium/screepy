@@ -37,10 +37,12 @@ export const roleManagerModule = () => {
     _.forEach(Game.creeps, (creep) => {
         if (creep.spawning) return;
 
-        // Default undefined roles to harvester
-        const role = creep.memory.role || "harvester";
-        if (!creep.memory.role) {
-            creep.memory.role = "harvester";
+        // Warn and fix undefined roles
+        let role = creep.memory.role;
+        if (!role) {
+            log.warn("RoleManager", `${creep.name} has no role assigned, defaulting to harvester`);
+            role = "harvester";
+            creep.memory.role = role;
         }
 
         const config = getRoleConfig(role);

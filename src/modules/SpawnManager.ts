@@ -155,15 +155,15 @@ class SpawnManager {
 
                 if (needed > 0) {
                     const body = this.determineBodyParts(role, room);
-                    const memory: CreepMemory = { role, room: roomName };
                     const priority = priorities[role] ?? 99;
 
                     // Add one entry per needed creep (up to a reasonable limit)
+                    // IMPORTANT: Create fresh memory object each iteration to avoid shared reference bugs
                     for (let i = 0; i < Math.min(needed, 3); i++) {
                         this.spawnQueue.push({
                             role,
                             body,
-                            memory,
+                            memory: { role, room: roomName },
                             priority,
                             roomName
                         });
@@ -211,6 +211,10 @@ class SpawnManager {
 
             if (result === OK) {
                 log.info("SpawnManager", `Spawning ${role}: ${newName} (body: ${body.length} parts, cost: ${cost})`);
+                // Verify memory was set correctly
+                if (Memory.creeps[newName]?.role !== role) {
+                    log.error("SpawnManager", `Memory mismatch! Expected role=${role}, got=${Memory.creeps[newName]?.role}`);
+                }
                 this.spawnQueue.splice(bestIndex, 1);
             } else if (result !== ERR_NOT_ENOUGH_ENERGY) {
                 log.warn("SpawnManager", `Failed to spawn ${role}: ${result}`);
