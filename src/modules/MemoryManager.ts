@@ -143,6 +143,11 @@ class MemoryManager {
     }
 
     private handleSources(room: Room): void {
+        // Ensure sources object exists before accessing
+        if (!Memory.rooms[room.name].sources) {
+            Memory.rooms[room.name].sources = {};
+        }
+
         room.find(FIND_SOURCES).forEach(source => {
             const sourceMemory = Memory.rooms[room.name].sources[source.id] || {
                 distance: 0,
