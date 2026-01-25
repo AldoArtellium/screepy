@@ -100,7 +100,7 @@ export const DEFENSE_PRIORITY_BOOSTS: Partial<Record<TaskType, number>> = {
 };
 
 /**
- * Priority boost for upgrading in early phases (1-3) to ensure RCL progression
+ * Priority boost for upgrading at RCL 1 to ensure progression to RCL 2
  * Without this, upgrade tasks (priority 55) never get assigned because
  * spawn filling and building always take precedence
  */

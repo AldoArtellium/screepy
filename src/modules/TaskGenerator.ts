@@ -564,10 +564,10 @@ class TaskGenerator {
         // Priority boost if at risk of downgrade
         const priorityBoost = downgradeRisk ? -20 : 0;
 
-        // Priority boost in early phases to ensure upgrading happens
+        // Priority boost at RCL 1 to ensure upgrading happens before building
         // Without this, upgrade tasks (priority 55) never get assigned because
         // spawn filling (10) and building (45) always take precedence
-        const phaseBoost = phase <= 3 ? EARLY_PHASE_UPGRADE_BOOST : 0;
+        const rclBoost = controller.level < 2 ? EARLY_PHASE_UPGRADE_BOOST : 0;
 
         this.addTask(room, {
             id: generateTaskId(TaskType.UPGRADE_CONTROLLER, controller.id),
@@ -575,7 +575,7 @@ class TaskGenerator {
             category: TaskCategory.UPGRADE,
             targetId: controller.id,
             roomName: room.name,
-            priority: getEffectivePriority(TaskType.UPGRADE_CONTROLLER, false) + priorityBoost + phaseBoost,
+            priority: getEffectivePriority(TaskType.UPGRADE_CONTROLLER, false) + priorityBoost + rclBoost,
             status: TaskStatus.PENDING,
             createdAt: Game.time
         });
