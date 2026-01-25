@@ -1,6 +1,5 @@
 /**
  * Shared utilities for creep roles
- * Provides common constants, caching, and energy management functions
  */
 
 /** Standard energy thresholds used across roles */
@@ -19,242 +18,53 @@ export const ENERGY_THRESHOLDS = {
     STATE_LOW: 0.2
 } as const;
 
-/** Standard reuse path value */
-export const REUSE_PATH = 5;
-
-/** Default cache duration in ticks */
-export const TARGET_CACHE_TICKS = 10;
-
 /**
- * Check if a cached target is still valid
+ * Check if creep has lost parts critical to its body type
+ * Returns true if the creep can no longer perform its intended role
  */
-export function isCacheValid(creep: Creep, cacheTicks = TARGET_CACHE_TICKS): boolean {
-    if (!creep.memory.targetTick) return false;
-    return Game.time - creep.memory.targetTick < cacheTicks;
-}
+export function hasLostCriticalParts(creep: Creep): boolean {
+    const bodyType = creep.memory.bodyType;
 
-/**
- * Get a cached target or find a new one
- * Automatically manages target caching in creep memory
- */
-export function getOrFindTarget<T extends _HasId>(
-    creep: Creep,
-    finder: () => T | null,
-    validator?: (target: T) => boolean
-): T | null {
-    // Check cached target first
-    if (creep.memory.targetId && isCacheValid(creep)) {
-        const cached = Game.getObjectById(creep.memory.targetId as Id<T>);
-        if (cached && (!validator || validator(cached))) {
-            return cached;
-        }
-        // Cache is stale or invalid
-        delete creep.memory.targetId;
-        delete creep.memory.targetTick;
-    }
+    // Count active parts (parts with hits > 0)
+    const activeParts = (part: BodyPartConstant) =>
+        creep.body.filter(p => p.type === part && p.hits > 0).length;
 
-    // Find new target
-    const target = finder();
-    if (target) {
-        creep.memory.targetId = target.id;
-        creep.memory.targetTick = Game.time;
-    }
-    return target;
-}
-
-/**
- * Clear cached target from creep memory
- */
-export function clearTargetCache(creep: Creep): void {
-    delete creep.memory.targetId;
-    delete creep.memory.targetTick;
-}
-
-/**
- * Find an energy source for acquiring energy
- * Priority: containers > dropped resources > storage (phase 4+) > sources (emergency)
- */
-export function findEnergySource(
-    creep: Creep,
-    options?: {
-        includeStorage?: boolean;
-        includeSources?: boolean;
-        storageMinEnergy?: number;
-    }
-): Structure | Resource | Source | null {
-    const room = creep.room;
-    const phase = room.memory.phase ?? 0;
-    const opts = {
-        includeStorage: phase >= 4,
-        includeSources: phase === 0,
-        storageMinEnergy: ENERGY_THRESHOLDS.STORAGE_PULL,
-        ...options
-    };
-
-    // Try containers first
-    const container = creep.pos.findClosestByPath(FIND_STRUCTURES, {
-        filter: (s): s is StructureContainer =>
-            s.structureType === STRUCTURE_CONTAINER &&
-            s.store.getUsedCapacity(RESOURCE_ENERGY) > ENERGY_THRESHOLDS.CONTAINER_MIN
-    });
-    if (container) return container;
-
-    // Try dropped resources
-    const dropped = creep.pos.findClosestByPath(FIND_DROPPED_RESOURCES, {
-        filter: r => r.resourceType === RESOURCE_ENERGY && r.amount > ENERGY_THRESHOLDS.DROPPED_MIN
-    });
-    if (dropped) return dropped;
-
-    // Try storage if enabled
-    if (opts.includeStorage && room.storage) {
-        if (room.storage.store.getUsedCapacity(RESOURCE_ENERGY) > opts.storageMinEnergy) {
-            return room.storage;
-        }
-    }
-
-    // Try sources if enabled (emergency only)
-    if (opts.includeSources) {
-        const source = creep.pos.findClosestByPath(FIND_SOURCES_ACTIVE);
-        if (source) return source;
-    }
-
-    return null;
-}
-
-/**
- * Find an energy delivery target
- * Priority varies by defense mode:
- * - Defense: towers > spawn/extensions > storage
- * - Normal: spawn/extensions > towers > storage
- */
-export function findEnergyTarget(
-    creep: Creep,
-    options?: {
-        defenseMode?: boolean;
-        includeStorage?: boolean;
-    }
-): Structure | null {
-    const room = creep.room;
-    const phase = room.memory.phase ?? 0;
-    const opts = {
-        defenseMode: room.memory.defenseMode ?? false,
-        includeStorage: phase >= 4,
-        ...options
-    };
-
-    // Defense mode: towers first
-    if (opts.defenseMode) {
-        const tower = creep.pos.findClosestByPath(FIND_MY_STRUCTURES, {
-            filter: (s): s is StructureTower =>
-                s.structureType === STRUCTURE_TOWER &&
-                s.store.getFreeCapacity(RESOURCE_ENERGY) > 100
-        });
-        if (tower) return tower;
-    }
-
-    // Spawns and extensions (always highest priority in normal mode)
-    const spawnOrExtension = creep.pos.findClosestByPath(FIND_MY_STRUCTURES, {
-        filter: (s): s is StructureSpawn | StructureExtension =>
-            (s.structureType === STRUCTURE_SPAWN || s.structureType === STRUCTURE_EXTENSION) &&
-            s.store.getFreeCapacity(RESOURCE_ENERGY) > 0
-    });
-    if (spawnOrExtension) return spawnOrExtension;
-
-    // Towers (lower priority in normal mode)
-    if (!opts.defenseMode) {
-        const tower = creep.pos.findClosestByPath(FIND_MY_STRUCTURES, {
-            filter: (s): s is StructureTower =>
-                s.structureType === STRUCTURE_TOWER &&
-                s.store.getFreeCapacity(RESOURCE_ENERGY) > 0
-        });
-        if (tower) return tower;
-    }
-
-    // Storage
-    if (opts.includeStorage && room.storage) {
-        if (room.storage.store.getFreeCapacity(RESOURCE_ENERGY) > 0) {
-            return room.storage;
-        }
-    }
-
-    return null;
-}
-
-/**
- * Move creep to idle position near spawn
- * Note: This function uses direct moveTo(). For centralized traffic, handleIdleCreep in TaskExecutor uses TrafficManager.
- */
-export function idleNearSpawn(creep: Creep): void {
-    const spawn = creep.room.find(FIND_MY_SPAWNS)[0];
-    if (!spawn) return;
-
-    if (!creep.pos.inRangeTo(spawn, 3)) {
-        creep.moveTo(spawn, { reusePath: REUSE_PATH });
-    } else if (creep.pos.isNearTo(spawn) && Game.time % 5 === 0) {
-        // Occasionally move away from spawn to avoid blocking
-        const directions: DirectionConstant[] = [
-            TOP, TOP_RIGHT, RIGHT, BOTTOM_RIGHT, BOTTOM, BOTTOM_LEFT, LEFT, TOP_LEFT
-        ];
-        const direction = directions[Math.floor(Math.random() * directions.length)];
-        creep.move(direction);
+    switch (bodyType) {
+        case "worker":
+            // Worker needs both WORK and CARRY to function
+            return activeParts(WORK) === 0 || activeParts(CARRY) === 0;
+        case "transport":
+            // Transport needs CARRY to haul
+            return activeParts(CARRY) === 0;
+        case "combat":
+            // Combat needs ATTACK to fight
+            return activeParts(ATTACK) === 0;
+        default:
+            // Generic check - no useful work parts left
+            return activeParts(WORK) === 0 &&
+                   activeParts(CARRY) === 0 &&
+                   activeParts(ATTACK) === 0;
     }
 }
 
 /**
- * Update creep energy state using hysteresis
- * Returns the new state: "acquiring" or "executing"
+ * Check if a creep should be recycled
+ * Recycle when:
+ * - Critical parts are lost (can't perform role)
+ * - Below 50% health and no healing available
  */
-export function updateEnergyState(creep: Creep): "acquiring" | "executing" {
-    const capacity = creep.store.getCapacity();
-    const used = creep.store.getUsedCapacity();
+export function shouldRecycleCreep(creep: Creep, canHeal: boolean): boolean {
+    // Never recycle spawning creeps
+    if (creep.spawning) return false;
 
-    if (used >= capacity * ENERGY_THRESHOLDS.STATE_HIGH) {
-        return "executing";
-    } else if (used <= capacity * ENERGY_THRESHOLDS.STATE_LOW) {
-        return "acquiring";
-    }
+    // Don't recycle healthy creeps
+    if (creep.hits === creep.hitsMax) return false;
 
-    // Between thresholds: keep current state (hysteresis)
-    if (creep.memory.state === "executing") {
-        return "executing";
-    }
-    return "acquiring";
-}
+    // Always recycle if critical parts are lost (can't work)
+    if (hasLostCriticalParts(creep)) return true;
 
-/**
- * Move to a target and perform an action
- * Returns true if action was attempted (whether successful or not)
- * Note: This function uses direct moveTo() for simplicity.
- * For centralized traffic management, use trafficManager.requestMove() instead.
- */
-export function moveToAndAct(
-    creep: Creep,
-    target: RoomObject,
-    action: () => ScreepsReturnCode,
-    range = 1
-): boolean {
-    if (creep.pos.inRangeTo(target, range)) {
-        action();
-        return true;
-    } else {
-        creep.moveTo(target, { reusePath: REUSE_PATH });
-        return false;
-    }
-}
+    // Recycle if below 50% health and no healing available
+    if (!canHeal && creep.hits < creep.hitsMax * 0.5) return true;
 
-/**
- * Withdraw energy from a structure or pickup dropped resource
- */
-export function acquireEnergy(creep: Creep, target: Structure | Resource | Source): ScreepsReturnCode {
-    if ("resourceType" in target) {
-        // Dropped resource
-        return creep.pickup(target);
-    } else if ("energy" in target && "energyCapacity" in target) {
-        // Source
-        return creep.harvest(target);
-    } else if ("store" in target) {
-        // Structure with store
-        return creep.withdraw(target, RESOURCE_ENERGY);
-    }
-    return ERR_INVALID_TARGET;
+    return false;
 }

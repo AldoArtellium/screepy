@@ -279,6 +279,10 @@ class TaskExecutor {
                 this.executeClaimOrReserve(creep, task.type, task.roomName);
                 break;
 
+            case TaskType.RECYCLE_CREEP:
+                this.executeRecycle(creep, target as StructureSpawn);
+                break;
+
             default:
                 log.warn("TaskExecutor", `Unknown task type: ${task.type}`);
                 this.completeTask(creep);
@@ -634,6 +638,42 @@ class TaskExecutor {
                 log.warn("TaskExecutor", `Cannot reserve ${targetRoomName}: owned by someone`);
                 this.completeTask(creep);
             }
+        }
+    }
+
+    /**
+     * Execute recycle task
+     * Moves creep to spawn and recycles it to recover energy
+     */
+    private executeRecycle(creep: Creep, spawn: StructureSpawn): void {
+        if (!spawn) {
+            log.warn("TaskExecutor", `No spawn for recycling ${creep.name}`);
+            this.completeTask(creep);
+            return;
+        }
+
+        // Move to spawn if not adjacent
+        if (!creep.pos.isNearTo(spawn)) {
+            trafficManager.requestMove(creep, spawn.pos, {
+                range: 1,
+                priority: 90  // Low priority - don't block important moves
+            });
+            return;
+        }
+
+        // Attempt to recycle
+        const result = spawn.recycleCreep(creep);
+        if (result === OK) {
+            log.info("TaskExecutor", `Recycled damaged creep ${creep.name} at ${spawn.name}`);
+            // Creep will be removed from game - no need to complete task
+        } else if (result === ERR_BUSY) {
+            // Spawn is busy spawning - wait
+        } else if (result === ERR_NOT_IN_RANGE) {
+            // Should not happen since we checked isNearTo, but handle it
+            trafficManager.requestMove(creep, spawn.pos, { range: 1, priority: 90 });
+        } else {
+            log.warn("TaskExecutor", `Failed to recycle ${creep.name}: ${result}`);
+            this.failTask(creep, { id: creep.memory.currentTask!.taskId, type: TaskType.RECYCLE_CREEP });
         }
     }
 

@@ -27,6 +27,9 @@ class TaskDispatcher {
 
         if (pendingTasks.length === 0) return;
 
+        // First, handle recycle tasks specially (can interrupt busy creeps)
+        this.dispatchRecycleTasks(room, pendingTasks);
+
         // Find idle creeps (no current task)
         const idleCreeps = room.find(FIND_MY_CREEPS, {
             filter: c => !c.spawning && !c.memory.currentTask
@@ -47,6 +50,38 @@ class TaskDispatcher {
                     idleCreeps.splice(index, 1);
                 }
             }
+        }
+    }
+
+    /**
+     * Dispatch recycle tasks - these can interrupt busy creeps
+     * Recycle tasks target specific creeps by ID and must override their current task
+     */
+    private dispatchRecycleTasks(room: Room, pendingTasks: Task[]): void {
+        const recycleTasks = pendingTasks.filter(t => t.type === TaskType.RECYCLE_CREEP);
+
+        for (const task of recycleTasks) {
+            if (task.status !== TaskStatus.PENDING) continue;
+
+            const creepId = task.data?.creepId;
+            if (!creepId) continue;
+
+            // Find the specific creep that needs to be recycled
+            const creep = Game.getObjectById(creepId as Id<Creep>);
+            if (!creep || creep.spawning) continue;
+
+            // Skip if creep already has a recycle task
+            if (creep.memory.currentTask?.type === TaskType.RECYCLE_CREEP) continue;
+
+            // Clear any existing task and assign recycle task
+            if (creep.memory.currentTask) {
+                // Unassign the old task
+                const oldTaskId = creep.memory.currentTask.taskId;
+                this.unassignTask(room, oldTaskId);
+                log.debug("TaskDispatcher", `Interrupted ${creep.name}'s task for recycling`);
+            }
+
+            this.assignTask(task, creep);
         }
     }
 
@@ -81,6 +116,11 @@ class TaskDispatcher {
      * Check if a creep can perform a task
      */
     canPerformTask(creep: Creep, task: Task): boolean {
+        // Recycle tasks - only the specific damaged creep can perform its own recycle
+        if (task.type === TaskType.RECYCLE_CREEP) {
+            return task.data?.creepId === creep.id;
+        }
+
         const category = getTaskCategory(task.type);
         const requirements = TASK_PART_REQUIREMENTS[category];
 

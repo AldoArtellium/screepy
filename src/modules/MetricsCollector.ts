@@ -36,22 +36,6 @@ function addDataPoint(series: TimeseriesData, value: number): void {
     }
 }
 
-/**
- * Get the latest value from a timeseries
- */
-export function getLatestValue(series: TimeseriesData | undefined): number {
-    if (!series || series.values.length === 0) return 0;
-    return series.values[series.values.length - 1];
-}
-
-/**
- * Get average value from a timeseries
- */
-export function getAverageValue(series: TimeseriesData | undefined): number {
-    if (!series || series.values.length === 0) return 0;
-    return series.values.reduce((sum, v) => sum + v, 0) / series.values.length;
-}
-
 class MetricsCollector {
     /** Last tick we collected metrics */
     private lastTick: number = 0;

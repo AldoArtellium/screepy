@@ -13,7 +13,8 @@ export enum TaskCategory {
     REPAIR = "repair",
     UPGRADE = "upgrade",
     ATTACK = "attack",
-    CLAIM = "claim"
+    CLAIM = "claim",
+    LIFECYCLE = "lifecycle"
 }
 
 /**
@@ -49,7 +50,10 @@ export enum TaskType {
 
     // Expansion
     CLAIM_ROOM = "claim_room",
-    RESERVE_ROOM = "reserve_room"
+    RESERVE_ROOM = "reserve_room",
+
+    // Lifecycle
+    RECYCLE_CREEP = "recycle_creep"
 }
 
 /**
@@ -83,7 +87,8 @@ export const TASK_PRIORITIES: Record<TaskType, number> = {
     [TaskType.REPAIR_RAMPART]: 65,
     [TaskType.REPAIR_WALL]: 70,
     [TaskType.CLAIM_ROOM]: 20,
-    [TaskType.RESERVE_ROOM]: 35
+    [TaskType.RESERVE_ROOM]: 35,
+    [TaskType.RECYCLE_CREEP]: 85
 };
 
 /**
@@ -93,6 +98,13 @@ export const DEFENSE_PRIORITY_BOOSTS: Partial<Record<TaskType, number>> = {
     [TaskType.FILL_TOWER]: -20,
     [TaskType.REPAIR_RAMPART]: -30
 };
+
+/**
+ * Priority boost for upgrading in early phases (1-3) to ensure RCL progression
+ * Without this, upgrade tasks (priority 55) never get assigned because
+ * spawn filling and building always take precedence
+ */
+export const EARLY_PHASE_UPGRADE_BOOST = -25;
 
 /**
  * Task category mapping
@@ -114,7 +126,8 @@ export const TASK_CATEGORIES: Record<TaskType, TaskCategory> = {
     [TaskType.REPAIR_RAMPART]: TaskCategory.REPAIR,
     [TaskType.REPAIR_WALL]: TaskCategory.REPAIR,
     [TaskType.CLAIM_ROOM]: TaskCategory.CLAIM,
-    [TaskType.RESERVE_ROOM]: TaskCategory.CLAIM
+    [TaskType.RESERVE_ROOM]: TaskCategory.CLAIM,
+    [TaskType.RECYCLE_CREEP]: TaskCategory.LIFECYCLE
 };
 
 /**
@@ -127,7 +140,8 @@ export const TASK_PART_REQUIREMENTS: Record<TaskCategory, Partial<Record<BodyPar
     [TaskCategory.REPAIR]: { [WORK]: 1, [CARRY]: 1 },
     [TaskCategory.UPGRADE]: { [WORK]: 1, [CARRY]: 1 },
     [TaskCategory.ATTACK]: { [ATTACK]: 1 },
-    [TaskCategory.CLAIM]: { [CLAIM]: 1 }
+    [TaskCategory.CLAIM]: { [CLAIM]: 1 },
+    [TaskCategory.LIFECYCLE]: {}  // No part requirements - any creep can recycle
 };
 
 /**
@@ -148,6 +162,7 @@ export interface Task {
         amount?: number;
         targetPos?: { x: number; y: number };
         structureType?: StructureConstant;
+        creepId?: string;
     };
 }
 

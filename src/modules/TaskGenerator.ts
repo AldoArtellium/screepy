@@ -4,6 +4,7 @@
  */
 
 import {
+    EARLY_PHASE_UPGRADE_BOOST,
     generateTaskId,
     getEffectivePriority,
     Task,
@@ -11,7 +12,8 @@ import {
     TaskStatus,
     TaskType
 } from "../types/TaskTypes";
-import { ENERGY_THRESHOLDS } from "../utils/creepUtils";
+import { ENERGY_THRESHOLDS, shouldRecycleCreep } from "../utils/creepUtils";
+import { log } from "../utils/logger";
 
 class TaskGenerator {
     /**
@@ -38,6 +40,7 @@ class TaskGenerator {
         this.generateBuildTasks(room);
         this.generateRepairTasks(room, defenseMode);
         this.generateUpgradeTasks(room);
+        this.generateRecycleTasks(room);
     }
 
     /**
@@ -561,16 +564,73 @@ class TaskGenerator {
         // Priority boost if at risk of downgrade
         const priorityBoost = downgradeRisk ? -20 : 0;
 
+        // Priority boost in early phases to ensure upgrading happens
+        // Without this, upgrade tasks (priority 55) never get assigned because
+        // spawn filling (10) and building (45) always take precedence
+        const phaseBoost = phase <= 3 ? EARLY_PHASE_UPGRADE_BOOST : 0;
+
         this.addTask(room, {
             id: generateTaskId(TaskType.UPGRADE_CONTROLLER, controller.id),
             type: TaskType.UPGRADE_CONTROLLER,
             category: TaskCategory.UPGRADE,
             targetId: controller.id,
             roomName: room.name,
-            priority: getEffectivePriority(TaskType.UPGRADE_CONTROLLER, false) + priorityBoost,
+            priority: getEffectivePriority(TaskType.UPGRADE_CONTROLLER, false) + priorityBoost + phaseBoost,
             status: TaskStatus.PENDING,
             createdAt: Game.time
         });
+    }
+
+    /**
+     * Generate recycle tasks for damaged creeps that cannot be healed
+     */
+    private generateRecycleTasks(room: Room): void {
+        const canHeal = this.canRoomHealCreeps(room);
+
+        const spawn = room.find(FIND_MY_SPAWNS)[0];
+        if (!spawn) return; // No spawn to recycle at
+
+        const damagedCreeps = room.find(FIND_MY_CREEPS, {
+            filter: c => shouldRecycleCreep(c, canHeal)
+        });
+
+        for (const creep of damagedCreeps) {
+            // Skip if creep already has a recycle task assigned
+            if (creep.memory.currentTask?.type === TaskType.RECYCLE_CREEP) continue;
+
+            // Skip if there's already a pending recycle task for this creep
+            if (this.hasExistingTask(room, TaskType.RECYCLE_CREEP, creep.id)) continue;
+
+            log.info("TaskGenerator", `Creating recycle task for damaged creep ${creep.name} (${creep.hits}/${creep.hitsMax} HP)`);
+
+            this.addTask(room, {
+                id: generateTaskId(TaskType.RECYCLE_CREEP, creep.id),
+                type: TaskType.RECYCLE_CREEP,
+                category: TaskCategory.LIFECYCLE,
+                targetId: spawn.id,
+                roomName: room.name,
+                priority: getEffectivePriority(TaskType.RECYCLE_CREEP, false),
+                status: TaskStatus.PENDING,
+                createdAt: Game.time,
+                expiresAt: Game.time + 100,
+                data: { creepId: creep.id }
+            });
+        }
+    }
+
+    /**
+     * Check if healing is available in the room
+     */
+    private canRoomHealCreeps(room: Room): boolean {
+        if (room.memory.defenseMode) return false;
+
+        const towers = room.find(FIND_MY_STRUCTURES, {
+            filter: (s): s is StructureTower =>
+                s.structureType === STRUCTURE_TOWER &&
+                s.store.getUsedCapacity(RESOURCE_ENERGY) > 200
+        });
+
+        return towers.length > 0;
     }
 
     /**

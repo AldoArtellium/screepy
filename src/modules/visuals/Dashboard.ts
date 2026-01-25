@@ -4,19 +4,21 @@
  * Displays actionable, visual-heavy dashboard using screeps-viz widgets
  * with time-series tracking for CPU and energy income.
  *
- * Layout:
- * +--------------------------------------------------+
- * | TOP ROW: Empire Status (GCL, Credits, Bucket)    |
- * +--------------------------------------------------+
- * | LEFT          | CENTER         | RIGHT           |
- * | Room Status   | CPU Chart      | Alerts          |
- * | Economy       | Energy Chart   | Panel           |
- * | Operations    | Task Breakdown |                 |
- * | Spawn Queue   |                |                 |
- * +--------------------------------------------------+
+ * Layout (right side of room for readability):
+ * +----------------------------------+
+ * | HEADER: Empire | Bucket         |
+ * +----------------------------------+
+ * | CPU Chart      | Room Status    |
+ * | [stats row]    |                |
+ * |                |                |
+ * | Energy Chart   | Operations     |
+ * | [stats row]    |                |
+ * |                |                |
+ * | Alerts         | Spawn Queue    |
+ * +----------------------------------+
  */
 
-import { Dashboard, Rectangle } from "screeps-viz";
+import { Dashboard } from "screeps-viz";
 import { getSpawnQueueSnapshot } from "../SpawnManager";
 import { metricsCollector } from "../MetricsCollector";
 import { alertSystem } from "./AlertSystem";
@@ -27,14 +29,15 @@ import {
     createStorageBar,
     createPartDemandBars,
     createCpuChart,
+    createCpuStats,
     createEnergyIncomeChart,
+    createEnergyStats,
     createAlertsPanel,
     createTaskBreakdown,
     createOperationsTable,
     createSpawnQueueTable,
     createCreepSummary,
     createBucketDial,
-    createGCLBar,
     createEmpireStats
 } from "./DashboardWidgets";
 import { remoteMiningManager } from "../RemoteMiningManager";
@@ -45,11 +48,18 @@ import { highwayManager } from "../HighwayManager";
 interface WidgetCache {
     tick: number;
     cpuChart: any;
+    cpuStats: any;
     energyChart: any;
+    energyStats: any;
 }
 
 const widgetCaches: Map<string, WidgetCache> = new Map();
 const CACHE_DURATION = 5; // Refresh charts every 5 ticks
+
+// Layout constants - right side of room
+const X_LEFT = 26;   // Left column start
+const X_RIGHT = 38;  // Right column start
+const COL_WIDTH = 11;
 
 /**
  * Render the unified dashboard for a room
@@ -64,11 +74,16 @@ function renderDashboard(room: Room): void {
 
     // Get or create cache
     let cache = widgetCaches.get(roomName);
+    const cpuTs = metricsCollector.getCpuTimeseries();
+    const energyTs = metricsCollector.getEnergyIncomeTimeseries(roomName);
+
     if (!cache || Game.time - cache.tick >= CACHE_DURATION) {
         cache = {
             tick: Game.time,
-            cpuChart: createCpuChart(metricsCollector.getCpuTimeseries()),
-            energyChart: createEnergyIncomeChart(metricsCollector.getEnergyIncomeTimeseries(roomName))
+            cpuChart: createCpuChart(cpuTs),
+            cpuStats: createCpuStats(cpuTs),
+            energyChart: createEnergyIncomeChart(energyTs),
+            energyStats: createEnergyStats(energyTs)
         };
         widgetCaches.set(roomName, cache);
     }
@@ -89,149 +104,120 @@ function renderDashboard(room: Room): void {
     // Get alerts for this room (includes global alerts)
     const alerts = alertSystem.getAlertsForRoom(roomName);
 
-    // Build dashboard widgets with proper padding
-    // Layout: 1 unit gap between widgets, columns at x=1, x=15, x=33
+    // Build dashboard - positioned on RIGHT side for readability
+    // Two columns: LEFT (charts) and RIGHT (status/tables)
     Dashboard({
         config: { room: roomName },
         widgets: [
-            // ===== TOP ROW: Empire Status (y=1-4) =====
-            // GCL Progress Bar
+            // ===== ROW 1: Header (y=1) =====
             {
-                pos: { x: 1, y: 1 },
-                width: 11,
-                height: 3,
-                widget: Rectangle({
-                    data: createGCLBar()
-                })
-            },
-            // Empire Stats
-            {
-                pos: { x: 13, y: 1 },
-                width: 10,
+                pos: { x: X_LEFT, y: 1 },
+                width: COL_WIDTH,
                 height: 4,
-                widget: Rectangle({
-                    data: createEmpireStats()
-                })
+                widget: createEmpireStats()
             },
-            // Bucket Dial
             {
-                pos: { x: 44, y: 1 },
-                width: 5,
+                pos: { x: X_RIGHT, y: 1 },
+                width: COL_WIDTH,
                 height: 4,
                 widget: createBucketDial()
             },
 
-            // ===== LEFT COLUMN: Room Status (x=1-12) =====
-            // Phase Bar
+            // ===== ROW 2: CPU Chart + Room Status (y=6) =====
             {
-                pos: { x: 1, y: 6 },
-                width: 11,
-                height: 3,
-                widget: Rectangle({
-                    data: createPhaseBar(phase)
-                })
+                pos: { x: X_LEFT, y: 6 },
+                width: COL_WIDTH,
+                height: 6,
+                widget: cache.cpuChart
             },
-            // RCL Progress
+            // CPU Stats (below chart with gap)
             {
-                pos: { x: 1, y: 10 },
-                width: 11,
-                height: 3,
-                widget: Rectangle({
-                    data: createRCLBar(room)
-                })
+                pos: { x: X_LEFT, y: 13 },
+                width: COL_WIDTH,
+                height: 2,
+                widget: cache.cpuStats
             },
-            // Spawn Energy Bar
+            // Room status column
             {
-                pos: { x: 1, y: 14 },
-                width: 11,
+                pos: { x: X_RIGHT, y: 6 },
+                width: COL_WIDTH,
                 height: 3,
-                widget: Rectangle({
-                    data: createEnergyBar(room)
-                })
+                widget: createPhaseBar(phase)
             },
-            // Storage Bar
             {
-                pos: { x: 1, y: 18 },
-                width: 11,
+                pos: { x: X_RIGHT, y: 10 },
+                width: COL_WIDTH,
                 height: 3,
-                widget: Rectangle({
-                    data: createStorageBar(room)
-                })
+                widget: createRCLBar(room)
             },
-            // Part Demand Table
             {
-                pos: { x: 1, y: 22 },
-                width: 11,
-                height: 7,
-                widget: Rectangle({
-                    data: createPartDemandBars(room)
-                })
+                pos: { x: X_RIGHT, y: 14 },
+                width: COL_WIDTH,
+                height: 3,
+                widget: createEnergyBar(room)
             },
 
-            // ===== CENTER COLUMN: Charts & Stats (x=14-30) =====
-            // CPU Chart
+            // ===== ROW 3: Energy Chart + Storage/Parts (y=18) =====
             {
-                pos: { x: 14, y: 6 },
-                width: 17,
-                height: 7,
-                widget: Rectangle({
-                    data: cache.cpuChart
-                })
+                pos: { x: X_LEFT, y: 16 },
+                width: COL_WIDTH,
+                height: 6,
+                widget: cache.energyChart
             },
-            // Energy Income Chart
+            // Energy Stats (below chart with gap)
             {
-                pos: { x: 14, y: 14 },
-                width: 17,
-                height: 7,
-                widget: Rectangle({
-                    data: cache.energyChart
-                })
-            },
-            // Creep Summary & Task Breakdown
-            {
-                pos: { x: 14, y: 22 },
-                width: 8,
-                height: 7,
-                widget: Rectangle({
-                    data: createCreepSummary(room)
-                })
+                pos: { x: X_LEFT, y: 23 },
+                width: COL_WIDTH,
+                height: 2,
+                widget: cache.energyStats
             },
             {
-                pos: { x: 23, y: 22 },
-                width: 8,
-                height: 7,
-                widget: Rectangle({
-                    data: createTaskBreakdown(room)
-                })
+                pos: { x: X_RIGHT, y: 18 },
+                width: COL_WIDTH,
+                height: 3,
+                widget: createStorageBar(room)
+            },
+            {
+                pos: { x: X_RIGHT, y: 22 },
+                width: COL_WIDTH,
+                height: 5,
+                widget: createPartDemandBars(room)
             },
 
-            // ===== RIGHT COLUMN: Alerts & Operations (x=33-49) =====
-            // Alerts Panel
+            // ===== ROW 4: Alerts + Operations (y=26) =====
             {
-                pos: { x: 33, y: 6 },
-                width: 16,
-                height: 7,
-                widget: Rectangle({
-                    data: createAlertsPanel(alerts)
-                })
+                pos: { x: X_LEFT, y: 26 },
+                width: COL_WIDTH,
+                height: 6,
+                widget: createAlertsPanel(alerts)
             },
-            // Operations Table
             {
-                pos: { x: 33, y: 14 },
-                width: 16,
-                height: 7,
-                widget: Rectangle({
-                    data: createOperationsTable(remotes, combatOps, highwayOps, debugMode)
-                })
+                pos: { x: X_RIGHT, y: 28 },
+                width: COL_WIDTH,
+                height: 6,
+                widget: createOperationsTable(remotes, combatOps, highwayOps, debugMode)
             },
-            // Spawn Queue
+
+            // ===== ROW 5: Creeps/Tasks + Spawn Queue (y=33) =====
             {
-                pos: { x: 33, y: 22 },
-                width: 16,
-                height: 7,
-                widget: Rectangle({
-                    data: createSpawnQueueTable(spawnQueue)
-                })
+                pos: { x: X_LEFT, y: 33 },
+                width: COL_WIDTH,
+                height: 5,
+                widget: createCreepSummary(room)
+            },
+            {
+                pos: { x: X_RIGHT, y: 35 },
+                width: COL_WIDTH,
+                height: 6,
+                widget: createSpawnQueueTable(spawnQueue)
+            },
+
+            // ===== ROW 6: Task Breakdown (y=39) =====
+            {
+                pos: { x: X_LEFT, y: 39 },
+                width: COL_WIDTH,
+                height: 5,
+                widget: createTaskBreakdown(room)
             }
         ]
     });

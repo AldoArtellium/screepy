@@ -4,7 +4,7 @@
  * Uses screeps-viz components: Bar, Dial, LineChart, Table
  */
 
-import { Dial, Table } from "screeps-viz";
+import { Dial, Table, LineChart } from "screeps-viz";
 
 /** Phase names for display */
 const PHASE_NAMES = [
@@ -173,67 +173,111 @@ function convertToVizTimeseries(data: TimeseriesData | undefined): [number, numb
 }
 
 /**
- * Create CPU time series chart
+ * Create CPU time series chart using LineChart
  */
 export function createCpuChart(timeseries: TimeseriesData | undefined) {
     const vizData = convertToVizTimeseries(timeseries);
 
     if (vizData.length < 2) {
         return Table({
-            data: [
-                ["Status", "Collecting..."],
-                ["Points", "0"]
-            ],
-            config: { label: "CPU Usage" }
+            data: [["CPU", "Collecting..."]],
+            config: { label: "CPU" }
         });
     }
 
-    // Show as table with recent values instead of chart to avoid overlap
-    const lastValue = vizData[vizData.length - 1][1].toFixed(1);
-    const avgValue = (vizData.reduce((s, v) => s + v[1], 0) / vizData.length).toFixed(1);
-    const maxValue = Math.max(...vizData.map(v => v[1])).toFixed(1);
-    const cpuLimit = Game.cpu.limit ?? 20;
-
-    return Table({
-        data: [
-            ["Current", lastValue],
-            ["Average", avgValue],
-            ["Max", maxValue],
-            ["Limit", cpuLimit.toString()]
-        ],
-        config: { label: "CPU Usage" }
+    return LineChart({
+        data: {
+            cpu: vizData
+        },
+        config: {
+            label: "CPU",
+            style: { strokeWidth: 0.1 },
+            series: {
+                cpu: { label: "CPU", color: "#00ff00" }
+            },
+            scale: {
+                y: { min: 0, max: Game.cpu.limit ?? 20 }
+            }
+        }
     });
 }
 
 /**
- * Create energy income display
+ * Create CPU stats table (shown below chart)
+ */
+export function createCpuStats(timeseries: TimeseriesData | undefined) {
+    const vizData = convertToVizTimeseries(timeseries);
+
+    if (vizData.length < 2) {
+        return Table({
+            data: [["--", "--", "--"]],
+            config: { headers: ["Now", "Avg", "Max"], label: "" }
+        });
+    }
+
+    const lastValue = vizData[vizData.length - 1][1].toFixed(1);
+    const avgValue = (vizData.reduce((s, v) => s + v[1], 0) / vizData.length).toFixed(1);
+    const maxValue = Math.max(...vizData.map(v => v[1])).toFixed(1);
+
+    return Table({
+        data: [[lastValue, avgValue, maxValue]],
+        config: { headers: ["Now", "Avg", "Max"], label: "" }
+    });
+}
+
+/**
+ * Create energy income chart using LineChart
  */
 export function createEnergyIncomeChart(timeseries: TimeseriesData | undefined) {
     const vizData = convertToVizTimeseries(timeseries);
 
     if (vizData.length < 2) {
         return Table({
-            data: [
-                ["Status", "Collecting..."],
-                ["Points", "0"]
-            ],
-            config: { label: "Energy Income" }
+            data: [["Energy", "Collecting..."]],
+            config: { label: "Energy" }
         });
     }
 
-    // Show as table with statistics
+    // Calculate max for scale
+    const maxEnergy = Math.max(...vizData.map(v => v[1]), 10);
+
+    return LineChart({
+        data: {
+            energy: vizData
+        },
+        config: {
+            label: "Energy/tick",
+            style: { strokeWidth: 0.1 },
+            series: {
+                energy: { label: "Energy", color: "#ffff00" }
+            },
+            scale: {
+                y: { min: 0, max: maxEnergy * 1.2 }
+            }
+        }
+    });
+}
+
+/**
+ * Create energy stats table (shown below chart)
+ */
+export function createEnergyStats(timeseries: TimeseriesData | undefined) {
+    const vizData = convertToVizTimeseries(timeseries);
+
+    if (vizData.length < 2) {
+        return Table({
+            data: [["--", "--", "--"]],
+            config: { headers: ["Now", "Avg", "Total"], label: "" }
+        });
+    }
+
     const lastValue = Math.floor(vizData[vizData.length - 1][1]);
     const avgValue = Math.floor(vizData.reduce((s, v) => s + v[1], 0) / vizData.length);
     const totalValue = Math.floor(vizData.reduce((s, v) => s + v[1], 0));
 
     return Table({
-        data: [
-            ["Last Tick", lastValue.toString()],
-            ["Avg/Tick", avgValue.toString()],
-            ["Total", totalValue.toString()],
-            ["Samples", vizData.length.toString()]
-        ],
-        config: { label: "Energy Income" }
+        data: [[lastValue.toString(), avgValue.toString(), totalValue.toString()]],
+        config: { headers: ["Now", "Avg", "Total"], label: "" }
     });
 }
 
