@@ -3,7 +3,10 @@ import { runModuleManager } from "./ModuleManager";
 import { constructionManagerModule } from "modules/ConstructionManager";
 import { defenderManagerModule } from "modules/DefenderManager";
 import { demandCalculatorModule } from "modules/DemandCalculator";
+import { intelManagerModule } from "modules/IntelManager";
+import { remoteMiningManagerModule } from "modules/RemoteMiningManager";
 import { roomManagerModule } from "modules/RoomManager";
+import { scoutManagerModule } from "modules/ScoutManager";
 import { spawnManagerModule } from "modules/SpawnManager";
 import { taskDispatcherModule } from "modules/TaskDispatcher";
 import { taskExecutorModule } from "modules/TaskExecutor";
@@ -46,7 +49,16 @@ export const gameLoop = () => {
     // 10. Construction manager: building planning (every 20 ticks)
     { name: "ConstructionManager", fn: constructionManagerModule, runEvery: 20 },
 
-    // 11. Dashboard for visualization
+    // 11. Intel manager: record room data (every tick for visible rooms)
+    { name: "IntelManager", fn: intelManagerModule },
+
+    // 12. Scout manager: exploration (every 10 ticks)
+    { name: "ScoutManager", fn: scoutManagerModule, runEvery: 10 },
+
+    // 13. Remote mining manager: remote operations (every 5 ticks)
+    { name: "RemoteMiningManager", fn: remoteMiningManagerModule, runEvery: 5 },
+
+    // 14. Dashboard for visualization
     { name: "Dashboard", fn: dashboardModule.fn, mandatory: false },
   ];
 

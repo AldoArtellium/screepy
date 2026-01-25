@@ -23,7 +23,8 @@ const SPAWN_PRIORITIES: Record<BodyType, number> = {
     [BodyType.WORKER]: 1,
     [BodyType.TRANSPORT]: 2,
     [BodyType.CLAIM]: 3,
-    [BodyType.SCOUT]: 4
+    [BodyType.SCOUT]: 4,
+    [BodyType.RESERVER]: 3
 };
 
 /**

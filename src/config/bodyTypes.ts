@@ -8,7 +8,8 @@ export enum BodyType {
     TRANSPORT = "transport",
     COMBAT = "combat",
     CLAIM = "claim",
-    SCOUT = "scout"
+    SCOUT = "scout",
+    RESERVER = "reserver"
 }
 
 export interface BodyConfig {
@@ -59,6 +60,13 @@ export const BODY_CONFIGS: Record<BodyType, BodyConfig> = {
         unitCost: 50,
         minUnits: 1,
         maxUnits: 1
+    },
+    [BodyType.RESERVER]: {
+        // 2 CLAIM, 2 MOVE - room reservation
+        ratios: { [CLAIM]: 2, [MOVE]: 2 },
+        unitCost: 1400,
+        minUnits: 1,
+        maxUnits: 2
     }
 };
 
