@@ -254,8 +254,8 @@ class IntelManager {
                 if (dx === 0 && dy === 0) continue;
 
                 // Calculate new coordinates
-                let newX = wx + dx;
-                let newY = wy + dy;
+                const newX = wx + dx;
+                const newY = wy + dy;
 
                 // Handle coordinate wrapping at sector boundaries
                 const roomName = this.buildRoomName(newX, newY, quadrant);

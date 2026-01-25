@@ -78,6 +78,9 @@ class SpawnManager {
         // Emergency mode: spawn basic worker if too few creeps
         if (totalCreeps <= 2) {
             const body = this.getEmergencyBody(room);
+            if (body.length === 0) {
+                return; // Not enough energy for functional creep
+            }
             this.spawnQueue.push({
                 bodyType: BodyType.WORKER,
                 body,
@@ -230,21 +233,18 @@ class SpawnManager {
     private getEmergencyBody(room: Room): BodyPartConstant[] {
         const energy = room.energyAvailable;
 
-        // Minimum viable worker: 1 WORK, 1 CARRY, 1 MOVE = 200 energy
-        if (energy < 200) {
-            // Return whatever we can afford
-            if (energy >= 200) {
-                return [WORK, CARRY, MOVE];
-            } else if (energy >= 150) {
-                return [WORK, MOVE]; // Can at least harvest
-            } else if (energy >= 100) {
-                return [CARRY, MOVE]; // Can at least transport
-            }
-            return [MOVE]; // Absolute minimum
+        // Minimum functional creep: WORK + MOVE = 150 energy (can harvest)
+        if (energy < 150) {
+            return []; // Don't spawn useless creeps
         }
 
-        // Build largest worker possible with available energy
-        return generateOptimalBody(BodyType.WORKER, energy);
+        if (energy >= 200) {
+            // Build largest worker possible with available energy
+            return generateOptimalBody(BodyType.WORKER, energy);
+        }
+
+        // 150-199 energy: harvester-only (can bootstrap economy)
+        return [WORK, MOVE];
     }
 
     /**

@@ -12,7 +12,10 @@ Screepy is a TypeScript-based AI bot for the game [Screeps](https://screeps.com/
 npm install              # Install dependencies (requires Node.js ^20.11)
 npm run build            # TypeScript compilation only (tsc)
 npm run compile          # Rollup bundle without deployment
-npm run lint             # Run TSLint
+npm run lint             # Run ESLint
+npm run lint:fix         # Run ESLint with auto-fix
+npm run format           # Format code with Prettier
+npm run format:check     # Check code formatting
 npm run test             # Clean and build (verification)
 npm run clean            # Remove tsc-out and dist folders
 
@@ -70,7 +73,7 @@ The game loop uses a module manager that:
 | 22 | PowerCreepManager | every 3 | Power creep operations |
 | 23 | FactoryManager | every 5 | Commodity production |
 | 24 | BasePlanner | every 100 | Layout visualization |
-| 25 | Dashboard | optional | Visual debugging |
+| - | Dashboard | optional | Visual debugging |
 
 ---
 
