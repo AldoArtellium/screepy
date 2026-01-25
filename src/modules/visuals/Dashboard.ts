@@ -4,7 +4,7 @@
  * Displays actionable, visual-heavy dashboard using screeps-viz widgets
  * with time-series tracking for CPU and energy income.
  *
- * Layout (right side of room for readability):
+ * Layout (left side of room):
  * +----------------------------------+
  * | HEADER: Empire | Bucket         |
  * +----------------------------------+
@@ -56,9 +56,9 @@ interface WidgetCache {
 const widgetCaches: Map<string, WidgetCache> = new Map();
 const CACHE_DURATION = 5; // Refresh charts every 5 ticks
 
-// Layout constants - right side of room
-const X_LEFT = 26;   // Left column start
-const X_RIGHT = 38;  // Right column start
+// Layout constants - left side of room
+const X_LEFT = 0;    // Left column start
+const X_RIGHT = 100;  // Right column start
 const COL_WIDTH = 11;
 
 /**
@@ -104,7 +104,7 @@ function renderDashboard(room: Room): void {
     // Get alerts for this room (includes global alerts)
     const alerts = alertSystem.getAlertsForRoom(roomName);
 
-    // Build dashboard - positioned on RIGHT side for readability
+    // Build dashboard - positioned on LEFT side of room
     // Two columns: LEFT (charts) and RIGHT (status/tables)
     Dashboard({
         config: { room: roomName },
