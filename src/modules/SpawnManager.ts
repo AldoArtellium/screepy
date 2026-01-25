@@ -1,195 +1,223 @@
-import { PHASE_CONFIGS } from "../config/phaseConfigs";
-import { log } from "../utils/logger";
-import { phaseManager } from "./PhaseManager";
+/**
+ * SpawnManager - Part-count based spawning
+ * Spawns generic body types based on part deficits
+ */
 
-interface CreepSpawnInfo {
-    role: string;
+import { BodyType, generateBody, generateOptimalBody, getBodyCost } from "../config/bodyTypes";
+import { PartDemand } from "../types/TaskTypes";
+import { log } from "../utils/logger";
+
+interface SpawnRequest {
+    bodyType: BodyType;
     body: BodyPartConstant[];
-    memory: CreepMemory;
     priority: number;
     roomName: string;
+    reason?: string;
 }
 
+/**
+ * Spawn priorities (lower = higher priority)
+ */
+const SPAWN_PRIORITIES: Record<BodyType, number> = {
+    [BodyType.COMBAT]: 0,
+    [BodyType.WORKER]: 1,
+    [BodyType.TRANSPORT]: 2,
+    [BodyType.CLAIM]: 3,
+    [BodyType.SCOUT]: 4
+};
+
+/**
+ * Energy thresholds for spawning decisions
+ */
+const SPAWN_ENERGY = {
+    /** Minimum energy ratio to spawn non-emergency creeps */
+    MIN_RATIO: 0.5,
+    /** Energy ratio to prefer larger bodies */
+    PREFER_LARGE_RATIO: 0.8,
+    /** Wait for full capacity if above this ratio and no urgency */
+    WAIT_FULL_RATIO: 0.9
+};
+
 class SpawnManager {
-    private spawnQueue: CreepSpawnInfo[] = [];
+    private spawnQueue: SpawnRequest[] = [];
 
-    private updateDesiredCounts(): void {
-        const globalCounts: { [role: string]: number } = {
-            harvester: 0,
-            miner: 0,
-            hauler: 0,
-            builder: 0,
-            upgrader: 0,
-            defender: 0,
-            claimer: 0
-        };
+    /**
+     * Main spawn management function
+     */
+    manageSpawns(): void {
+        this.spawnQueue = [];
 
-        const currentCounts = _.countBy(Game.creeps, creep => creep.memory.role);
-
-        // Cache current counts in memory
-        Memory.spawn.currentCounts = {
-            harvester: currentCounts.harvester ?? 0,
-            miner: currentCounts.miner ?? 0,
-            hauler: currentCounts.hauler ?? 0,
-            builder: currentCounts.builder ?? 0,
-            upgrader: currentCounts.upgrader ?? 0,
-            defender: currentCounts.defender ?? 0,
-            claimer: currentCounts.claimer ?? 0
-        };
-
-        // Aggregate desired counts from all owned rooms
+        // Build spawn queue from all rooms
         for (const roomName in Game.rooms) {
             const room = Game.rooms[roomName];
             if (!room.controller?.my) continue;
 
-            const roomDesired = phaseManager.getDesiredCreepCounts(room);
-            for (const role in roomDesired) {
-                globalCounts[role] = (globalCounts[role] ?? 0) + roomDesired[role];
+            this.calculateSpawnNeeds(room);
+        }
+
+        // Sort by priority
+        this.spawnQueue.sort((a, b) => a.priority - b.priority);
+
+        // Process spawn queue
+        this.processSpawnQueue();
+    }
+
+    /**
+     * Calculate spawn needs based on part deficits
+     */
+    private calculateSpawnNeeds(room: Room): void {
+        const demand = room.memory.partDemand;
+        const phase = room.memory.phase ?? 0;
+        const totalCreeps = room.find(FIND_MY_CREEPS).length;
+        const defenseMode = room.memory.defenseMode ?? false;
+        const energyRatio = room.energyAvailable / room.energyCapacityAvailable;
+
+        // Emergency mode: spawn basic worker if too few creeps
+        if (totalCreeps <= 2) {
+            const body = this.getEmergencyBody(room);
+            this.spawnQueue.push({
+                bodyType: BodyType.WORKER,
+                body,
+                priority: -10, // Highest priority
+                roomName: room.name,
+                reason: "emergency"
+            });
+            return;
+        }
+
+        if (!demand) return;
+
+        // Check combat needs first (defense mode)
+        if (defenseMode && demand[ATTACK] && demand[ATTACK].deficit > 0) {
+            const body = generateBody(BodyType.COMBAT, room.energyCapacityAvailable);
+            if (body.length > 0) {
+                this.spawnQueue.push({
+                    bodyType: BodyType.COMBAT,
+                    body,
+                    priority: SPAWN_PRIORITIES[BodyType.COMBAT],
+                    roomName: room.name,
+                    reason: "defense"
+                });
             }
         }
 
-        Memory.spawn.desiredCounts = globalCounts;
-    }
+        // Determine spawn energy budget based on urgency
+        const hasUrgentDeficit = (demand[WORK]?.deficit ?? 0) > 5 || (demand[CARRY]?.deficit ?? 0) > 10;
+        let spawnEnergy = room.energyCapacityAvailable;
 
-    private determineBodyParts(role: string, room: Room): BodyPartConstant[] {
-        const phase = room.memory.phase ?? 0;
-        const config = PHASE_CONFIGS[phase];
-        const energyAvailable = room.energyAvailable;
-        const energyCapacity = room.energyCapacityAvailable;
-
-        // Use full capacity for better creeps, but have minimum fallback
-        if (energyAvailable < 200) {
-            return [WORK, CARRY, MOVE];
+        if (!hasUrgentDeficit && energyRatio < SPAWN_ENERGY.PREFER_LARGE_RATIO) {
+            // Wait for more energy if no urgency
+            if (energyRatio < SPAWN_ENERGY.MIN_RATIO) {
+                return; // Don't spawn yet
+            }
+            // Use available energy for smaller body
+            spawnEnergy = room.energyAvailable;
         }
 
-        // In emergency (totalCreeps < 3), use available energy; otherwise wait for capacity
-        const totalCreeps = Object.keys(Game.creeps).length;
-        const energy = totalCreeps < 3 ? energyAvailable : energyCapacity;
+        // Check WORK deficit - spawn workers
+        if (demand[WORK] && demand[WORK].deficit > 0) {
+            // Calculate how many workers needed
+            const workPerWorker = Math.min(Math.floor(spawnEnergy / 250), 12); // Based on body config
+            const workersNeeded = Math.ceil(demand[WORK].deficit / Math.max(workPerWorker, 1));
 
-        // Get scaling config for this role and phase
-        const bodyConfig = config.bodyScaling[role];
-        const maxParts = bodyConfig?.maxParts ?? 10;
+            for (let i = 0; i < Math.min(workersNeeded, 2); i++) {
+                const body = generateBody(BodyType.WORKER, spawnEnergy);
+                if (body.length > 0) {
+                    // Prioritize first worker higher if deficit is severe
+                    const priority = i === 0 && demand[WORK].deficit > 5
+                        ? SPAWN_PRIORITIES[BodyType.WORKER] - 0.5
+                        : SPAWN_PRIORITIES[BodyType.WORKER] + i * 0.1;
 
-        const configurations: { [key: string]: (energy: number) => BodyPartConstant[] } = {
-            harvester: (e) => {
-                // Simple harvesters for emergency
-                const workCount = Math.min(Math.floor(e / 200), maxParts);
-                return [
-                    ...Array(Math.max(1, workCount)).fill(WORK),
-                    CARRY,
-                    ...Array(Math.ceil(workCount / 2) + 1).fill(MOVE)
-                ];
-            },
-
-            builder: (e) => {
-                const workCount = Math.min(Math.floor(e / 200), maxParts);
-                return [
-                    ...Array(Math.max(1, workCount)).fill(WORK),
-                    ...Array(Math.ceil(workCount / 2)).fill(CARRY),
-                    ...Array(Math.ceil(workCount / 2)).fill(MOVE)
-                ];
-            },
-
-            upgrader: (e) => {
-                const workCount = Math.min(Math.floor(e / 200), maxParts);
-                return [
-                    ...Array(Math.max(1, workCount)).fill(WORK),
-                    ...Array(Math.ceil(workCount / 2)).fill(CARRY),
-                    ...Array(Math.ceil(workCount / 2)).fill(MOVE)
-                ];
-            },
-
-            defender: (e) => {
-                const attackCount = Math.min(Math.floor(e / 200), Math.floor(maxParts / 2));
-                const toughCount = Math.floor(attackCount / 2);
-                return [
-                    ...Array(toughCount).fill(TOUGH),
-                    ...Array(Math.max(1, attackCount)).fill(ATTACK),
-                    ...Array(Math.ceil((toughCount + attackCount) / 2) + 1).fill(MOVE)
-                ];
-            },
-
-            miner: (e) => {
-                // 5 WORK parts is optimal (10 energy/tick = source depletes in 300 ticks)
-                const workCount = Math.min(Math.floor(e / 150), Math.min(maxParts, 5));
-                const moveCount = Math.ceil(workCount / 2);
-                return [
-                    ...Array(Math.max(1, workCount)).fill(WORK),
-                    ...Array(Math.max(1, moveCount)).fill(MOVE)
-                ];
-            },
-
-            hauler: (e) => {
-                // 1 MOVE per 2 CARRY for road movement
-                const carryCount = Math.min(Math.floor(e / 100), maxParts);
-                const moveCount = Math.ceil(carryCount / 2);
-                return [
-                    ...Array(Math.max(1, carryCount)).fill(CARRY),
-                    ...Array(Math.max(1, moveCount)).fill(MOVE)
-                ];
-            },
-
-            claimer: () => [CLAIM, MOVE],
-        };
-
-        return configurations[role] ? configurations[role](energy) : [WORK, CARRY, MOVE];
-    }
-
-    private populateSpawnQueue(): void {
-        this.updateDesiredCounts();
-        this.spawnQueue = [];
-
-        // Process each room separately for accurate body sizing
-        for (const roomName in Game.rooms) {
-            const room = Game.rooms[roomName];
-            if (!room.controller?.my) continue;
-
-            const roomDesired = phaseManager.getDesiredCreepCounts(room);
-            const priorities = phaseManager.getSpawnPriorities(room);
-            const roomCreeps = room.find(FIND_MY_CREEPS);
-
-            for (const role in roomDesired) {
-                const desired = roomDesired[role];
-                const current = roomCreeps.filter(c => c.memory.role === role).length;
-                const needed = desired - current;
-
-                if (needed > 0) {
-                    const body = this.determineBodyParts(role, room);
-                    const priority = priorities[role] ?? 99;
-
-                    // Add one entry per needed creep (up to a reasonable limit)
-                    // IMPORTANT: Create fresh memory object each iteration to avoid shared reference bugs
-                    for (let i = 0; i < Math.min(needed, 3); i++) {
-                        this.spawnQueue.push({
-                            role,
-                            body,
-                            memory: { role, room: roomName },
-                            priority,
-                            roomName
-                        });
-                    }
+                    this.spawnQueue.push({
+                        bodyType: BodyType.WORKER,
+                        body,
+                        priority,
+                        roomName: room.name,
+                        reason: `work deficit ${demand[WORK].deficit}`
+                    });
                 }
             }
         }
 
-        // Sort by priority (lower = higher priority)
-        this.spawnQueue.sort((a, b) => a.priority - b.priority);
+        // Check CARRY deficit - spawn transports
+        if (demand[CARRY] && demand[CARRY].deficit > 0) {
+            // Calculate how many transports needed
+            const carryPerTransport = Math.min(Math.floor(spawnEnergy / 150) * 2, 32); // 2 CARRY per unit
+            const transportsNeeded = Math.ceil(demand[CARRY].deficit / Math.max(carryPerTransport, 2));
+
+            for (let i = 0; i < Math.min(transportsNeeded, 2); i++) {
+                const body = generateBody(BodyType.TRANSPORT, spawnEnergy);
+                if (body.length > 0) {
+                    // Prioritize first transport higher if deficit is severe
+                    const priority = i === 0 && demand[CARRY].deficit > 10
+                        ? SPAWN_PRIORITIES[BodyType.TRANSPORT] - 0.5
+                        : SPAWN_PRIORITIES[BodyType.TRANSPORT] + i * 0.1;
+
+                    this.spawnQueue.push({
+                        bodyType: BodyType.TRANSPORT,
+                        body,
+                        priority,
+                        roomName: room.name,
+                        reason: `carry deficit ${demand[CARRY].deficit}`
+                    });
+                }
+            }
+        }
+
+        // Ensure minimum creep population in higher phases
+        if (phase >= 2 && totalCreeps < 5) {
+            // Spawn a worker even without deficit to maintain economy
+            const body = generateBody(BodyType.WORKER, room.energyAvailable);
+            if (body.length > 0) {
+                this.spawnQueue.push({
+                    bodyType: BodyType.WORKER,
+                    body,
+                    priority: 0.5, // High priority
+                    roomName: room.name,
+                    reason: "population"
+                });
+            }
+        }
     }
 
+    /**
+     * Get emergency body using available energy
+     */
+    private getEmergencyBody(room: Room): BodyPartConstant[] {
+        const energy = room.energyAvailable;
+
+        // Minimum viable worker: 1 WORK, 1 CARRY, 1 MOVE = 200 energy
+        if (energy < 200) {
+            // Return whatever we can afford
+            if (energy >= 200) {
+                return [WORK, CARRY, MOVE];
+            } else if (energy >= 150) {
+                return [WORK, MOVE]; // Can at least harvest
+            } else if (energy >= 100) {
+                return [CARRY, MOVE]; // Can at least transport
+            }
+            return [MOVE]; // Absolute minimum
+        }
+
+        // Build largest worker possible with available energy
+        return generateOptimalBody(BodyType.WORKER, energy);
+    }
+
+    /**
+     * Process spawn queue and spawn creeps
+     */
     private processSpawnQueue(): void {
         if (this.spawnQueue.length === 0) return;
 
-        // Try to spawn from available spawns
         const availableSpawns = _.filter(Game.spawns, s => !s.spawning);
 
         for (const spawn of availableSpawns) {
             if (this.spawnQueue.length === 0) break;
 
-            // Find best match: prefer creeps for this spawn's room
+            // Find best match for this spawn's room
             const spawnRoomName = spawn.room.name;
             let bestIndex = 0;
 
-            // Look for a creep from the same room first
             for (let i = 0; i < this.spawnQueue.length; i++) {
                 if (this.spawnQueue[i].roomName === spawnRoomName) {
                     bestIndex = i;
@@ -197,46 +225,43 @@ class SpawnManager {
                 }
             }
 
-            const entry = this.spawnQueue[bestIndex];
-            const { role, body, memory } = entry;
+            const request = this.spawnQueue[bestIndex];
+            const { bodyType, body } = request;
 
             // Check if spawn can afford this body
-            const cost = _.sum(body, part => BODYPART_COST[part]);
+            const cost = getBodyCost(body);
             if (spawn.room.energyAvailable < cost) {
                 continue;
             }
 
-            const newName = `${role}-${Game.time}-${spawn.name}`;
+            const newName = `${bodyType}-${Game.time}-${spawn.name}`;
+            const memory: CreepMemory = {
+                bodyType,
+                room: request.roomName
+            };
+
             const result = spawn.spawnCreep(body, newName, { memory });
 
             if (result === OK) {
-                log.info("SpawnManager", `Spawning ${role}: ${newName} (body: ${body.length} parts, cost: ${cost})`);
-                // Verify memory was set correctly
-                if (Memory.creeps[newName]?.role !== role) {
-                    log.error("SpawnManager", `Memory mismatch! Expected role=${role}, got=${Memory.creeps[newName]?.role}`);
-                }
+                Memory.creeps[newName] = memory;
+                log.info("SpawnManager", `Spawning ${bodyType}: ${newName} (${body.length} parts, cost: ${cost})`);
                 this.spawnQueue.splice(bestIndex, 1);
             } else if (result !== ERR_NOT_ENOUGH_ENERGY) {
-                log.warn("SpawnManager", `Failed to spawn ${role}: ${result}`);
+                log.warn("SpawnManager", `Failed to spawn ${bodyType}: ${result}`);
                 this.spawnQueue.splice(bestIndex, 1);
             }
         }
     }
 
-    manageSpawns(): void {
-        this.populateSpawnQueue();
-        this.processSpawnQueue();
-    }
-
     /**
-     * Get a snapshot of the spawn queue for dashboard display
+     * Get spawn queue snapshot for dashboard
      */
-    getSpawnQueueSnapshot(): { role: string; priority: number; roomName: string; bodyCost: number }[] {
-        return this.spawnQueue.map(entry => ({
-            role: entry.role,
-            priority: entry.priority,
-            roomName: entry.roomName,
-            bodyCost: _.sum(entry.body, part => BODYPART_COST[part])
+    getSpawnQueueSnapshot(): { bodyType: string; priority: number; roomName: string; bodyCost: number }[] {
+        return this.spawnQueue.map(request => ({
+            bodyType: request.bodyType,
+            priority: request.priority,
+            roomName: request.roomName,
+            bodyCost: getBodyCost(request.body)
         }));
     }
 }

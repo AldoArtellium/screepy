@@ -1,6 +1,5 @@
-import { RCL_EXTENSION_LIMITS } from "../config/phaseConfigs";
 import { log } from "../utils/logger";
-import { phaseManager } from "./PhaseManager";
+import { RCL_EXTENSION_LIMITS } from "./RoomManager";
 
 /**
  * ConstructionManager - Phase-aware construction planning

@@ -1,129 +1,70 @@
 /**
  * Dashboard - Unified Visual Module
- * Displays CPU metrics, task queue summary, and creep task assignments.
+ * Displays CPU metrics, spawn queue, part demand, and task summary.
  */
 
 import { Dashboard, Dial, Rectangle, Table } from "screeps-viz";
-import { TaskStatus, TaskType } from "../../types/TaskTypes";
+import { BodyType } from "../../config/bodyTypes";
+import { demandCalculator } from "../DemandCalculator";
 import { getSpawnQueueSnapshot } from "../SpawnManager";
-import { TaskManager } from "../TaskManager";
-
-/**
- * Abbreviate task type names for compact display
- */
-function abbreviateTaskType(type: TaskType): string {
-    switch (type) {
-        case TaskType.FILL_SPAWN: return "FILL_SP";
-        case TaskType.FILL_EXTENSION: return "FILL_EXT";
-        case TaskType.FILL_TOWER: return "FILL_TWR";
-        case TaskType.FILL_STORAGE: return "FILL_STG";
-        case TaskType.PICKUP_RESOURCE: return "PICKUP";
-        case TaskType.WITHDRAW_CONTAINER: return "WITH_CNT";
-        case TaskType.WITHDRAW_STORAGE: return "WITH_STG";
-        case TaskType.BUILD_STRUCTURE: return "BUILD";
-        case TaskType.REPAIR_STRUCTURE: return "REPAIR";
-        case TaskType.REPAIR_WALL: return "REP_WALL";
-        case TaskType.REPAIR_RAMPART: return "REP_RAMP";
-        case TaskType.UPGRADE_CONTROLLER: return "UPGRADE";
-        case TaskType.HARVEST_SOURCE: return "HARVEST";
-        case TaskType.ATTACK_HOSTILE: return "ATTACK";
-        default: return "UNKNOWN";
-    }
-}
-
-/**
- * Abbreviate task status for compact display
- */
-function abbreviateStatus(status: TaskStatus): string {
-    switch (status) {
-        case TaskStatus.PENDING: return "PEND";
-        case TaskStatus.ASSIGNED: return "ASGN";
-        case TaskStatus.IN_PROGRESS: return "PROG";
-        case TaskStatus.COMPLETED: return "DONE";
-        case TaskStatus.FAILED: return "FAIL";
-        default: return "?";
-    }
-}
-
-/**
- * Abbreviate creep task state for compact display
- */
-function abbreviateTaskState(state: string | undefined): string {
-    switch (state) {
-        case "acquiring": return "acq";
-        case "executing": return "exec";
-        case "returning": return "ret";
-        default: return "-";
-    }
-}
+import { taskGenerator } from "../TaskGenerator";
 
 /**
  * Render the unified dashboard for a room
  */
 function renderDashboard(room: Room): void {
     const bucket = Game.cpu.bucket;
-
-    // Get task counts for summary
-    const taskCounts = TaskManager.getTaskCounts(room);
-
-    // Get task queue for detailed display
-    const queue = room.memory.taskQueue;
-    const tasks = queue?.tasks ?? {};
-
-    // Get top 10 tasks sorted by priority
-    const sortedTasks = Object.values(tasks)
-        .filter(t => t.status !== TaskStatus.COMPLETED && t.status !== TaskStatus.FAILED)
-        .sort((a, b) => a.priority - b.priority)
-        .slice(0, 10);
-
-    // Build task queue table data
-    const taskQueueData = sortedTasks.map(task => [
-        abbreviateTaskType(task.type),
-        task.priority.toString(),
-        abbreviateStatus(task.status),
-        task.assignedTo?.substring(0, 8) ?? "-",
-        (Game.time - task.createdAt).toString()
-    ]);
-
-    // Build task summary table data
-    const taskSummaryData = [
-        ["Pending", taskCounts.pending.toString()],
-        ["Assigned", taskCounts.assigned.toString()],
-        ["In Progress", taskCounts.inProgress.toString()],
-        ["Total", taskCounts.total.toString()]
-    ];
+    const phase = room.memory.phase ?? 0;
+    const defenseMode = room.memory.defenseMode ?? false;
 
     // Build spawn queue table data
     const spawnQueueSnapshot = getSpawnQueueSnapshot();
-    const spawnQueueData = spawnQueueSnapshot.slice(0, 8).map(entry => [
-        entry.role.substring(0, 8),
+    const spawnQueueData = spawnQueueSnapshot.slice(0, 6).map(entry => [
+        entry.bodyType.substring(0, 8),
         entry.priority.toString(),
         entry.roomName,
         entry.bodyCost.toString()
     ]);
 
-    // Build creep assignments table data
-    const creepAssignments: string[][] = [];
+    // Build creep summary by body type
+    const creepsByType: { [type: string]: number } = {};
     for (const creep of Object.values(Game.creeps)) {
         if (creep.room.name !== room.name) continue;
-
-        const creepMem = creep.memory;
-        if (creepMem.task) {
-            const task = tasks[creepMem.task.id];
-            const taskType = task ? abbreviateTaskType(task.type) : "INVALID";
-            const duration = Game.time - creepMem.task.startedAt;
-
-            creepAssignments.push([
-                creep.name.substring(0, 8),
-                creepMem.role ?? "-",
-                taskType,
-                abbreviateTaskState(creepMem.task.state),
-                duration.toString()
-            ]);
-        }
+        const bodyType = creep.memory.bodyType ?? "unknown";
+        creepsByType[bodyType] = (creepsByType[bodyType] || 0) + 1;
     }
 
-    // Render the dashboard - tables on left, bucket dial top-right
+    const creepSummaryData = Object.entries(creepsByType).map(([type, count]) => [
+        type,
+        count.toString()
+    ]);
+
+    // Build part demand table
+    const demandData = demandCalculator.getDemandSummary(room).map(line => {
+        const parts = line.split(": ");
+        return [parts[0], parts[1] || ""];
+    });
+
+    // Build room status data
+    const roomStatusData = [
+        ["Phase", phase.toString()],
+        ["Defense", defenseMode ? "ACTIVE" : "off"],
+        ["RCL", (room.controller?.level ?? 0).toString()],
+        ["Energy", `${room.energyAvailable}/${room.energyCapacityAvailable}`]
+    ];
+
+    // Build task queue summary
+    const taskQueue = room.memory.taskQueue ?? [];
+    const pendingTasks = taskQueue.filter(t => t.status === "pending").length;
+    const assignedTasks = taskQueue.filter(t => t.status === "assigned" || t.status === "in_progress").length;
+
+    const taskStatusData = [
+        ["Pending", pendingTasks.toString()],
+        ["Active", assignedTasks.toString()],
+        ["Total", taskQueue.length.toString()]
+    ];
+
+    // Render the dashboard
     Dashboard({
         config: { room: room.name },
         widgets: [
@@ -141,14 +82,59 @@ function renderDashboard(room: Room): void {
                     }
                 })
             },
-            // Task Summary Table
+            // Room Status Table
             {
                 pos: { x: 1, y: 1 },
+                width: 12,
+                height: 5,
+                widget: Rectangle({
+                    data: Table({
+                        data: roomStatusData,
+                        config: {
+                            headers: ["Status", "Value"],
+                            label: "Room"
+                        }
+                    })
+                })
+            },
+            // Creep Summary Table
+            {
+                pos: { x: 1, y: 6 },
+                width: 12,
+                height: 6,
+                widget: Rectangle({
+                    data: Table({
+                        data: creepSummaryData,
+                        config: {
+                            headers: ["Type", "Count"],
+                            label: "Creeps"
+                        }
+                    })
+                })
+            },
+            // Part Demand Table
+            {
+                pos: { x: 1, y: 12 },
+                width: 14,
+                height: 6,
+                widget: Rectangle({
+                    data: Table({
+                        data: demandData,
+                        config: {
+                            headers: ["Part", "Supply/Demand"],
+                            label: "Part Demand"
+                        }
+                    })
+                })
+            },
+            // Task Status Table
+            {
+                pos: { x: 15, y: 12 },
                 width: 10,
                 height: 5,
                 widget: Rectangle({
                     data: Table({
-                        data: taskSummaryData,
+                        data: taskStatusData,
                         config: {
                             headers: ["Status", "Count"],
                             label: "Tasks"
@@ -156,47 +142,17 @@ function renderDashboard(room: Room): void {
                     })
                 })
             },
-            // Task Queue Table
-            {
-                pos: { x: 1, y: 6 },
-                width: 22,
-                height: 7,
-                widget: Rectangle({
-                    data: Table({
-                        data: taskQueueData,
-                        config: {
-                            headers: ["Type", "Pri", "St", "Creep", "Age"],
-                            label: "Task Queue"
-                        }
-                    })
-                })
-            },
             // Spawn Queue Table
             {
-                pos: { x: 1, y: 13 },
+                pos: { x: 1, y: 18 },
                 width: 18,
                 height: 6,
                 widget: Rectangle({
                     data: Table({
                         data: spawnQueueData,
                         config: {
-                            headers: ["Role", "Pri", "Room", "Cost"],
+                            headers: ["Type", "Pri", "Room", "Cost"],
                             label: "Spawn Queue"
-                        }
-                    })
-                })
-            },
-            // Creep Assignments Table
-            {
-                pos: { x: 1, y: 19 },
-                width: 22,
-                height: 6,
-                widget: Rectangle({
-                    data: Table({
-                        data: creepAssignments,
-                        config: {
-                            headers: ["Name", "Role", "Task", "St", "Dur"],
-                            label: "Creep Tasks"
                         }
                     })
                 })

@@ -214,9 +214,7 @@ export function updateEnergyState(creep: Creep): "acquiring" | "executing" {
     }
 
     // Between thresholds: keep current state (hysteresis)
-    // Now that we use standardized states, only check for "executing"
-    const currentState = creep.memory.task?.state ?? creep.memory.state;
-    if (currentState === "executing") {
+    if (creep.memory.state === "executing") {
         return "executing";
     }
     return "acquiring";

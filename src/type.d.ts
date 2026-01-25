@@ -1,9 +1,13 @@
+import { BodyType } from "./config/bodyTypes";
+import { CreepTaskState, PartDemand, Task } from "./types/TaskTypes";
+
 declare global {
     interface Memory {
         rooms: Record<string, RoomMemory>;
         creeps: Record<string, any>;
         spawn: {
-            desiredCounts: { [role: string]: number };
+            // Legacy - kept for compatibility during transition
+            desiredCounts?: { [role: string]: number };
             currentCounts?: { [role: string]: number };
         };
         init: boolean;
@@ -11,22 +15,19 @@ declare global {
     }
 
     interface CreepMemory {
-        role: string;
+        // Body type for task assignment
+        bodyType?: BodyType;
+        // Home room assignment
         room?: string;
+        // Current task state
+        currentTask?: CreepTaskState;
+        // Legacy fields - kept for compatibility
+        role?: string;
         state?: "acquiring" | "executing";
-        task?: {
-            id: string;
-            startedAt: number;
-            state: "acquiring" | "executing" | "returning";
-        };
         targetRoom?: string;
-        targetId?: Id;
+        targetId?: Id<any>;
         targetTick?: number;
         patrolIndex?: number;
-        /** Tick when last task was completed (for cooldown) */
-        lastTaskCompleted?: number;
-        /** Category of the last completed task (for stickiness) */
-        lastTaskCategory?: number;
     }
 
     interface ObserverMemory {
@@ -47,13 +48,10 @@ declare global {
             extensionsPlanned?: boolean;
             roadsPlanned?: boolean;
         };
-        taskQueue?: {
-            tasks: { [id: string]: import("./types/TaskTypes").Task };
-            byPriority: string[];
-            lastSort: number;
-            lastGeneration: number;
-        };
         patrolPoints?: { x: number; y: number }[];
+        // Task system
+        taskQueue?: Task[];
+        partDemand?: PartDemand;
     }
 
     const enum RoomPhase {

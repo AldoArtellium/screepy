@@ -1,41 +1,48 @@
 import { runModuleManager } from "./ModuleManager";
 
 import { constructionManagerModule } from "modules/ConstructionManager";
-import { memoryManagerModule } from "modules/MemoryManager";
-import { phaseManagerModule } from "modules/PhaseManager";
-import { roleManagerModule } from "modules/RoleManager";
+import { demandCalculatorModule } from "modules/DemandCalculator";
+import { roomManagerModule } from "modules/RoomManager";
 import { spawnManagerModule } from "modules/SpawnManager";
+import { taskDispatcherModule } from "modules/TaskDispatcher";
+import { taskExecutorModule } from "modules/TaskExecutor";
 import { taskGeneratorModule } from "modules/TaskGenerator";
-import { taskManagerModule } from "modules/TaskManager";
 import { towerManagerModule } from "modules/TowerManager";
 import { dashboardModule } from "modules/visuals/Dashboard";
 import { log } from "utils/logger";
 
-// assignement
 export const gameLoop = () => {
   const memLimit = 1000000;
   const cpuLimit = Game.cpu.limit;
   const modules = [
-    // Always run init first (mandatory)
-    { name: "Memory Manager Init", fn: memoryManagerModule.init, mandatory: true },
-    // Refresh memory every 5 ticks to reduce CPU
-    { name: "Memory Manager Refresh", fn: memoryManagerModule.refresh, runEvery: 5 },
-    // Phase manager evaluates room phases every 10 ticks (mandatory for phase transitions)
-    { name: "Phase Manager", fn: phaseManagerModule, runEvery: 10, mandatory: true },
-    // Task manager cleans up queue every 5 ticks
-    { name: "Task Manager", fn: taskManagerModule, runEvery: 5 },
-    // Task generator creates tasks every 10 ticks (phase-aware)
-    { name: "Task Generator", fn: taskGeneratorModule, runEvery: 10 },
-    // Role manager must run every tick (mandatory for creep control, now task-aware)
-    { name: "Role Manager", fn: roleManagerModule, mandatory: true },
-    // Spawn manager can run every 3 ticks (spawning takes time anyway)
-    { name: "Spawn Manager", fn: spawnManagerModule, runEvery: 3 },
-    // Tower manager runs every tick for defense
-    { name: "Tower Manager", fn: towerManagerModule },
-    // Construction manager runs every 20 ticks for building planning
-    { name: "Construction Manager", fn: constructionManagerModule, runEvery: 20 },
+    // 1. Initialize memory (mandatory, runs once per tick)
+    { name: "RoomManager Init", fn: roomManagerModule.init, mandatory: true },
 
-    // Unified dashboard for CPU, tasks, and creep assignments
+    // 2. Room management: memory refresh, phase evaluation, defense mode (every 5 ticks)
+    { name: "RoomManager", fn: roomManagerModule.run, runEvery: 5, mandatory: true },
+
+    // 3. Demand calculator: calculates part needs (every 10 ticks)
+    { name: "DemandCalculator", fn: demandCalculatorModule, runEvery: 10 },
+
+    // 4. Task generator: creates tasks from room state (every 5 ticks)
+    { name: "TaskGenerator", fn: taskGeneratorModule, runEvery: 5 },
+
+    // 5. Task dispatcher: assigns tasks to idle creeps (mandatory)
+    { name: "TaskDispatcher", fn: taskDispatcherModule, mandatory: true },
+
+    // 6. Task executor: runs all creeps with tasks (mandatory)
+    { name: "TaskExecutor", fn: taskExecutorModule, mandatory: true },
+
+    // 7. Spawn manager: spawns by part deficit (every 3 ticks)
+    { name: "SpawnManager", fn: spawnManagerModule, runEvery: 3 },
+
+    // 8. Tower manager: defense and repairs
+    { name: "TowerManager", fn: towerManagerModule },
+
+    // 9. Construction manager: building planning (every 20 ticks)
+    { name: "ConstructionManager", fn: constructionManagerModule, runEvery: 20 },
+
+    // 10. Dashboard for visualization
     { name: "Dashboard", fn: dashboardModule.fn, mandatory: false },
   ];
 
