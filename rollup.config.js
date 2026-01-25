@@ -3,6 +3,7 @@ import commonjs from '@rollup/plugin-commonjs';
 import progress from "rollup-plugin-progress";
 import typescript from "rollup-plugin-typescript2";
 import screeps from "rollup-plugin-screeps";
+import clear from "rollup-plugin-clear";
 
 "use strict";
 
@@ -27,16 +28,12 @@ export default {
     input: "src/main.ts",
 
     plugins: [
-        progress({clearLine: true}),
-        resolve(),
-        commonjs({
-            namedExports: {
-                'screeps-profiler': ['profiler'],
-                'columnify': ['columnify']
-            }
-        }),
-        typescript({tsconfig: "./tsconfig.json"}),
-        screeps({config: cfg, dryRun: cfg == null})
+        clear({ targets: ["dist"] }),
+        progress({ clearLine: true }),
+        resolve({ rootDir: "src" }),
+        commonjs(),
+        typescript({ tsconfig: "./tsconfig.json" }),
+        screeps({ config: cfg, dryRun: cfg == null })
     ],
 
     onwarn: function (warning) {
@@ -55,7 +52,7 @@ export default {
     output: {
         file: "dist/main.js",
         format: "cjs",
-        sourcemap: false,
+        sourcemap: true,
         banner: '//Screepy Aldo\'s screeps scripty\n'
     },
 }
