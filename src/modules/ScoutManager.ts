@@ -8,7 +8,7 @@
  * - Scout routing optimization
  */
 
-import { BodyType, generateBody } from "../config/bodyTypes";
+import { BodyType } from "../config/bodyTypes";
 import { intelManager } from "./IntelManager";
 import { log } from "../utils/logger";
 

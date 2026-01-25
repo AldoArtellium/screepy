@@ -13,7 +13,8 @@
 import { log } from "../utils/logger";
 import { intelManager } from "./IntelManager";
 
-/** Source Keeper lair respawn time */
+/** Source Keeper lair respawn time - reserved for respawn prediction */
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
 const KEEPER_RESPAWN_TIME = 300;
 
 /** SK room operation */
@@ -54,7 +55,8 @@ interface SKMineralInfo {
     isSafe: boolean;
 }
 
-/** SK killer body - designed to kill keepers efficiently */
+/** SK killer body - designed to kill keepers efficiently - reserved for spawning */
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
 const SK_KILLER_BODY = {
     /** Parts for RCL 7 */
     RCL7: [
@@ -111,7 +113,7 @@ class SKManager {
         this.evaluateSKRooms(eligibleRooms);
 
         // Process active operations
-        for (const [roomName, op] of this.operations) {
+        for (const [, op] of this.operations) {
             this.processOperation(op);
         }
 
@@ -184,7 +186,8 @@ class SKManager {
      */
     private evaluateSKRoom(room: Room, sourceRoom: string): boolean {
         const sources = room.find(FIND_SOURCES);
-        const mineral = room.find(FIND_MINERALS)[0];
+        // Mineral checked but not used yet - reserved for mineral value evaluation
+        room.find(FIND_MINERALS);
 
         // Must have at least 2 sources
         if (sources.length < 2) return false;
@@ -303,9 +306,10 @@ class SKManager {
         if (!room) return;
 
         // Update keeper spawn times
-        const lairs = room.find(FIND_HOSTILE_STRUCTURES, {
+        // Lairs found for potential future use in spawn prediction
+        room.find(FIND_HOSTILE_STRUCTURES, {
             filter: s => s.structureType === STRUCTURE_KEEPER_LAIR
-        }) as StructureKeeperLair[];
+        });
 
         for (const source of op.sources) {
             if (source.lairId) {

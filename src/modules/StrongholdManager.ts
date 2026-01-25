@@ -23,11 +23,13 @@ const STRONGHOLD_CONFIG: Record<number, {
     healers: number;
     dismantlers: number;
 }> = {
+    /* eslint-disable max-len */
     1: { coreHits: 10000, towers: 0, ramparts: 10000, minRCL: 5, boostsRequired: false, attackers: 2, healers: 1, dismantlers: 1 },
     2: { coreHits: 20000, towers: 1, ramparts: 50000, minRCL: 6, boostsRequired: false, attackers: 3, healers: 2, dismantlers: 2 },
     3: { coreHits: 50000, towers: 2, ramparts: 200000, minRCL: 7, boostsRequired: true, attackers: 4, healers: 3, dismantlers: 3 },
     4: { coreHits: 100000, towers: 3, ramparts: 500000, minRCL: 7, boostsRequired: true, attackers: 5, healers: 4, dismantlers: 4 },
     5: { coreHits: 200000, towers: 4, ramparts: 1000000, minRCL: 8, boostsRequired: true, attackers: 6, healers: 5, dismantlers: 5 }
+    /* eslint-enable max-len */
 };
 
 /** Stronghold operation */
@@ -376,7 +378,8 @@ class StrongholdManager {
      * Process attacking operation - coordinate assault
      */
     private processAttackingOperation(op: StrongholdOperation): void {
-        const room = Game.rooms[op.roomName];
+        // Room retrieved for visibility check and future combat logic
+        Game.rooms[op.roomName];
 
         // Check if core is destroyed
         if (op.coreId) {

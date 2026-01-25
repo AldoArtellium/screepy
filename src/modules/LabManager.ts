@@ -12,7 +12,8 @@
 import { log } from "../utils/logger";
 
 /** Compound recipes - input1 + input2 = output */
-const RECIPES: Record<MineralCompoundConstant, [MineralConstant | MineralCompoundConstant, MineralConstant | MineralCompoundConstant]> = {
+type RecipeInput = MineralConstant | MineralCompoundConstant;
+const RECIPES: Record<MineralCompoundConstant, [RecipeInput, RecipeInput]> = {
     // Tier 1 compounds
     [RESOURCE_HYDROXIDE]: [RESOURCE_HYDROGEN, RESOURCE_OXYGEN],
     [RESOURCE_ZYNTHIUM_KEANITE]: [RESOURCE_ZYNTHIUM, RESOURCE_KEANIUM],
@@ -57,7 +58,8 @@ const RECIPES: Record<MineralCompoundConstant, [MineralConstant | MineralCompoun
 };
 
 /** Boost effects by part type */
-const BOOST_EFFECTS: Partial<Record<MineralCompoundConstant, { part: BodyPartConstant; effect: string; multiplier: number }>> = {
+interface BoostEffect { part: BodyPartConstant; effect: string; multiplier: number }
+const BOOST_EFFECTS: Partial<Record<MineralCompoundConstant, BoostEffect>> = {
     // WORK boosts - harvest
     [RESOURCE_UTRIUM_OXIDE]: { part: WORK, effect: "harvest", multiplier: 3 },
     [RESOURCE_UTRIUM_ALKALIDE]: { part: WORK, effect: "harvest", multiplier: 5 },
@@ -529,6 +531,20 @@ class LabManager {
      */
     getBoostQueue(roomName: string): BoostRequest[] {
         return this.boostQueues.get(roomName) ?? [];
+    }
+
+    /**
+     * Get lab status summary for dashboard
+     */
+    getLabStatus(roomName: string): LabStatus {
+        const queue = this.productionQueues.get(roomName) ?? [];
+        const boostQueue = this.boostQueues.get(roomName) ?? [];
+
+        return {
+            producing: queue.length > 0 ? queue[0].compound : null,
+            queueLength: queue.length,
+            boostRequests: boostQueue.length
+        };
     }
 }
 

@@ -395,7 +395,7 @@ class HighwayManager {
      * Process deposit operations
      */
     private processDepositOperations(): void {
-        for (const [id, op] of this.depositOperations) {
+        for (const [, op] of this.depositOperations) {
             const deposit = Game.getObjectById(op.depositId);
 
             // Deposit is gone
@@ -490,13 +490,50 @@ class HighwayManager {
             }
         }
     }
+
+    /**
+     * Get summary of highway operations for dashboard
+     */
+    getHighwaySummary(_detailed: boolean = false): HighwayOpSummary[] {
+        const summaries: HighwayOpSummary[] = [];
+
+        // Power bank operations
+        for (const [, op] of this.powerOperations) {
+            summaries.push({
+                id: op.id,
+                type: "power",
+                room: op.roomName,
+                status: op.status,
+                value: op.power
+            });
+        }
+
+        // Deposit operations
+        for (const [, op] of this.depositOperations) {
+            summaries.push({
+                id: op.id,
+                type: "deposit",
+                room: op.roomName,
+                status: op.status,
+                value: 0 // Deposits don't have a fixed value
+            });
+        }
+
+        return summaries;
+    }
 }
 
 // Add memory interface
 declare global {
     interface Memory {
         highwayOperations?: {
-            power: { [id: string]: PowerBankOperation & { attackersNeeded?: number; healersNeeded?: number; haulersNeeded?: number } };
+            power: {
+                [id: string]: PowerBankOperation & {
+                    attackersNeeded?: number;
+                    healersNeeded?: number;
+                    haulersNeeded?: number;
+                };
+            };
             deposits: { [id: string]: DepositOperation };
         };
     }

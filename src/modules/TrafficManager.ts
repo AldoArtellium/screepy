@@ -244,7 +244,7 @@ class TrafficManager {
         target: RoomPosition,
         roomName: string,
         range: number,
-        options: MoveOptions = {}
+        _options: MoveOptions = {}
     ): PathStep[] | null {
         // Check session cache first
         const cacheKey = this.getPathCacheKey(origin, target, range);

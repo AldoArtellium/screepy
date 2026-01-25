@@ -29,6 +29,12 @@ declare global {
             lastCleanup: number;
             invalidatedRooms: string[];
         };
+        // Metrics system for dashboard
+        metrics?: MetricsMemory;
+        // Debug mode for detailed dashboard
+        debugDashboard?: boolean;
+        // Player username
+        username?: string;
     }
 
     interface CreepMemory {
@@ -100,6 +106,63 @@ declare global {
         container?: Id<StructureContainer>;
         containerSite?: Id<ConstructionSite>;
         link?: string;
+    }
+
+    // Metrics system for dashboard time-series
+    interface MetricsMemory {
+        cpu: TimeseriesData;
+        cpuBucket: TimeseriesData;
+        rooms: { [roomName: string]: RoomMetricsData };
+    }
+
+    interface TimeseriesData {
+        values: number[];
+        timestamps: number[];
+        maxLength: number;
+    }
+
+    interface RoomMetricsData {
+        energyIncome: TimeseriesData;
+        storageLevel: TimeseriesData;
+        energyHarvested: number; // Running total for current tick
+    }
+
+    // Summary types for dashboard display
+    interface RemoteSummary {
+        roomName: string;
+        baseRoom: string;
+        sourceCount: number;
+        threat: boolean;
+        miners: number;
+        haulers: number;
+    }
+
+    interface CombatOpSummary {
+        id: string;
+        type: string;
+        target: string;
+        status: string;
+        creepCount: number;
+    }
+
+    interface HighwayOpSummary {
+        id: string;
+        type: "power" | "deposit";
+        room: string;
+        status: string;
+        value: number;
+    }
+
+    interface LabStatus {
+        producing: string | null;
+        queueLength: number;
+        boostRequests: number;
+    }
+
+    interface AlertInfo {
+        level: "critical" | "warning" | "info";
+        message: string;
+        room?: string;
     }
 }
 

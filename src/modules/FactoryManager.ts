@@ -25,6 +25,7 @@ const FACTORY_PRODUCTS: Record<number, CommodityConstant[]> = {
     5: [RESOURCE_CELL, RESOURCE_PHLEGM, RESOURCE_TISSUE, RESOURCE_MUSCLE, RESOURCE_ORGANOID, RESOURCE_ORGANISM]
 };
 
+/* eslint-disable max-len */
 /** Commodity recipes */
 const COMMODITY_RECIPES: Partial<Record<CommodityConstant, {
     level: number;
@@ -81,6 +82,7 @@ const COMMODITY_RECIPES: Partial<Record<CommodityConstant, {
     [RESOURCE_REDUCTANT]: { level: 0, cooldown: 12, amount: 100, components: { [RESOURCE_HYDROGEN]: 500, [RESOURCE_ENERGY]: 200 } },
     [RESOURCE_PURIFIER]: { level: 0, cooldown: 12, amount: 100, components: { [RESOURCE_CATALYST]: 500, [RESOURCE_ENERGY]: 200 } },
 };
+/* eslint-enable max-len */
 
 /** Configuration */
 const CONFIG = {
@@ -377,7 +379,7 @@ class FactoryManager {
      */
     private requestFromOtherRoom(targetRoom: string, resource: ResourceConstant, amount: number): void {
         // Find a room with this resource
-        for (const [roomName, state] of this.factories) {
+        for (const [roomName] of this.factories) {
             if (roomName === targetRoom) continue;
 
             const room = Game.rooms[roomName];

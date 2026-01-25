@@ -9,8 +9,7 @@
  * - Combat squad coordination
  */
 
-import { BodyType, generateBody, getBodyCost } from "../config/bodyTypes";
-import { intelManager, RoomIntel } from "./IntelManager";
+import { intelManager } from "./IntelManager";
 import { log } from "../utils/logger";
 
 /** Attack operation types */
@@ -53,7 +52,8 @@ interface AttackOperation {
     targets?: string[];
 }
 
-/** Combat creep body configurations */
+/** Combat creep body configurations - reserved for future spawning logic */
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
 const COMBAT_BODIES = {
     /** Melee attacker - high damage, low cost */
     ATTACKER: {
@@ -693,6 +693,46 @@ class CombatManager {
             op.status = "retreating";
             log.info("CombatManager", `Cancelled operation ${operationId}`);
         }
+    }
+
+    /**
+     * Get summary of combat operations for dashboard
+     */
+    getOperationsSummary(_detailed: boolean = false): CombatOpSummary[] {
+        const summaries: CombatOpSummary[] = [];
+
+        for (const [, op] of this.operations) {
+            const aliveCreeps = op.creeps.filter(name => Game.creeps[name]).length;
+
+            summaries.push({
+                id: op.id,
+                type: op.type,
+                target: op.targetRoom,
+                status: op.status,
+                creepCount: aliveCreeps
+            });
+        }
+
+        // Also check memory for ops that may not be loaded yet
+        if (Memory.combatOperations) {
+            for (const [id, memOp] of Object.entries(Memory.combatOperations)) {
+                // Skip if already in operations map
+                if (this.operations.has(id)) continue;
+
+                const aliveCreeps = memOp.spawnedCreeps.filter(name => Game.creeps[name]).length;
+                if (aliveCreeps > 0 || memOp.requiredCreeps.length > 0) {
+                    summaries.push({
+                        id,
+                        type: id.split("-")[0],
+                        target: memOp.targetRoom,
+                        status: "spawning",
+                        creepCount: aliveCreeps
+                    });
+                }
+            }
+        }
+
+        return summaries;
     }
 }
 

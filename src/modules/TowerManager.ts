@@ -11,8 +11,6 @@
  * - RCL-scaled wall/rampart repair
  */
 
-import { log } from "../utils/logger";
-
 /** Tower energy thresholds */
 const TOWER_ENERGY = {
     /** Minimum energy to attack */

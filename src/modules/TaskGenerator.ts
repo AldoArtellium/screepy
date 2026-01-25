@@ -12,7 +12,6 @@ import {
     TaskType
 } from "../types/TaskTypes";
 import { ENERGY_THRESHOLDS } from "../utils/creepUtils";
-import { log } from "../utils/logger";
 
 class TaskGenerator {
     /**

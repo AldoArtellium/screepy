@@ -6,6 +6,7 @@
 import { TaskStatus, TaskType, requiresEnergy } from "../types/TaskTypes";
 import { ENERGY_THRESHOLDS } from "../utils/creepUtils";
 import { log } from "../utils/logger";
+import { metricsCollector } from "./MetricsCollector";
 import { taskDispatcher } from "./TaskDispatcher";
 import { trafficManager } from "./TrafficManager";
 
@@ -236,9 +237,11 @@ class TaskExecutor {
             case TaskType.FILL_SPAWN:
             case TaskType.FILL_EXTENSION:
             case TaskType.FILL_TOWER:
-            case TaskType.FILL_STORAGE:
-                this.executeDeliver(creep, target as StructureSpawn | StructureExtension | StructureTower | StructureStorage);
+            case TaskType.FILL_STORAGE: {
+                type DeliverTarget = StructureSpawn | StructureExtension | StructureTower | StructureStorage;
+                this.executeDeliver(creep, target as DeliverTarget);
                 break;
+            }
 
             case TaskType.PICKUP_RESOURCE:
                 this.executePickup(creep, target as Resource);
@@ -304,7 +307,12 @@ class TaskExecutor {
             }
 
             // Harvest and transfer to container
-            creep.harvest(source);
+            const harvestResult = creep.harvest(source);
+            if (harvestResult === OK) {
+                // Track energy harvested (2 energy per WORK part per tick)
+                const workParts = creep.getActiveBodyparts(WORK);
+                metricsCollector.recordEnergyHarvested(creep.room.name, workParts * 2);
+            }
             if (creep.store.getFreeCapacity() === 0) {
                 creep.transfer(container, RESOURCE_ENERGY);
             }
@@ -317,7 +325,11 @@ class TaskExecutor {
 
             // Harvest and drop on site (will be picked up after container built)
             if (creep.pos.isNearTo(source)) {
-                creep.harvest(source);
+                const harvestResult = creep.harvest(source);
+                if (harvestResult === OK) {
+                    const workParts = creep.getActiveBodyparts(WORK);
+                    metricsCollector.recordEnergyHarvested(creep.room.name, workParts * 2);
+                }
                 if (creep.store.getFreeCapacity() === 0) {
                     creep.drop(RESOURCE_ENERGY);
                 }
@@ -325,11 +337,23 @@ class TaskExecutor {
         } else {
             // No container - find best position adjacent to source
             if (creep.pos.isNearTo(source)) {
-                creep.harvest(source);
+                const harvestResult = creep.harvest(source);
+                if (harvestResult === OK) {
+                    const workParts = creep.getActiveBodyparts(WORK);
+                    metricsCollector.recordEnergyHarvested(creep.room.name, workParts * 2);
+                }
 
                 // Drop energy when full (haulers will pick up)
                 if (creep.store.getFreeCapacity() === 0) {
                     creep.drop(RESOURCE_ENERGY);
+
+                    // In early game (Phase 0-1, no container), release worker for other tasks
+                    // This allows flexible workers to cycle between harvesting and upgrading
+                    const phase = creep.room.memory.phase ?? 0;
+                    if (phase <= 1) {
+                        this.completeTask(creep);
+                        return;
+                    }
                 }
             } else {
                 trafficManager.requestMove(creep, source.pos, { range: 1, visualize: true });
@@ -340,7 +364,10 @@ class TaskExecutor {
     /**
      * Execute delivery task
      */
-    private executeDeliver(creep: Creep, target: StructureSpawn | StructureExtension | StructureTower | StructureStorage): void {
+    private executeDeliver(
+        creep: Creep,
+        target: StructureSpawn | StructureExtension | StructureTower | StructureStorage
+    ): void {
         // Check if target still needs energy
         if (target.store.getFreeCapacity(RESOURCE_ENERGY) === 0) {
             this.completeTask(creep);
@@ -721,7 +748,11 @@ class TaskExecutor {
      */
     private moveToAndHarvest(creep: Creep, source: Source): void {
         if (creep.pos.isNearTo(source)) {
-            creep.harvest(source);
+            const result = creep.harvest(source);
+            if (result === OK) {
+                const workParts = creep.getActiveBodyparts(WORK);
+                metricsCollector.recordEnergyHarvested(creep.room.name, workParts * 2);
+            }
         } else {
             trafficManager.requestMove(creep, source.pos, { range: 1 });
         }

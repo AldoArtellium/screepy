@@ -9,7 +9,7 @@
  * - Multi-room resource management
  */
 
-import { BodyType, generateBody } from "../config/bodyTypes";
+import { BodyType } from "../config/bodyTypes";
 import { intelManager, RoomIntel } from "./IntelManager";
 import {
     generateTaskId,

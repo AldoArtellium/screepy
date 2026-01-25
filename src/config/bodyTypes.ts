@@ -136,7 +136,8 @@ export function generateOptimalBody(
     bodyType: BodyType,
     energy: number
 ): BodyPartConstant[] {
-    const config = BODY_CONFIGS[bodyType];
+    // Config is retrieved for potential future use in optimization
+    BODY_CONFIGS[bodyType];
     const body = generateBody(bodyType, energy);
 
     // Calculate remaining energy

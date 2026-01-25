@@ -4,7 +4,6 @@
  */
 
 import { BodyType, generateBody, generateOptimalBody, getBodyCost } from "../config/bodyTypes";
-import { PartDemand } from "../types/TaskTypes";
 import { log } from "../utils/logger";
 
 interface SpawnRequest {

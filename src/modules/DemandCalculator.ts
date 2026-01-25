@@ -5,7 +5,6 @@
 
 import { countParts } from "../config/bodyTypes";
 import { PartDemand } from "../types/TaskTypes";
-import { log } from "../utils/logger";
 
 /**
  * Demand scaling by phase
@@ -21,8 +20,9 @@ const UPGRADE_WORK_BY_PHASE: Record<number, number> = {
 };
 
 /**
- * Minimum creep counts by phase for stability
+ * Minimum creep counts by phase for stability - reserved for future use
  */
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
 const MIN_CREEPS_BY_PHASE: Record<number, number> = {
     0: 3,  // Emergency
     1: 4,  // Bootstrap

@@ -274,7 +274,8 @@ const Profiler = {
       `Avg p-CPU per tick: ${(processingTime / elapsedTicks).toFixed(2)}`,
       `Avg i-CPU per tick: ${(intentsTime / elapsedTicks).toFixed(2)}`,
       `Avg CPU per tick: ${(Mem.totalTime / elapsedTicks).toFixed(2)}`,
-      `Avg intents per tick: ${(Mem.totalIntents / elapsedTicks).toFixed(2)} (${((intentsTime / Mem.totalTime) * 100).toFixed(2)}%)`,
+      `Avg intents per tick: ${(Mem.totalIntents / elapsedTicks).toFixed(2)} ` +
+        `(${((intentsTime / Mem.totalTime) * 100).toFixed(2)}%)`,
       `Ticks profiled: ${elapsedTicks}`,
     ].join("\t\t")
 

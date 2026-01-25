@@ -36,7 +36,8 @@ interface PriceHistory {
     lastUpdated: number;
 }
 
-/** Terminal state tracking */
+/** Terminal state tracking - reserved for future state caching */
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
 interface TerminalState {
     roomName: string;
     cooldown: number;
@@ -101,7 +102,6 @@ class MarketManager {
         if (terminal.cooldown > 0) return;
 
         const storage = room.storage;
-        const terminalEnergy = terminal.store.getUsedCapacity(RESOURCE_ENERGY);
 
         // Check selling opportunities
         this.checkSellOpportunities(room, terminal, storage);
@@ -230,8 +230,9 @@ class MarketManager {
         const result = Game.market.deal(bestOrder.id, sellAmount, terminal.room.name);
 
         if (result === OK) {
+            const total = (sellAmount * bestOrder.price).toFixed(0);
             log.info("MarketManager",
-                `Sold ${sellAmount} ${resourceType} @ ${bestOrder.price} credits/unit = ${(sellAmount * bestOrder.price).toFixed(0)} credits`
+                `Sold ${sellAmount} ${resourceType} @ ${bestOrder.price}/unit = ${total} credits`
             );
             return true;
         } else {
@@ -297,7 +298,7 @@ class MarketManager {
 
         if (result === OK) {
             log.info("MarketManager",
-                `Bought ${buyAmount} ${resourceType} @ ${bestOrder.price} credits/unit = ${totalCost.toFixed(0)} credits`
+                `Bought ${buyAmount} ${resourceType} @ ${bestOrder.price}/unit = ${totalCost.toFixed(0)} credits`
             );
             return true;
         } else {

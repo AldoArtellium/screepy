@@ -407,7 +407,7 @@ class PowerCreepManager {
     /**
      * Find a room with PowerSpawn
      */
-    private findPowerSpawnRoom(pc: PowerCreep): string | null {
+    private findPowerSpawnRoom(_pc: PowerCreep): string | null {
         for (const room of Object.values(Game.rooms)) {
             if (!room.controller?.my) continue;
 

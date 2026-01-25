@@ -430,6 +430,41 @@ class RemoteMiningManager {
     getActiveRemotes(): string[] {
         return Object.keys(Memory.remotes ?? {});
     }
+
+    /**
+     * Get summary of remote operations for dashboard
+     */
+    getRemotesSummary(_detailed: boolean = false): RemoteSummary[] {
+        const summaries: RemoteSummary[] = [];
+
+        for (const remoteName in Memory.remotes) {
+            const remote = Memory.remotes[remoteName];
+
+            // Count assigned creeps
+            let miners = 0;
+            let haulers = 0;
+
+            for (const creep of Object.values(Game.creeps)) {
+                if (creep.memory.targetRoom !== remoteName) continue;
+                if (creep.memory.bodyType === "worker" || creep.memory.role === "miner") {
+                    miners++;
+                } else if (creep.memory.bodyType === "transport" || creep.memory.role === "hauler") {
+                    haulers++;
+                }
+            }
+
+            summaries.push({
+                roomName: remoteName,
+                baseRoom: remote.baseRoom,
+                sourceCount: remote.sources.length,
+                threat: remote.threat > 0,
+                miners,
+                haulers
+            });
+        }
+
+        return summaries;
+    }
 }
 
 // Extend Memory for remote assignments

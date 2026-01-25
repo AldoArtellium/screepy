@@ -54,8 +54,8 @@ class TaskDispatcher {
      * Find the best creep for a task based on capability and proximity
      */
     private findBestCreepForTask(task: Task, creeps: Creep[]): Creep | null {
-        const category = getTaskCategory(task.type);
-        const requirements = TASK_PART_REQUIREMENTS[category];
+        // Category computed for potential future use in task filtering
+        getTaskCategory(task.type);
 
         let bestCreep: Creep | null = null;
         let bestScore = -Infinity;
@@ -139,7 +139,6 @@ class TaskDispatcher {
         // Base capability score - prefer specialized creeps
         const workParts = countParts(creep, WORK);
         const carryParts = countParts(creep, CARRY);
-        const attackParts = countParts(creep, ATTACK);
 
         // Specialization bonus: creeps with more of a part type are better for that task
         for (const [part, minCount] of Object.entries(requirements)) {

@@ -95,7 +95,8 @@ const STAMPS = {
     }
 };
 
-/** Structure count limits by RCL */
+/** Structure count limits by RCL - reserved for future validation */
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
 const STRUCTURE_LIMITS: Record<BuildableStructureConstant, number[]> = {
     [STRUCTURE_SPAWN]: [0, 1, 1, 1, 1, 1, 1, 2, 3],
     [STRUCTURE_EXTENSION]: [0, 0, 5, 10, 20, 30, 40, 50, 60],

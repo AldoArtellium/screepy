@@ -11,6 +11,7 @@ import { highwayManagerModule } from "modules/HighwayManager";
 import { intelManagerModule } from "modules/IntelManager";
 import { labManagerModule } from "modules/LabManager";
 import { marketManagerModule } from "modules/MarketManager";
+import { metricsCollectorModule } from "modules/MetricsCollector";
 import { powerCreepManagerModule } from "modules/PowerCreepManager";
 import { remoteMiningManagerModule } from "modules/RemoteMiningManager";
 import { roomManagerModule } from "modules/RoomManager";
@@ -30,6 +31,9 @@ export const gameLoop = () => {
   const memLimit = 1000000;
   const cpuLimit = Game.cpu.limit;
   const modules = [
+    // 0. Metrics collection (mandatory, lightweight, every tick)
+    { name: "MetricsCollector", fn: metricsCollectorModule, mandatory: true },
+
     // 1. Initialize memory (mandatory, runs once per tick)
     { name: "RoomManager Init", fn: roomManagerModule.init, mandatory: true },
 
