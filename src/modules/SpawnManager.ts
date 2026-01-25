@@ -13,6 +13,8 @@ interface SpawnRequest {
     priority: number;
     roomName: string;
     reason?: string;
+    /** Target room for cross-room creeps (bootstrap, remote mining) */
+    targetRoom?: string;
 }
 
 /**
@@ -179,6 +181,47 @@ class SpawnManager {
                 });
             }
         }
+
+        // Spawn workers for bootstrap targets (newly claimed rooms)
+        this.calculateBootstrapSpawnNeeds(room, spawnEnergy);
+    }
+
+    /**
+     * Calculate spawn needs for bootstrap targets
+     */
+    private calculateBootstrapSpawnNeeds(room: Room, spawnEnergy: number): void {
+        const bootstrapTargets = room.memory.bootstrapTargets ?? [];
+        if (bootstrapTargets.length === 0) return;
+
+        for (const targetRoom of bootstrapTargets) {
+            // Count existing bootstrap workers for this target
+            const existingWorkers = _.filter(Game.creeps, c =>
+                c.memory.room === room.name &&
+                c.memory.targetRoom === targetRoom &&
+                c.memory.bodyType === BodyType.WORKER
+            ).length;
+
+            // Need 3-4 workers per bootstrap target
+            const desiredWorkers = 4;
+            const workersNeeded = desiredWorkers - existingWorkers;
+
+            if (workersNeeded <= 0) continue;
+
+            // Spawn workers for bootstrap
+            for (let i = 0; i < Math.min(workersNeeded, 2); i++) {
+                const body = generateBody(BodyType.WORKER, spawnEnergy);
+                if (body.length > 0) {
+                    this.spawnQueue.push({
+                        bodyType: BodyType.WORKER,
+                        body,
+                        priority: SPAWN_PRIORITIES[BodyType.WORKER] + 0.3 + i * 0.1,
+                        roomName: room.name,
+                        targetRoom,
+                        reason: `bootstrap ${targetRoom}`
+                    });
+                }
+            }
+        }
     }
 
     /**
@@ -238,14 +281,16 @@ class SpawnManager {
             const newName = `${bodyType}-${Game.time}-${spawn.name}`;
             const memory: CreepMemory = {
                 bodyType,
-                room: request.roomName
+                room: request.roomName,
+                ...(request.targetRoom && { targetRoom: request.targetRoom })
             };
 
             const result = spawn.spawnCreep(body, newName, { memory });
 
             if (result === OK) {
                 Memory.creeps[newName] = memory;
-                log.info("SpawnManager", `Spawning ${bodyType}: ${newName} (${body.length} parts, cost: ${cost})`);
+                const targetInfo = request.targetRoom ? ` → ${request.targetRoom}` : "";
+                log.info("SpawnManager", `Spawning ${bodyType}: ${newName} (${body.length} parts, cost: ${cost})${targetInfo}`);
                 this.spawnQueue.splice(bestIndex, 1);
             } else if (result !== ERR_NOT_ENOUGH_ENERGY) {
                 log.warn("SpawnManager", `Failed to spawn ${bodyType}: ${result}`);

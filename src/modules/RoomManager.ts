@@ -464,6 +464,96 @@ class RoomManager {
         return room.memory.defenseMode ?? false;
     }
 
+    // ==================== Multi-Room Coordination ====================
+
+    /**
+     * Get all owned rooms sorted by phase (highest first)
+     */
+    getOwnedRooms(): Room[] {
+        return Object.values(Game.rooms)
+            .filter(r => r.controller?.my)
+            .sort((a, b) => (b.memory.phase ?? 0) - (a.memory.phase ?? 0));
+    }
+
+    /**
+     * Get empire statistics across all rooms
+     */
+    getEmpireStats(): {
+        totalRooms: number;
+        totalCreeps: number;
+        totalEnergy: number;
+        avgPhase: number;
+        roomsByPhase: { [phase: number]: string[] };
+    } {
+        const ownedRooms = this.getOwnedRooms();
+        const roomsByPhase: { [phase: number]: string[] } = {};
+
+        let totalCreeps = 0;
+        let totalEnergy = 0;
+        let phaseSum = 0;
+
+        for (const room of ownedRooms) {
+            const phase = room.memory.phase ?? 0;
+            if (!roomsByPhase[phase]) roomsByPhase[phase] = [];
+            roomsByPhase[phase].push(room.name);
+
+            totalCreeps += room.find(FIND_MY_CREEPS).length;
+            totalEnergy += room.energyAvailable;
+            if (room.storage) {
+                totalEnergy += room.storage.store.getUsedCapacity(RESOURCE_ENERGY);
+            }
+            phaseSum += phase;
+        }
+
+        return {
+            totalRooms: ownedRooms.length,
+            totalCreeps,
+            totalEnergy,
+            avgPhase: ownedRooms.length > 0 ? phaseSum / ownedRooms.length : 0,
+            roomsByPhase
+        };
+    }
+
+    /**
+     * Find the best room to spawn support creeps for a target room
+     * Prefers rooms with high phase and available energy
+     */
+    findSupportRoom(targetRoom: string, minPhase: number = 3): Room | null {
+        const candidates = this.getOwnedRooms().filter(r =>
+            r.name !== targetRoom &&
+            (r.memory.phase ?? 0) >= minPhase &&
+            r.energyAvailable > r.energyCapacityAvailable * 0.5
+        );
+
+        if (candidates.length === 0) return null;
+
+        // Sort by phase and energy, with distance as tiebreaker
+        // For now, just return highest phase room
+        return candidates[0];
+    }
+
+    /**
+     * Get rooms that need support (bootstrapping or under attack)
+     */
+    getRoomsNeedingSupport(): { room: Room; reason: string }[] {
+        const results: { room: Room; reason: string }[] = [];
+
+        for (const room of this.getOwnedRooms()) {
+            const phase = room.memory.phase ?? 0;
+            const spawns = room.find(FIND_MY_SPAWNS).length;
+
+            if (spawns === 0) {
+                results.push({ room, reason: "no_spawn" });
+            } else if (phase === 0) {
+                results.push({ room, reason: "emergency" });
+            } else if (room.memory.defenseMode && (room.memory.threatLevel ?? 0) > 1000) {
+                results.push({ room, reason: "under_attack" });
+            }
+        }
+
+        return results;
+    }
+
     // ==================== Helper Methods ====================
 
     private hasAllSourceContainers(room: Room): boolean {

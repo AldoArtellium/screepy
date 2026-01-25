@@ -193,7 +193,7 @@ Defense mode is a special overlay that activates on top of any phase when hostil
 
 ## Great Filters (Development Milestones)
 
-Reference: https://wiki.screepspl.us/Great_Filters/
+Reference: `docs/Great_filters.md`
 
 Key stages most Screeps bots progress through:
 

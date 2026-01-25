@@ -45,7 +45,11 @@ export enum TaskType {
 
     // Defense repairs
     REPAIR_RAMPART = "repair_rampart",
-    REPAIR_WALL = "repair_wall"
+    REPAIR_WALL = "repair_wall",
+
+    // Expansion
+    CLAIM_ROOM = "claim_room",
+    RESERVE_ROOM = "reserve_room"
 }
 
 /**
@@ -77,7 +81,9 @@ export const TASK_PRIORITIES: Record<TaskType, number> = {
     [TaskType.UPGRADE_CONTROLLER]: 55,
     [TaskType.FILL_STORAGE]: 60,
     [TaskType.REPAIR_RAMPART]: 65,
-    [TaskType.REPAIR_WALL]: 70
+    [TaskType.REPAIR_WALL]: 70,
+    [TaskType.CLAIM_ROOM]: 20,
+    [TaskType.RESERVE_ROOM]: 35
 };
 
 /**
@@ -106,7 +112,9 @@ export const TASK_CATEGORIES: Record<TaskType, TaskCategory> = {
     [TaskType.UPGRADE_CONTROLLER]: TaskCategory.UPGRADE,
     [TaskType.FILL_STORAGE]: TaskCategory.TRANSPORT,
     [TaskType.REPAIR_RAMPART]: TaskCategory.REPAIR,
-    [TaskType.REPAIR_WALL]: TaskCategory.REPAIR
+    [TaskType.REPAIR_WALL]: TaskCategory.REPAIR,
+    [TaskType.CLAIM_ROOM]: TaskCategory.CLAIM,
+    [TaskType.RESERVE_ROOM]: TaskCategory.CLAIM
 };
 
 /**

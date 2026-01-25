@@ -3,6 +3,7 @@ import { runModuleManager } from "./ModuleManager";
 import { constructionManagerModule } from "modules/ConstructionManager";
 import { defenderManagerModule } from "modules/DefenderManager";
 import { demandCalculatorModule } from "modules/DemandCalculator";
+import { expansionManagerModule } from "modules/ExpansionManager";
 import { intelManagerModule } from "modules/IntelManager";
 import { remoteMiningManagerModule } from "modules/RemoteMiningManager";
 import { roomManagerModule } from "modules/RoomManager";
@@ -58,7 +59,10 @@ export const gameLoop = () => {
     // 13. Remote mining manager: remote operations (every 5 ticks)
     { name: "RemoteMiningManager", fn: remoteMiningManagerModule, runEvery: 5 },
 
-    // 14. Dashboard for visualization
+    // 14. Expansion manager: room claiming (every 50 ticks, phase 4+)
+    { name: "ExpansionManager", fn: expansionManagerModule, runEvery: 50 },
+
+    // 15. Dashboard for visualization
     { name: "Dashboard", fn: dashboardModule.fn, mandatory: false },
   ];
 

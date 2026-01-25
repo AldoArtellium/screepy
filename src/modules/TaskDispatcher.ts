@@ -304,18 +304,108 @@ class TaskDispatcher {
             delete task.assignedTo;
         }
     }
+
+    /**
+     * Dispatch tasks for creeps with targetRoom (bootstrap/remote creeps)
+     * These creeps look at tasks in their target room, not their home room
+     */
+    dispatchCrossRoomTasks(): void {
+        // Find all idle creeps with a targetRoom
+        const crossRoomCreeps = _.filter(Game.creeps, c =>
+            !c.spawning &&
+            !c.memory.currentTask &&
+            c.memory.targetRoom
+        );
+
+        if (crossRoomCreeps.length === 0) return;
+
+        // Group creeps by their target room
+        const creepsByTarget: { [roomName: string]: Creep[] } = {};
+        for (const creep of crossRoomCreeps) {
+            const target = creep.memory.targetRoom!;
+            if (!creepsByTarget[target]) {
+                creepsByTarget[target] = [];
+            }
+            creepsByTarget[target].push(creep);
+        }
+
+        // Dispatch tasks for each target room
+        for (const targetRoomName in creepsByTarget) {
+            const targetRoom = Game.rooms[targetRoomName];
+            const creeps = creepsByTarget[targetRoomName];
+
+            // If we have visibility of target room
+            if (targetRoom?.controller?.my) {
+                const queue = targetRoom.memory.taskQueue ?? [];
+                const pendingTasks = queue
+                    .filter(t => t.status === TaskStatus.PENDING)
+                    .sort((a, b) => a.priority - b.priority);
+
+                if (pendingTasks.length === 0) continue;
+
+                // Match tasks to creeps (even if creep is in different room)
+                for (const task of pendingTasks) {
+                    if (task.status !== TaskStatus.PENDING) continue;
+
+                    // Find best creep that can perform this task
+                    const capableCreeps = creeps.filter(c =>
+                        !c.memory.currentTask && this.canPerformTask(c, task)
+                    );
+
+                    if (capableCreeps.length === 0) continue;
+
+                    // For cross-room, prefer creeps already in the target room
+                    const inRoomCreeps = capableCreeps.filter(c => c.room.name === targetRoomName);
+                    const bestCreep = inRoomCreeps.length > 0
+                        ? this.findBestCreepForTask(task, inRoomCreeps)
+                        : capableCreeps[0]; // Just pick first capable if none in room yet
+
+                    if (bestCreep) {
+                        this.assignTaskCrossRoom(task, bestCreep, targetRoom);
+                        // Remove from available list
+                        const idx = creeps.indexOf(bestCreep);
+                        if (idx > -1) creeps.splice(idx, 1);
+                    }
+                }
+            }
+        }
+    }
+
+    /**
+     * Assign a task to a creep for cross-room work
+     */
+    private assignTaskCrossRoom(task: Task, creep: Creep, targetRoom: Room): void {
+        // Update task status in the target room
+        task.status = TaskStatus.ASSIGNED;
+        task.assignedTo = creep.name;
+
+        // Set creep's current task
+        creep.memory.currentTask = {
+            taskId: task.id,
+            type: task.type,
+            targetId: task.targetId,
+            state: this.getInitialTaskState(task, creep),
+            startedAt: Game.time
+        };
+
+        log.debug("TaskDispatcher", `Cross-room assigned ${task.type} in ${targetRoom.name} to ${creep.name}`);
+    }
 }
 
 // Singleton instance
 const taskDispatcherInstance = new TaskDispatcher();
 
 export const taskDispatcherModule = () => {
+    // Dispatch for owned rooms
     for (const roomName in Game.rooms) {
         const room = Game.rooms[roomName];
         if (!room.controller?.my) continue;
 
         taskDispatcherInstance.dispatchTasks(room);
     }
+
+    // Handle cross-room assignment for bootstrap creeps
+    taskDispatcherInstance.dispatchCrossRoomTasks();
 };
 
 export const taskDispatcher = taskDispatcherInstance;

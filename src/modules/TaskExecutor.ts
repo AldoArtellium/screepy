@@ -38,8 +38,20 @@ class TaskExecutor {
         const taskState = creep.memory.currentTask;
         if (!taskState) return;
 
-        const room = creep.room;
-        const task = taskDispatcher.getTaskById(room, taskState.taskId);
+        // For cross-room creeps, look up task in target room
+        const taskRoom = creep.memory.targetRoom
+            ? Game.rooms[creep.memory.targetRoom]
+            : creep.room;
+
+        if (!taskRoom) {
+            // Target room not visible - move towards it
+            if (creep.memory.targetRoom) {
+                this.moveToRoom(creep, creep.memory.targetRoom);
+            }
+            return;
+        }
+
+        const task = taskDispatcher.getTaskById(taskRoom, taskState.taskId);
 
         // Task no longer exists or completed
         if (!task || task.status === TaskStatus.COMPLETED || task.status === TaskStatus.FAILED) {
@@ -100,6 +112,15 @@ class TaskExecutor {
     }
 
     /**
+     * Get the room where a creep's task exists
+     */
+    private getTaskRoom(creep: Creep): Room | undefined {
+        return creep.memory.targetRoom
+            ? Game.rooms[creep.memory.targetRoom]
+            : creep.room;
+    }
+
+    /**
      * Mark a task as failed and clear creep assignment
      */
     private failTask(creep: Creep, task: { id: string; type: TaskType }): void {
@@ -119,7 +140,10 @@ class TaskExecutor {
         }
 
         log.warn("TaskExecutor", `Task ${task.type} failed for ${creep.name} after ${retryCount + 1} attempts`);
-        taskDispatcher.updateTaskStatus(creep.room, task.id, TaskStatus.FAILED);
+        const taskRoom = this.getTaskRoom(creep);
+        if (taskRoom) {
+            taskDispatcher.updateTaskStatus(taskRoom, task.id, TaskStatus.FAILED);
+        }
         delete creep.memory.currentTask;
     }
 
@@ -194,7 +218,7 @@ class TaskExecutor {
     /**
      * Execute the main task action
      */
-    private executeTask(creep: Creep, task: { type: TaskType; targetId: string }): void {
+    private executeTask(creep: Creep, task: { type: TaskType; targetId: string; roomName: string }): void {
         const target = Game.getObjectById(task.targetId as Id<any>);
 
         if (!target) {
@@ -244,6 +268,11 @@ class TaskExecutor {
 
             case TaskType.DEFEND_RAMPART:
                 this.executeDefendRampart(creep, target as StructureRampart);
+                break;
+
+            case TaskType.CLAIM_ROOM:
+            case TaskType.RESERVE_ROOM:
+                this.executeClaimOrReserve(creep, task.type, task.roomName);
                 break;
 
             default:
@@ -528,11 +557,100 @@ class TaskExecutor {
     }
 
     /**
+     * Execute claim or reserve task
+     * Handles cross-room movement and controller interaction
+     */
+    private executeClaimOrReserve(creep: Creep, taskType: TaskType, targetRoomName: string): void {
+        // Cross-room movement if not in target room
+        if (creep.room.name !== targetRoomName) {
+            this.moveToRoom(creep, targetRoomName);
+            return;
+        }
+
+        // Find the controller
+        const controller = creep.room.controller;
+        if (!controller) {
+            log.warn("TaskExecutor", `No controller in ${targetRoomName} for claim/reserve`);
+            this.completeTask(creep);
+            return;
+        }
+
+        // Move to controller if not in range
+        if (!creep.pos.isNearTo(controller)) {
+            creep.moveTo(controller, {
+                reusePath: 20,
+                visualizePathStyle: { stroke: "#ffff00" }
+            });
+            return;
+        }
+
+        // Execute the action
+        if (taskType === TaskType.CLAIM_ROOM) {
+            const result = creep.claimController(controller);
+            if (result === OK) {
+                log.info("TaskExecutor", `Claimed controller in ${targetRoomName}`);
+                this.completeTask(creep);
+            } else if (result === ERR_GCL_NOT_ENOUGH) {
+                log.warn("TaskExecutor", `GCL not enough to claim ${targetRoomName}`);
+                this.completeTask(creep);
+            } else if (result === ERR_INVALID_TARGET) {
+                // Already owned or reserved by enemy
+                log.warn("TaskExecutor", `Cannot claim ${targetRoomName}: invalid target`);
+                this.completeTask(creep);
+            }
+        } else {
+            // RESERVE_ROOM
+            const result = creep.reserveController(controller);
+            if (result === OK) {
+                // Keep reserving until creep dies or task expires
+                // Don't complete the task - reservation needs to be maintained
+            } else if (result === ERR_INVALID_TARGET) {
+                // Controller is owned
+                log.warn("TaskExecutor", `Cannot reserve ${targetRoomName}: owned by someone`);
+                this.completeTask(creep);
+            }
+        }
+    }
+
+    /**
+     * Move creep to a different room
+     */
+    private moveToRoom(creep: Creep, targetRoom: string): void {
+        const exitDir = creep.room.findExitTo(targetRoom);
+        if (exitDir === ERR_NO_PATH || exitDir === ERR_INVALID_ARGS) {
+            log.warn("TaskExecutor", `No path from ${creep.room.name} to ${targetRoom}`);
+            return;
+        }
+
+        const exit = creep.pos.findClosestByRange(exitDir as FindConstant);
+        if (exit) {
+            creep.moveTo(exit, {
+                reusePath: 20,
+                visualizePathStyle: { stroke: "#ffff00" }
+            });
+        }
+    }
+
+    /**
      * Handle idle creep (no task)
      */
     private handleIdleCreep(creep: Creep): void {
+        // Cross-room creeps should move to their target room
+        if (creep.memory.targetRoom && creep.room.name !== creep.memory.targetRoom) {
+            this.moveToRoom(creep, creep.memory.targetRoom);
+            return;
+        }
+
         const spawn = creep.room.find(FIND_MY_SPAWNS)[0];
-        if (!spawn) return;
+        if (!spawn) {
+            // No spawn in room - stay near controller if we own it
+            if (creep.room.controller?.my) {
+                if (!creep.pos.inRangeTo(creep.room.controller, 5)) {
+                    creep.moveTo(creep.room.controller, { reusePath: REUSE_PATH });
+                }
+            }
+            return;
+        }
 
         // Move towards spawn but not too close
         if (!creep.pos.inRangeTo(spawn, 3)) {
@@ -554,8 +672,10 @@ class TaskExecutor {
         const taskState = creep.memory.currentTask;
         if (!taskState) return;
 
-        const room = creep.room;
-        taskDispatcher.updateTaskStatus(room, taskState.taskId, TaskStatus.COMPLETED);
+        const taskRoom = this.getTaskRoom(creep);
+        if (taskRoom) {
+            taskDispatcher.updateTaskStatus(taskRoom, taskState.taskId, TaskStatus.COMPLETED);
+        }
 
         delete creep.memory.currentTask;
     }
@@ -566,7 +686,10 @@ class TaskExecutor {
     private clearCreepTask(creep: Creep): void {
         const taskState = creep.memory.currentTask;
         if (taskState) {
-            taskDispatcher.unassignTask(creep.room, taskState.taskId);
+            const taskRoom = this.getTaskRoom(creep);
+            if (taskRoom) {
+                taskDispatcher.unassignTask(taskRoom, taskState.taskId);
+            }
         }
         delete creep.memory.currentTask;
     }
