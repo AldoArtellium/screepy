@@ -1,6 +1,7 @@
 import { runModuleManager } from "./ModuleManager";
 
 import { constructionManagerModule } from "modules/ConstructionManager";
+import { defenderManagerModule } from "modules/DefenderManager";
 import { demandCalculatorModule } from "modules/DemandCalculator";
 import { roomManagerModule } from "modules/RoomManager";
 import { spawnManagerModule } from "modules/SpawnManager";
@@ -39,10 +40,13 @@ export const gameLoop = () => {
     // 8. Tower manager: defense and repairs
     { name: "TowerManager", fn: towerManagerModule },
 
-    // 9. Construction manager: building planning (every 20 ticks)
+    // 9. Defender manager: rampart defense (only during defense mode)
+    { name: "DefenderManager", fn: defenderManagerModule },
+
+    // 10. Construction manager: building planning (every 20 ticks)
     { name: "ConstructionManager", fn: constructionManagerModule, runEvery: 20 },
 
-    // 10. Dashboard for visualization
+    // 11. Dashboard for visualization
     { name: "Dashboard", fn: dashboardModule.fn, mandatory: false },
   ];
 

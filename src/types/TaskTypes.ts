@@ -22,6 +22,7 @@ export enum TaskCategory {
 export enum TaskType {
     // Combat (highest priority)
     ATTACK_HOSTILE = "attack_hostile",
+    DEFEND_RAMPART = "defend_rampart",
 
     // Transport - spawn infrastructure
     FILL_SPAWN = "fill_spawn",
@@ -63,6 +64,7 @@ export enum TaskStatus {
  */
 export const TASK_PRIORITIES: Record<TaskType, number> = {
     [TaskType.ATTACK_HOSTILE]: 5,
+    [TaskType.DEFEND_RAMPART]: 8,
     [TaskType.FILL_SPAWN]: 10,
     [TaskType.FILL_EXTENSION]: 15,
     [TaskType.FILL_TOWER]: 25,
@@ -91,6 +93,7 @@ export const DEFENSE_PRIORITY_BOOSTS: Partial<Record<TaskType, number>> = {
  */
 export const TASK_CATEGORIES: Record<TaskType, TaskCategory> = {
     [TaskType.ATTACK_HOSTILE]: TaskCategory.ATTACK,
+    [TaskType.DEFEND_RAMPART]: TaskCategory.ATTACK,
     [TaskType.FILL_SPAWN]: TaskCategory.TRANSPORT,
     [TaskType.FILL_EXTENSION]: TaskCategory.TRANSPORT,
     [TaskType.FILL_TOWER]: TaskCategory.TRANSPORT,

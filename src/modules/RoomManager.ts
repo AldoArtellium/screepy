@@ -219,13 +219,119 @@ class RoomManager {
                 if (isSimServer && creep.owner.username === "Source Keeper") {
                     return false;
                 }
+                // Ignore Invader NPC in early rooms (they're manageable)
+                // Only if we have towers
                 return true;
             }
         });
-        const threatLevel = hostiles.reduce((acc, hostile) => acc + hostile.hits, 0);
+
         if (hostiles.length > 0) {
+            // Calculate threat level based on body composition, not just hits
+            const threatLevel = this.calculateThreatLevel(hostiles);
             Memory.rooms[room.name].threatLevel = threatLevel;
             Memory.rooms[room.name].threatLevelLastTick = Game.time;
+
+            // Check for safe mode trigger
+            this.checkSafeModeTrigger(room, hostiles, threatLevel);
+        }
+    }
+
+    /**
+     * Calculate threat level based on hostile body composition
+     */
+    private calculateThreatLevel(hostiles: Creep[]): number {
+        let threat = 0;
+
+        const partThreat: Partial<Record<BodyPartConstant, number>> = {
+            [HEAL]: 50,          // Healers are dangerous
+            [RANGED_ATTACK]: 30, // Ranged damage
+            [ATTACK]: 25,        // Melee damage
+            [WORK]: 20,          // Can dismantle
+            [CLAIM]: 100,        // Controller attack
+            [TOUGH]: 5,          // Indicates boosted creep
+            [CARRY]: 1,
+            [MOVE]: 2
+        };
+
+        for (const hostile of hostiles) {
+            let creepThreat = 0;
+
+            for (const part of hostile.body) {
+                if (part.hits <= 0) continue;
+
+                const baseThreat = partThreat[part.type] ?? 1;
+                // Boosted parts are 2.5x more dangerous
+                const multiplier = part.boost ? 2.5 : 1;
+                creepThreat += baseThreat * multiplier;
+            }
+
+            // Add bonus for high health
+            creepThreat += hostile.hits / 50;
+
+            threat += creepThreat;
+        }
+
+        return Math.floor(threat);
+    }
+
+    /**
+     * Check if safe mode should be triggered
+     */
+    private checkSafeModeTrigger(room: Room, hostiles: Creep[], threatLevel: number): void {
+        // Only check if we have safe mode available
+        if (!room.controller || room.controller.safeMode || room.controller.safeModeAvailable === 0) {
+            return;
+        }
+
+        // Check if spawn is at risk
+        const spawns = room.find(FIND_MY_SPAWNS);
+        if (spawns.length === 0) return;
+
+        for (const spawn of spawns) {
+            // Check spawn health
+            if (spawn.hits < spawn.hitsMax * 0.3) {
+                log.warn("RoomManager", `${room.name}: Spawn ${spawn.name} at ${Math.floor(spawn.hits / spawn.hitsMax * 100)}% - considering safe mode`);
+
+                // Check if hostiles are near spawn
+                const nearbyHostiles = spawn.pos.findInRange(hostiles, 3);
+                if (nearbyHostiles.length > 0) {
+                    // Calculate if we can defend
+                    const towers = room.find(FIND_MY_STRUCTURES, {
+                        filter: s => s.structureType === STRUCTURE_TOWER
+                    }) as StructureTower[];
+
+                    const towerDamage = towers.reduce((sum, t) => {
+                        if (t.store.getUsedCapacity(RESOURCE_ENERGY) < 10) return sum;
+                        const range = t.pos.getRangeTo(spawn);
+                        if (range <= 5) return sum + 600;
+                        if (range >= 20) return sum + 150;
+                        return sum + (600 - (range - 5) * 30);
+                    }, 0);
+
+                    // If tower damage is low and spawn is critical, trigger safe mode
+                    if (towerDamage < 500 && spawn.hits < spawn.hitsMax * 0.2) {
+                        log.warn("RoomManager", `${room.name}: ACTIVATING SAFE MODE - Spawn under attack!`);
+                        room.controller.activateSafeMode();
+                        return;
+                    }
+                }
+            }
+        }
+
+        // Check if all our ramparts/walls are breached
+        const ramparts = room.find(FIND_MY_STRUCTURES, {
+            filter: s => s.structureType === STRUCTURE_RAMPART
+        });
+
+        if (ramparts.length > 0) {
+            const criticalRamparts = ramparts.filter(r => r.hits < 1000);
+            const hostileNearBreach = hostiles.some(h => {
+                return criticalRamparts.some(r => h.pos.getRangeTo(r) <= 2);
+            });
+
+            if (hostileNearBreach && threatLevel > 5000) {
+                log.warn("RoomManager", `${room.name}: Ramparts breached with high threat - considering safe mode`);
+            }
         }
     }
 

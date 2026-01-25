@@ -398,6 +398,9 @@ class TaskGenerator {
      * Generate repair tasks for damaged structures
      */
     private generateRepairTasks(room: Room, defenseMode: boolean): void {
+        const rcl = room.controller?.level ?? 1;
+        const wallTarget = this.getWallTargetHits(rcl);
+
         // Regular structures (not walls/ramparts)
         const damagedStructures = room.find(FIND_STRUCTURES, {
             filter: s => {
@@ -428,15 +431,31 @@ class TaskGenerator {
             });
         }
 
-        // Ramparts (defense priority)
+        // Ramparts - critical during defense mode
+        const rampartThreshold = defenseMode ? wallTarget : Math.min(wallTarget, 10000);
         const damagedRamparts = room.find(FIND_MY_STRUCTURES, {
             filter: (s): s is StructureRampart =>
                 s.structureType === STRUCTURE_RAMPART &&
-                s.hits < 10000 // Only repair low ramparts
+                s.hits < rampartThreshold
         });
+
+        // Sort ramparts by hits (lowest first) for priority repair
+        damagedRamparts.sort((a, b) => a.hits - b.hits);
 
         for (const rampart of damagedRamparts) {
             if (this.hasExistingTask(room, TaskType.REPAIR_RAMPART, rampart.id)) continue;
+
+            // Calculate priority boost based on damage level
+            let priorityBoost = 0;
+            if (defenseMode) {
+                if (rampart.hits < 1000) {
+                    priorityBoost = -40; // Critical - highest priority
+                } else if (rampart.hits < 5000) {
+                    priorityBoost = -30; // Urgent
+                } else if (rampart.hits < 10000) {
+                    priorityBoost = -20; // Important
+                }
+            }
 
             this.addTask(room, {
                 id: generateTaskId(TaskType.REPAIR_RAMPART, rampart.id),
@@ -444,22 +463,36 @@ class TaskGenerator {
                 category: TaskCategory.REPAIR,
                 targetId: rampart.id,
                 roomName: room.name,
-                priority: getEffectivePriority(TaskType.REPAIR_RAMPART, defenseMode),
+                priority: getEffectivePriority(TaskType.REPAIR_RAMPART, defenseMode) + priorityBoost,
                 status: TaskStatus.PENDING,
                 createdAt: Game.time,
-                data: { amount: 10000 - rampart.hits }
+                data: { amount: rampartThreshold - rampart.hits }
             });
         }
 
-        // Walls
+        // Walls - same treatment as ramparts during defense
+        const wallThreshold = defenseMode ? wallTarget : Math.min(wallTarget, 10000);
         const damagedWalls = room.find(FIND_STRUCTURES, {
             filter: (s): s is StructureWall =>
                 s.structureType === STRUCTURE_WALL &&
-                s.hits < 10000 // Only repair low walls
+                s.hits < wallThreshold
         });
+
+        damagedWalls.sort((a, b) => a.hits - b.hits);
 
         for (const wall of damagedWalls) {
             if (this.hasExistingTask(room, TaskType.REPAIR_WALL, wall.id)) continue;
+
+            let priorityBoost = 0;
+            if (defenseMode) {
+                if (wall.hits < 1000) {
+                    priorityBoost = -35; // Critical
+                } else if (wall.hits < 5000) {
+                    priorityBoost = -25; // Urgent
+                } else if (wall.hits < 10000) {
+                    priorityBoost = -15; // Important
+                }
+            }
 
             this.addTask(room, {
                 id: generateTaskId(TaskType.REPAIR_WALL, wall.id),
@@ -467,12 +500,29 @@ class TaskGenerator {
                 category: TaskCategory.REPAIR,
                 targetId: wall.id,
                 roomName: room.name,
-                priority: getEffectivePriority(TaskType.REPAIR_WALL, defenseMode),
+                priority: getEffectivePriority(TaskType.REPAIR_WALL, defenseMode) + priorityBoost,
                 status: TaskStatus.PENDING,
                 createdAt: Game.time,
-                data: { amount: 10000 - wall.hits }
+                data: { amount: wallThreshold - wall.hits }
             });
         }
+    }
+
+    /**
+     * Get target hits for walls/ramparts based on RCL
+     */
+    private getWallTargetHits(rcl: number): number {
+        const targets: Record<number, number> = {
+            1: 1000,
+            2: 5000,
+            3: 25000,
+            4: 50000,
+            5: 100000,
+            6: 300000,
+            7: 500000,
+            8: 1000000
+        };
+        return targets[rcl] ?? 10000;
     }
 
     /**

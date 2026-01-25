@@ -111,6 +111,7 @@ class TaskDispatcher {
                 return countParts(creep, WORK) > 0 && countParts(creep, CARRY) > 0;
 
             case TaskType.ATTACK_HOSTILE:
+            case TaskType.DEFEND_RAMPART:
                 // Combat needs ATTACK parts
                 return countParts(creep, ATTACK) > 0;
 
@@ -267,6 +268,7 @@ class TaskDispatcher {
             case TaskType.WITHDRAW_STORAGE:
             case TaskType.HARVEST_SOURCE:
             case TaskType.ATTACK_HOSTILE:
+            case TaskType.DEFEND_RAMPART:
                 // These tasks don't need energy to start
                 return "executing";
 

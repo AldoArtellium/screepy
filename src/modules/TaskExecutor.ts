@@ -242,6 +242,10 @@ class TaskExecutor {
                 this.executeAttack(creep, target as Creep);
                 break;
 
+            case TaskType.DEFEND_RAMPART:
+                this.executeDefendRampart(creep, target as StructureRampart);
+                break;
+
             default:
                 log.warn("TaskExecutor", `Unknown task type: ${task.type}`);
                 this.completeTask(creep);
@@ -487,6 +491,39 @@ class TaskExecutor {
             creep.attack(target);
         } else {
             creep.moveTo(target, { reusePath: 3, visualizePathStyle: { stroke: "#ff0000" } });
+        }
+    }
+
+    /**
+     * Execute rampart defense task
+     * Move to rampart and attack any adjacent hostiles
+     */
+    private executeDefendRampart(creep: Creep, rampart: StructureRampart): void {
+        // Move to rampart position
+        if (!creep.pos.isEqualTo(rampart.pos)) {
+            creep.moveTo(rampart, { reusePath: 3, visualizePathStyle: { stroke: "#ff0000" } });
+        }
+
+        // Attack any adjacent hostiles
+        const hostile = creep.pos.findInRange(FIND_HOSTILE_CREEPS, 1)[0];
+        if (hostile) {
+            creep.attack(hostile);
+        }
+
+        // Also use ranged attack if available
+        const rangedHostile = creep.pos.findInRange(FIND_HOSTILE_CREEPS, 3)[0];
+        if (rangedHostile && creep.getActiveBodyparts(RANGED_ATTACK) > 0) {
+            if (creep.pos.getRangeTo(rangedHostile) === 1) {
+                creep.rangedMassAttack();
+            } else {
+                creep.rangedAttack(rangedHostile);
+            }
+        }
+
+        // Complete task if no more hostiles in room
+        const hostiles = creep.room.find(FIND_HOSTILE_CREEPS);
+        if (hostiles.length === 0) {
+            this.completeTask(creep);
         }
     }
 
