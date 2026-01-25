@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-Screepy is a TypeScript-based AI bot for the game [Screeps](https://screeps.com/). The code compiles to JavaScript and gets deployed to Screeps servers where it runs autonomously to control game entities (creeps, spawns, towers).
+Screepy is a TypeScript-based AI bot for the game [Screeps](https://screeps.com/). The code compiles to JavaScript and gets deployed to Screeps servers where it runs autonomously to control game entities (creeps, spawns, towers). The bot implements a full progression from early-game survival through late-game dominance including remote mining, combat, market trading, labs, power creeps, and factories.
 
 ## Build & Deploy Commands
 
@@ -33,7 +33,7 @@ npm run push-screepsplus # ScreepsPlus server
 
 ### Entry Point & Game Loop
 - `src/main.ts` - Entry point, initializes MemHack and profiler, exports the `loop()` function
-- `src/gameLoop.ts` - Registers and runs all modules through the ModuleManager
+- `src/gameLoop.ts` - Registers and runs all 24 modules through the ModuleManager
 
 ### Module System (`src/ModuleManager.ts`)
 The game loop uses a module manager that:
@@ -42,165 +42,383 @@ The game loop uses a module manager that:
 - Supports `runEvery`, `runOnce`, and `threshold` (bucket) options
 - Skips non-mandatory modules when CPU budget is exceeded
 
-### Core Modules (`src/modules/`)
-- `MemoryManager.ts` - Initializes and refreshes room/spawn memory, ensures phase and task queue data exists
-- `PhaseManager.ts` - Evaluates room phases and defense mode, provides creep counts/priorities
-- `SpawnManager.ts` - Maintains spawn queue with priority system, uses PhaseManager for counts
-- `ConstructionManager.ts` - Phase-aware construction planning (extensions, roads, containers)
-- `TaskManager.ts` - Task queue management, cleanup of expired/completed tasks (runs every 5 ticks)
-- `TaskGenerator.ts` - Scans rooms and creates tasks for the queue (runs every 10 ticks)
-- `TaskDispatcher.ts` - Matches tasks to creeps, executes task actions
-- `RoleManager.ts` - Dispatches creeps using hybrid role-task system with fallback to role handlers
-- `TowerManager.ts` - Tower defense logic, attack-only mode during defense
+### Module Execution Order
 
-### Configuration (`src/config/`)
-- `phaseConfigs.ts` - Phase definitions, spawn priorities, body scaling, defense config
-- `roleTaskConfig.ts` - Role flexibility levels, task category mappings, body part requirements
+| # | Module | Frequency | Description |
+|---|--------|-----------|-------------|
+| 1 | RoomManager Init | mandatory | Initialize memory each tick |
+| 2 | RoomManager | every 5 | Phase evaluation, defense mode |
+| 3 | DemandCalculator | every 10 | Calculate part deficits |
+| 4 | TaskGenerator | every 5 | Create tasks from room state |
+| 5 | TaskDispatcher | mandatory | Assign tasks to idle creeps |
+| 6 | TaskExecutor | mandatory | Execute creep tasks |
+| 7 | TrafficManager | mandatory | Process movement requests |
+| 8 | SpawnManager | every 3 | Spawn by part deficit |
+| 9 | TowerManager | every tick | Defense and repairs |
+| 10 | DefenderManager | every tick | Rampart defense positioning |
+| 11 | ConstructionManager | every 20 | Building planning |
+| 12 | IntelManager | every tick | Record room intel |
+| 13 | ScoutManager | every 10 | Exploration routing |
+| 14 | RemoteMiningManager | every 5 | Remote operations |
+| 15 | ExpansionManager | every 50 | Room claiming |
+| 16 | CombatManager | every 10 | Offensive operations |
+| 17 | MarketManager | every 20 | Terminal trading |
+| 18 | LabManager | every 5 | Compound production |
+| 19 | HighwayManager | every 5 | Power banks & deposits |
+| 20 | SKManager | every 5 | Source keeper mining |
+| 21 | StrongholdManager | every 10 | Stronghold attacks |
+| 22 | PowerCreepManager | every 3 | Power creep operations |
+| 23 | FactoryManager | every 5 | Commodity production |
+| 24 | BasePlanner | every 100 | Layout visualization |
+| 25 | Dashboard | optional | Visual debugging |
 
-### Type Definitions
-- `src/types/TaskTypes.ts` - Task system enums (TaskCategory, TaskType, TaskStatus), Task interface, helper functions
-- `src/type.d.ts` - Global type augmentations for `Memory`, `CreepMemory`, `RoomMemory` interfaces
+---
 
-### Creep Roles (`src/modules/roles/`)
-Each role exports a class with a static `run(creep)` method. Roles have different task system flexibility:
+## Core Systems
 
-**Strict Roles** (always follow role logic, never accept tasks):
-- `Miner` - Dedicated source mining, creates container construction sites
-- `Defender` - Combat
-- `Claimer` - Room claiming
+### Task System (`src/modules/TaskGenerator.ts`, `TaskDispatcher.ts`, `TaskExecutor.ts`)
 
-**Task-Driven Roles** (all work from task queue, idle when no tasks):
-- `Hauler` - Energy transport via FILL_SPAWN, FILL_EXTENSION, FILL_TOWER tasks
+Pure task-driven architecture where all creep work comes from the task queue.
 
-**Flexible Roles** (accept tasks when available, fallback to role behavior):
-- `Harvester` - Basic energy gathering (direct harvest in Phase 0, containers in Phase 1+)
-- `Builder` - Construction (containers Phase 1, extensions Phase 2+, walls in defense mode)
-- `Upgrader` - Controller upgrading (storage as source in Phase 4+)
-
-## Task System
-
-The hybrid role-task system provides dynamic work assignment while preserving role specialization.
-
-### Architecture
 ```
-TaskGenerator (every 10 ticks)
-       |
-       v
+TaskGenerator (every 5 ticks)
+       ↓
 TaskQueue (room.memory.taskQueue)
-       |
-       +-------------------+
-       |                   |
-TaskDispatcher        RoleManager
-       |                   |
-(assigns tasks      (fallback for
- to creeps)          idle creeps)
+       ↓
+TaskDispatcher (assigns to idle creeps)
+       ↓
+TaskExecutor (executes all creep actions)
+       ↓
+TrafficManager (processes movement)
 ```
 
-### Task Categories
-- `HARVEST` - Energy harvesting from sources
-- `TRANSPORT` - Pickup, withdraw, and delivery tasks
-- `BUILD` - Construction site building
-- `REPAIR` - Structure repair (including walls/ramparts)
-- `UPGRADE` - Controller upgrading
-- `ATTACK` - Combat tasks
-- `CLAIM` - Room claiming
+#### Task Types & Priorities (lower = higher priority)
 
-### Task Types & Priorities (lower = higher priority)
-| Task Type | Priority | Description |
-|-----------|----------|-------------|
-| ATTACK_HOSTILE | 5 | Attack hostile creeps |
-| FILL_SPAWN | 10 | Fill spawn with energy |
-| FILL_EXTENSION | 15 | Fill extension with energy |
-| FILL_TOWER | 25 | Fill tower (boosted in defense mode) |
-| PICKUP_RESOURCE | 35 | Pick up dropped resources |
-| WITHDRAW_CONTAINER | 40 | Withdraw from container |
-| WITHDRAW_STORAGE | 42 | Withdraw from storage |
-| BUILD_STRUCTURE | 45 | Build construction site |
-| HARVEST_SOURCE | 50 | Harvest from source |
-| REPAIR_STRUCTURE | 55 | Repair damaged structure |
-| FILL_STORAGE | 60 | Deposit to storage |
-| UPGRADE_CONTROLLER | 65 | Upgrade room controller |
-| REPAIR_RAMPART | 68 | Repair ramparts |
-| REPAIR_WALL | 70 | Repair walls |
+| Task Type | Priority | Category | Description |
+|-----------|----------|----------|-------------|
+| ATTACK_HOSTILE | 5 | ATTACK | Attack hostile creeps |
+| FILL_SPAWN | 10 | TRANSPORT | Fill spawn with energy |
+| FILL_EXTENSION | 15 | TRANSPORT | Fill extensions |
+| FILL_TOWER | 25 | TRANSPORT | Fill towers |
+| PICKUP_RESOURCE | 35 | TRANSPORT | Pick up dropped resources |
+| WITHDRAW_CONTAINER | 40 | TRANSPORT | Withdraw from container |
+| WITHDRAW_STORAGE | 42 | TRANSPORT | Withdraw from storage |
+| BUILD_STRUCTURE | 45 | BUILD | Build construction sites |
+| HARVEST_SOURCE | 50 | HARVEST | Harvest from source |
+| REPAIR_STRUCTURE | 55 | REPAIR | Repair structures |
+| FILL_STORAGE | 60 | TRANSPORT | Deposit to storage |
+| UPGRADE_CONTROLLER | 65 | UPGRADE | Upgrade controller |
+| REPAIR_RAMPART | 68 | REPAIR | Repair ramparts |
+| REPAIR_WALL | 70 | REPAIR | Repair walls |
+| RESERVE_CONTROLLER | 75 | CLAIM | Reserve remote room |
+| CLAIM_CONTROLLER | 80 | CLAIM | Claim new room |
 
-### Task States
+#### Task States
 - `PENDING` - Waiting for assignment
 - `ASSIGNED` - Assigned to a creep
 - `IN_PROGRESS` - Being executed
 - `COMPLETED` - Successfully finished
 - `FAILED` - Task failed or expired
 
-### Creep Task States
-When a creep has a task, it tracks state in `creep.memory.task`:
-- `acquiring` - Getting resources needed for the task
-- `executing` - Performing the task action
-- `returning` - Returning after completion (rarely used)
+### Traffic System (`src/modules/TrafficManager.ts`)
 
-## Phase System
+Centralized movement control replacing all direct `moveTo()` calls.
 
-Each room tracks its own phase independently in `room.memory.phase`. Spawning, building, and role behavior adapt to the current phase.
+**Features:**
+- Move request queue with priority sorting
+- CostMatrix caching per room (roads=1, plains=2, swamps=10)
+- Path caching and serialization
+- Collision avoidance with creep swapping
+- Idle position finding for parked creeps
 
-### Phase Definitions
+**Usage:**
+```typescript
+trafficManager.requestMove(creep, targetPos, range, { priority: 5 });
+```
 
-| Phase | Name | Condition | Goals |
+### Demand Calculator (`src/modules/DemandCalculator.ts`)
+
+Part-based spawning system that calculates deficits by body part type.
+
+**Tracked Parts:**
+- WORK parts for harvesting/building/upgrading
+- CARRY parts for transport capacity
+- ATTACK/RANGED_ATTACK for combat
+- HEAL for support
+- CLAIM for expansion
+
+### Phase System (`src/modules/RoomManager.ts`)
+
+Each room progresses through phases based on development level.
+
+| Phase | Name | Condition | Focus |
 |-------|------|-----------|-------|
-| 0 | EMERGENCY | totalCreeps <= 2 | Spawn basic harvesters to survive |
-| 1 | BOOTSTRAP | creeps >= 3, no containers | Spawn miners, build source containers |
-| 2 | FOUNDATION | all sources have containers, RCL >= 2 | Build extensions, optimize economy |
-| 3 | EXPANSION | 80% extensions built, RCL >= 3 | Maximize upgrading, build roads |
-| 4 | ESTABLISHED | has storage, RCL >= 4 | Storage logistics, tower defense |
-| 5 | ADVANCED | RCL >= 6, has terminal | Market, remote mining |
-| 6 | DOMINANT | RCL = 8 | Maximum efficiency, expansion |
+| 0 | EMERGENCY | creeps <= 2 | Survival spawning |
+| 1 | BOOTSTRAP | creeps >= 3 | Build containers |
+| 2 | FOUNDATION | containers done, RCL 2+ | Extensions |
+| 3 | EXPANSION | 80% extensions, RCL 3+ | Roads, upgrading |
+| 4 | ESTABLISHED | storage, RCL 4+ | Storage economy |
+| 5 | ADVANCED | RCL 6+, terminal | Market, remotes |
+| 6 | DOMINANT | RCL 8 | Full automation |
 
-### Phase Transitions
-- Evaluated every 10 ticks with hysteresis to prevent thrashing
-- UP transitions require condition true for 50 consecutive ticks
-- DOWN transitions require condition true for 20 consecutive ticks
-- EMERGENCY (Phase 0) transitions happen immediately
+---
 
-### Defense Mode
-Defense mode is a special overlay that activates on top of any phase when hostiles are detected:
-- Activates when `room.memory.threatLevel > 0`
-- Deactivates 300 ticks after last hostile seen
-- Defenders spawn with highest priority
-- Tower filling tasks get priority boost (-20)
-- Rampart repair tasks get priority boost (-30)
-- Towers skip repairs to maximize attack damage
+## Advanced Systems
 
-### Spawn Counts by Phase
+### Defense (`src/modules/DefenderManager.ts`, `TowerManager.ts`)
 
-| Role | Ph0 | Ph1 | Ph2 | Ph3 | Ph4+ |
-|------|-----|-----|-----|-----|------|
-| harvester | 2-4 | 1-2 | 0 | 0 | 0 |
-| miner | 0 | sources | sources | sources | sources |
-| hauler | 0 | miners×2 | miners×2 | miners×2 | miners×2 |
-| builder | 0 | 1 | 3 | 2 | 1 |
-| upgrader | 0 | 2 | 3 | 5 | 5-6 |
-| defender | threat | threat | threat | threat | threat |
+- **TowerManager**: Smart targeting (healers > ranged > melee > tough), energy reservation
+- **DefenderManager**: Rampart positioning, threat-based defender spawning
+- **Defense Mode**: Activates on hostiles, boosts tower/rampart priorities
 
-### Utilities (`src/utils/`)
-- `MemHack.ts` - Memory deserialization optimization
-- `profiler.ts` - CPU profiling wrapper
-- `roomUtils.ts` - Room helper functions
-- `creepUtils.ts` - Creep helper functions
-- `logger.ts` - Structured logging utility
-- `logCPU.ts` - CPU logging utilities
+### Intel & Scouting (`src/modules/IntelManager.ts`, `ScoutManager.ts`)
+
+- **IntelManager**: Records room data (sources, minerals, hostiles, owner)
+- **ScoutManager**: Routes scouts to unexplored rooms, maintains sector coverage
+- **Memory**: `Memory.intel[roomName]` stores persistent room data
+
+### Remote Mining (`src/modules/RemoteMiningManager.ts`)
+
+- Evaluates nearby rooms for remote harvesting
+- Spawns remote miners and haulers
+- Manages container placement and reservation
+- Invader detection and defender dispatch
+
+### Expansion (`src/modules/ExpansionManager.ts`)
+
+- Room scoring (sources, mineral, distance, neighbors)
+- Automatic claiming when GCL allows
+- Bootstrap support for new rooms
+- Cross-room resource transfer
+
+### Combat (`src/modules/CombatManager.ts`)
+
+**Attack Types:**
+- `DRAIN` - Tower drain attacks
+- `DISMANTLE` - Wall/rampart destruction
+- `HARASS` - Remote mining disruption
+- `ASSAULT` - Full room attack
+
+**Combat Roles:** Attacker, Healer, Dismantler, Tank
+
+### Market (`src/modules/MarketManager.ts`)
+
+- Automated selling of excess resources
+- Automated buying when deficient
+- Price tracking and history
+- Transaction cost optimization
+- Inter-room resource transfer
+
+### Labs (`src/modules/LabManager.ts`)
+
+- Complete compound recipe tree (30+ compounds)
+- Boost effects mapping for all body parts
+- Production queue management
+- Boost request system for combat/economy creeps
+
+**Boost Tiers:**
+- T1: +100% effect (e.g., UH for attack)
+- T2: +200% effect (e.g., UH2O)
+- T3: +300% effect (e.g., XUH2O)
+
+### Highway Harvesting (`src/modules/HighwayManager.ts`)
+
+- Observer-based highway room scanning
+- Power bank profitability calculation
+- Attack team coordination (attackers + healers)
+- Deposit mining with cooldown management
+- Hauler timing for power pickup
+
+### Source Keeper Rooms (`src/modules/SKManager.ts`)
+
+- SK room evaluation and selection
+- Keeper spawn prediction and tracking
+- SK killer patrol routes
+- Safe mining window calculation
+- Invader raid detection and response
+
+### Strongholds (`src/modules/StrongholdManager.ts`)
+
+- Stronghold detection via scouting
+- Level assessment (1-5) and composition planning
+- Coordinated assault timing
+- Target prioritization (core > towers > ramparts)
+- Loot collection after victory
+
+### Power Creeps (`src/modules/PowerCreepManager.ts`)
+
+**Economy Powers (prioritized):**
+- `PWR_OPERATE_SPAWN` - Faster spawning
+- `PWR_OPERATE_EXTENSION` - Fill from storage
+- `PWR_REGEN_SOURCE` - Bonus energy
+- `PWR_OPERATE_FACTORY` - Factory boost
+- `PWR_REGEN_MINERAL` - Bonus minerals
+
+**Features:**
+- Automatic spawning based on GPL
+- Room assignment optimization
+- Renewal management
+- Power cooldown tracking
+
+### Factories (`src/modules/FactoryManager.ts`)
+
+- Factory level tracking per room
+- Mineral compression (bars)
+- Commodity production chains (L0 → L5)
+- Multi-room coordination
+- Market integration for sales
+
+**Production Chain:**
+```
+Base Minerals → Bars (L0) → Basic Commodities (L0)
+    → L1 Components → L2 → L3 → L4 → L5 Products
+```
+
+### Base Planning (`src/modules/BasePlanner.ts`)
+
+- Terrain analysis with distance transforms
+- Optimal anchor point finding
+- Stamp patterns (spawn cluster, storage core, lab cluster, towers)
+- Extension placement in spiral pattern
+- Road network generation
+- Rampart perimeter planning
+- Plan caching in Memory
+
+---
+
+## File Structure
+
+```
+src/
+├── main.ts                 # Entry point
+├── gameLoop.ts             # Module registration (24 modules)
+├── ModuleManager.ts        # CPU-budgeted module runner
+├── config/
+│   ├── bodyTypes.ts        # Creep body configurations
+│   └── gameConfig.ts       # Global constants
+├── modules/
+│   ├── RoomManager.ts      # Phase system, memory init
+│   ├── SpawnManager.ts     # Part-deficit spawning
+│   ├── TaskGenerator.ts    # Task creation
+│   ├── TaskDispatcher.ts   # Task assignment
+│   ├── TaskExecutor.ts     # Task execution (17 task types)
+│   ├── DemandCalculator.ts # Part demand tracking
+│   ├── TrafficManager.ts   # Centralized movement
+│   ├── ConstructionManager.ts
+│   ├── TowerManager.ts
+│   ├── DefenderManager.ts
+│   ├── IntelManager.ts
+│   ├── ScoutManager.ts
+│   ├── RemoteMiningManager.ts
+│   ├── ExpansionManager.ts
+│   ├── CombatManager.ts
+│   ├── MarketManager.ts
+│   ├── LabManager.ts
+│   ├── HighwayManager.ts
+│   ├── SKManager.ts
+│   ├── StrongholdManager.ts
+│   ├── PowerCreepManager.ts
+│   ├── FactoryManager.ts
+│   ├── BasePlanner.ts
+│   └── visuals/
+│       └── Dashboard.ts
+├── types/
+│   └── TaskTypes.ts        # Task enums and interfaces
+├── utils/
+│   ├── MemHack.ts          # Memory optimization
+│   ├── profiler.ts         # CPU profiling
+│   ├── roomUtils.ts
+│   ├── creepUtils.ts
+│   ├── logger.ts
+│   └── logCPU.ts
+└── type.d.ts               # Global type augmentations
+```
+
+---
+
+## Memory Structures
+
+### Global Memory
+```typescript
+interface Memory {
+    // Core
+    rooms: { [name: string]: RoomMemory };
+    creeps: { [name: string]: CreepMemory };
+
+    // Intel
+    intel: { [roomName: string]: RoomIntel };
+
+    // Traffic
+    pathCache?: { [key: string]: CachedPath };
+    traffic?: { lastCleanup: number };
+
+    // Operations
+    remoteRooms?: { [roomName: string]: RemoteRoomData };
+    combatOperations?: { [id: string]: CombatOperation };
+    highwayOperations?: { power: {...}, deposits: {...} };
+    strongholdOperations?: { [roomName: string]: StrongholdOp };
+    skOperations?: { [roomName: string]: SKOperation };
+
+    // Production
+    labQueue?: { [roomName: string]: LabQueue };
+    basePlans?: { [roomName: string]: BasePlan };
+}
+```
+
+### Room Memory
+```typescript
+interface RoomMemory {
+    phase: number;
+    defenseMode: boolean;
+    threatLevel: number;
+    taskQueue: Task[];
+    partDemand: Record<BodyPartConstant, number>;
+    spawnQueue: SpawnRequest[];
+    sources: SourceMemory[];
+    lastConstructionChange?: number;
+}
+```
+
+### Creep Memory
+```typescript
+interface CreepMemory {
+    role: string;
+    homeRoom: string;
+    task?: Task;
+    taskState?: "acquiring" | "executing";
+    _path?: string;
+    _pathTick?: number;
+    _pathTarget?: string;
+    squad?: string;
+}
+```
+
+---
 
 ## Key Dependencies
-- `screeps-cartographer` - Pathing/movement
+
+- `screeps-cartographer` - Pathing/movement utilities
 - `screeps-cache` - Caching utilities
 - `screeps-viz` - Visualization tools
 
-## Great Filters (Development Milestones)
+---
 
-Reference: `docs/Great_filters.md`
+## Development Notes
 
-Key stages most Screeps bots progress through:
+### Adding a New Module
+1. Create `src/modules/NewManager.ts` with singleton pattern
+2. Export module function: `export const newManagerModule = () => { ... }`
+3. Register in `gameLoop.ts` with appropriate `runEvery` setting
+4. Add any new Memory interfaces to `type.d.ts`
 
-1. **Creep Management** - Automated creep behavior via roles or dynamic task assignment
-2. **Automatic Spawning** - Maintain population without manual intervention (headcount, spawn queues, cold-boot recovery)
-3. **Automatic Room Defense** - Defend against invaders (towers, rampart defense, SafeMode)
-4. **Energy Harvesting & Remote Mining** - Systematic energy collection across multiple rooms
-5. **Room Claiming & Expansion** - Automate claiming new rooms (requires GCL 2+)
-6. **Room Offense** - Scout enemies and mount automated attacks
-7. **Advanced Systems** - Market trading, labs/boosts, highway harvesting, source-keepers, power creeps, factories, auto base planning
+### Task System Extension
+1. Add new `TaskType` enum value in `TaskTypes.ts`
+2. Add task creation logic in `TaskGenerator.ts`
+3. Add execution handler in `TaskExecutor.ts`
+4. Update `DemandCalculator.ts` if new body parts needed
+
+### CPU Budget Guidelines
+- Mandatory modules: ~40% budget (task system, traffic)
+- Economy modules: ~30% budget (spawning, construction)
+- Advanced modules: ~30% budget (combat, market, labs)
+- Target: <20 CPU with 30 creeps

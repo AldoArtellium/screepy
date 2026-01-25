@@ -12,6 +12,23 @@ declare global {
         };
         init: boolean;
         logLevel?: number;
+        // Traffic system
+        pathCache?: {
+            [key: string]: {
+                /** Serialized path */
+                p: string;
+                /** Energy cost of path */
+                c: number;
+                /** Last used tick */
+                u: number;
+                /** Hit count for popularity */
+                h: number;
+            };
+        };
+        traffic?: {
+            lastCleanup: number;
+            invalidatedRooms: string[];
+        };
     }
 
     interface CreepMemory {
@@ -28,6 +45,11 @@ declare global {
         targetId?: Id<any>;
         targetTick?: number;
         patrolIndex?: number;
+        // Traffic system
+        _path?: string;
+        _pathTick?: number;
+        _pathTarget?: string;
+        squad?: string;
     }
 
     interface ObserverMemory {
@@ -52,6 +74,14 @@ declare global {
         // Task system
         taskQueue?: Task[];
         partDemand?: PartDemand;
+        // Traffic system
+        idlePositions?: { x: number; y: number }[];
+        lastConstructionChange?: number;
+        // Remote/expansion system
+        bootstrapTargets?: string[];
+        intel?: RoomIntel;
+        remoteRooms?: string[];
+        claimTarget?: string;
     }
 
     const enum RoomPhase {

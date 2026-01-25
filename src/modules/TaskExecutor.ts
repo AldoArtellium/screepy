@@ -4,9 +4,10 @@
  */
 
 import { TaskStatus, TaskType, requiresEnergy } from "../types/TaskTypes";
-import { ENERGY_THRESHOLDS, REUSE_PATH } from "../utils/creepUtils";
+import { ENERGY_THRESHOLDS } from "../utils/creepUtils";
 import { log } from "../utils/logger";
 import { taskDispatcher } from "./TaskDispatcher";
+import { trafficManager } from "./TrafficManager";
 
 /** Maximum ticks a creep can be stuck before task is marked failed */
 const MAX_STUCK_TICKS = 10;
@@ -298,19 +299,19 @@ class TaskExecutor {
         if (container) {
             // Stand on container to harvest (static mining)
             if (!creep.pos.isEqualTo(container.pos)) {
-                creep.moveTo(container, { reusePath: REUSE_PATH });
+                trafficManager.requestMove(creep, container.pos, { range: 0, priority: 5 });
                 return;
             }
 
             // Harvest and transfer to container
-            const harvestResult = creep.harvest(source);
+            creep.harvest(source);
             if (creep.store.getFreeCapacity() === 0) {
                 creep.transfer(container, RESOURCE_ENERGY);
             }
         } else if (containerSite) {
             // Stand on construction site while waiting
             if (!creep.pos.isEqualTo(containerSite.pos)) {
-                creep.moveTo(containerSite, { reusePath: REUSE_PATH });
+                trafficManager.requestMove(creep, containerSite.pos, { range: 0, priority: 5 });
                 return;
             }
 
@@ -331,7 +332,7 @@ class TaskExecutor {
                     creep.drop(RESOURCE_ENERGY);
                 }
             } else {
-                creep.moveTo(source, { reusePath: REUSE_PATH, visualizePathStyle: { stroke: "#ffaa00" } });
+                trafficManager.requestMove(creep, source.pos, { range: 1, visualize: true });
             }
         }
     }
@@ -373,7 +374,7 @@ class TaskExecutor {
                 }
             }
         } else {
-            creep.moveTo(target, { reusePath: REUSE_PATH, visualizePathStyle: { stroke: "#ffffff" } });
+            trafficManager.requestMove(creep, target.pos, { range: 1, visualize: true });
         }
     }
 
@@ -396,7 +397,7 @@ class TaskExecutor {
                 this.completeTask(creep);
             }
         } else {
-            creep.moveTo(resource, { reusePath: REUSE_PATH, visualizePathStyle: { stroke: "#ffff00" } });
+            trafficManager.requestMove(creep, resource.pos, { range: 1, visualize: true });
         }
     }
 
@@ -422,7 +423,7 @@ class TaskExecutor {
                 this.completeTask(creep);
             }
         } else {
-            creep.moveTo(target, { reusePath: REUSE_PATH, visualizePathStyle: { stroke: "#00ff00" } });
+            trafficManager.requestMove(creep, target.pos, { range: 1, visualize: true });
         }
     }
 
@@ -436,7 +437,7 @@ class TaskExecutor {
                 creep.memory.currentTask!.state = "acquiring";
             }
         } else {
-            creep.moveTo(site, { reusePath: REUSE_PATH, visualizePathStyle: { stroke: "#00ffff" } });
+            trafficManager.requestMove(creep, site.pos, { range: 3, visualize: true });
         }
     }
 
@@ -476,7 +477,7 @@ class TaskExecutor {
                 }
             }
         } else {
-            creep.moveTo(structure, { reusePath: REUSE_PATH, visualizePathStyle: { stroke: "#ff00ff" } });
+            trafficManager.requestMove(creep, structure.pos, { range: 3, visualize: true });
         }
     }
 
@@ -508,7 +509,7 @@ class TaskExecutor {
                 creep.memory.currentTask!.state = "acquiring";
             }
         } else {
-            creep.moveTo(controller, { reusePath: REUSE_PATH, visualizePathStyle: { stroke: "#0000ff" } });
+            trafficManager.requestMove(creep, controller.pos, { range: 3, visualize: true });
         }
     }
 
@@ -519,7 +520,7 @@ class TaskExecutor {
         if (creep.pos.isNearTo(target)) {
             creep.attack(target);
         } else {
-            creep.moveTo(target, { reusePath: 3, visualizePathStyle: { stroke: "#ff0000" } });
+            trafficManager.requestMove(creep, target.pos, { range: 1, combat: true, reusePath: 3 });
         }
     }
 
@@ -530,7 +531,7 @@ class TaskExecutor {
     private executeDefendRampart(creep: Creep, rampart: StructureRampart): void {
         // Move to rampart position
         if (!creep.pos.isEqualTo(rampart.pos)) {
-            creep.moveTo(rampart, { reusePath: 3, visualizePathStyle: { stroke: "#ff0000" } });
+            trafficManager.requestMove(creep, rampart.pos, { range: 0, combat: true, priority: 0 });
         }
 
         // Attack any adjacent hostiles
@@ -577,10 +578,7 @@ class TaskExecutor {
 
         // Move to controller if not in range
         if (!creep.pos.isNearTo(controller)) {
-            creep.moveTo(controller, {
-                reusePath: 20,
-                visualizePathStyle: { stroke: "#ffff00" }
-            });
+            trafficManager.requestMove(creep, controller.pos, { range: 1, reusePath: 20, visualize: true });
             return;
         }
 
@@ -622,12 +620,10 @@ class TaskExecutor {
             return;
         }
 
-        const exit = creep.pos.findClosestByRange(exitDir as FindConstant);
+        // exitDir is now guaranteed to be ExitConstant (FIND_EXIT_TOP, etc.)
+        const exit = creep.pos.findClosestByRange(exitDir) as RoomPosition | null;
         if (exit) {
-            creep.moveTo(exit, {
-                reusePath: 20,
-                visualizePathStyle: { stroke: "#ffff00" }
-            });
+            trafficManager.requestMove(creep, exit, { range: 0, reusePath: 20, visualize: true });
         }
     }
 
@@ -646,15 +642,19 @@ class TaskExecutor {
             // No spawn in room - stay near controller if we own it
             if (creep.room.controller?.my) {
                 if (!creep.pos.inRangeTo(creep.room.controller, 5)) {
-                    creep.moveTo(creep.room.controller, { reusePath: REUSE_PATH });
+                    trafficManager.requestMove(creep, creep.room.controller.pos, { range: 5, priority: 100 });
                 }
             }
             return;
         }
 
-        // Move towards spawn but not too close
-        if (!creep.pos.inRangeTo(spawn, 3)) {
-            creep.moveTo(spawn, { reusePath: REUSE_PATH });
+        // Find an idle position to move to
+        const idlePos = trafficManager.findIdlePosition(creep);
+        if (idlePos && !creep.pos.isEqualTo(idlePos)) {
+            trafficManager.requestMove(creep, idlePos, { range: 0, priority: 100 });
+        } else if (!creep.pos.inRangeTo(spawn, 5)) {
+            // Move towards spawn if no idle position found
+            trafficManager.requestMove(creep, spawn.pos, { range: 3, priority: 100 });
         } else if (creep.pos.isNearTo(spawn) && Game.time % 5 === 0) {
             // Occasionally move away from spawn to avoid blocking
             const directions: DirectionConstant[] = [
@@ -701,7 +701,7 @@ class TaskExecutor {
         if (creep.pos.isNearTo(target)) {
             creep.withdraw(target, RESOURCE_ENERGY);
         } else {
-            creep.moveTo(target, { reusePath: REUSE_PATH });
+            trafficManager.requestMove(creep, target.pos, { range: 1 });
         }
     }
 
@@ -712,7 +712,7 @@ class TaskExecutor {
         if (creep.pos.isNearTo(target)) {
             creep.pickup(target);
         } else {
-            creep.moveTo(target, { reusePath: REUSE_PATH });
+            trafficManager.requestMove(creep, target.pos, { range: 1 });
         }
     }
 
@@ -723,7 +723,7 @@ class TaskExecutor {
         if (creep.pos.isNearTo(source)) {
             creep.harvest(source);
         } else {
-            creep.moveTo(source, { reusePath: REUSE_PATH });
+            trafficManager.requestMove(creep, source.pos, { range: 1 });
         }
     }
 }

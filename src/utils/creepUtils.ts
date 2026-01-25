@@ -182,6 +182,7 @@ export function findEnergyTarget(
 
 /**
  * Move creep to idle position near spawn
+ * Note: This function uses direct moveTo(). For centralized traffic, handleIdleCreep in TaskExecutor uses TrafficManager.
  */
 export function idleNearSpawn(creep: Creep): void {
     const spawn = creep.room.find(FIND_MY_SPAWNS)[0];
@@ -223,6 +224,8 @@ export function updateEnergyState(creep: Creep): "acquiring" | "executing" {
 /**
  * Move to a target and perform an action
  * Returns true if action was attempted (whether successful or not)
+ * Note: This function uses direct moveTo() for simplicity.
+ * For centralized traffic management, use trafficManager.requestMove() instead.
  */
 export function moveToAndAct(
     creep: Creep,

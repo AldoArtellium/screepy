@@ -1,18 +1,28 @@
 import { runModuleManager } from "./ModuleManager";
 
+import { basePlannerModule } from "modules/BasePlanner";
+import { combatManagerModule } from "modules/CombatManager";
 import { constructionManagerModule } from "modules/ConstructionManager";
 import { defenderManagerModule } from "modules/DefenderManager";
 import { demandCalculatorModule } from "modules/DemandCalculator";
 import { expansionManagerModule } from "modules/ExpansionManager";
+import { factoryManagerModule } from "modules/FactoryManager";
+import { highwayManagerModule } from "modules/HighwayManager";
 import { intelManagerModule } from "modules/IntelManager";
+import { labManagerModule } from "modules/LabManager";
+import { marketManagerModule } from "modules/MarketManager";
+import { powerCreepManagerModule } from "modules/PowerCreepManager";
 import { remoteMiningManagerModule } from "modules/RemoteMiningManager";
 import { roomManagerModule } from "modules/RoomManager";
+import { skManagerModule } from "modules/SKManager";
 import { scoutManagerModule } from "modules/ScoutManager";
 import { spawnManagerModule } from "modules/SpawnManager";
+import { strongholdManagerModule } from "modules/StrongholdManager";
 import { taskDispatcherModule } from "modules/TaskDispatcher";
 import { taskExecutorModule } from "modules/TaskExecutor";
 import { taskGeneratorModule } from "modules/TaskGenerator";
 import { towerManagerModule } from "modules/TowerManager";
+import { trafficManagerModule } from "modules/TrafficManager";
 import { dashboardModule } from "modules/visuals/Dashboard";
 import { log } from "utils/logger";
 
@@ -38,31 +48,61 @@ export const gameLoop = () => {
     // 6. Task executor: runs all creeps with tasks (mandatory)
     { name: "TaskExecutor", fn: taskExecutorModule, mandatory: true },
 
-    // 7. Spawn manager: spawns by part deficit (every 3 ticks)
+    // 7. Traffic manager: processes all movement requests (mandatory)
+    { name: "TrafficManager", fn: trafficManagerModule, mandatory: true },
+
+    // 8. Spawn manager: spawns by part deficit (every 3 ticks)
     { name: "SpawnManager", fn: spawnManagerModule, runEvery: 3 },
 
-    // 8. Tower manager: defense and repairs
+    // 9. Tower manager: defense and repairs
     { name: "TowerManager", fn: towerManagerModule },
 
-    // 9. Defender manager: rampart defense (only during defense mode)
+    // 10. Defender manager: rampart defense (only during defense mode)
     { name: "DefenderManager", fn: defenderManagerModule },
 
-    // 10. Construction manager: building planning (every 20 ticks)
+    // 11. Construction manager: building planning (every 20 ticks)
     { name: "ConstructionManager", fn: constructionManagerModule, runEvery: 20 },
 
-    // 11. Intel manager: record room data (every tick for visible rooms)
+    // 12. Intel manager: record room data (every tick for visible rooms)
     { name: "IntelManager", fn: intelManagerModule },
 
-    // 12. Scout manager: exploration (every 10 ticks)
+    // 13. Scout manager: exploration (every 10 ticks)
     { name: "ScoutManager", fn: scoutManagerModule, runEvery: 10 },
 
-    // 13. Remote mining manager: remote operations (every 5 ticks)
+    // 14. Remote mining manager: remote operations (every 5 ticks)
     { name: "RemoteMiningManager", fn: remoteMiningManagerModule, runEvery: 5 },
 
-    // 14. Expansion manager: room claiming (every 50 ticks, phase 4+)
+    // 15. Expansion manager: room claiming (every 50 ticks, phase 4+)
     { name: "ExpansionManager", fn: expansionManagerModule, runEvery: 50 },
 
-    // 15. Dashboard for visualization
+    // 16. Combat manager: offensive operations (every 10 ticks, RCL 5+)
+    { name: "CombatManager", fn: combatManagerModule, runEvery: 10 },
+
+    // 16. Market manager: trading operations (every 20 ticks)
+    { name: "MarketManager", fn: marketManagerModule, runEvery: 20 },
+
+    // 17. Lab manager: compound production and boosts (every 5 ticks, RCL 6+)
+    { name: "LabManager", fn: labManagerModule, runEvery: 5 },
+
+    // 18. Highway manager: power banks and deposits (every 5 ticks, RCL 7+)
+    { name: "HighwayManager", fn: highwayManagerModule, runEvery: 5 },
+
+    // 19. SK manager: source keeper room mining (every 5 ticks, RCL 7+)
+    { name: "SKManager", fn: skManagerModule, runEvery: 5 },
+
+    // 20. Stronghold manager: invader stronghold attacks (every 10 ticks, RCL 5+)
+    { name: "StrongholdManager", fn: strongholdManagerModule, runEvery: 10 },
+
+    // 21. Power creep manager: power creep operations (every 3 ticks, RCL 8)
+    { name: "PowerCreepManager", fn: powerCreepManagerModule, runEvery: 3 },
+
+    // 22. Factory manager: commodity production (every 5 ticks, RCL 7+)
+    { name: "FactoryManager", fn: factoryManagerModule, runEvery: 5 },
+
+    // 23. Base planner: layout visualization (every 100 ticks)
+    { name: "BasePlanner", fn: basePlannerModule, runEvery: 100 },
+
+    // 24. Dashboard for visualization
     { name: "Dashboard", fn: dashboardModule.fn, mandatory: false },
   ];
 
