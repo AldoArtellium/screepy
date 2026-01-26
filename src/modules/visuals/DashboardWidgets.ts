@@ -28,7 +28,8 @@ export function createPhaseBar(phase: number) {
             ["Phase", `${phase}: ${phaseName}`]
         ],
         config: {
-            label: "Room Phase"
+            label: "Room Phase",
+            headers: ["", ""]
         }
     });
 }
@@ -41,7 +42,7 @@ export function createRCLBar(room: Room) {
     if (!controller) {
         return Table({
             data: [["RCL", "N/A"]],
-            config: { label: "Controller" }
+            config: { label: "Controller", headers: ["", ""] }
         });
     }
 
@@ -58,7 +59,8 @@ export function createRCLBar(room: Room) {
             ["Progress", `${kProgress}k/${kTotal}k (${percent}%)`]
         ],
         config: {
-            label: "Controller"
+            label: "Controller",
+            headers: ["", ""]
         }
     });
 }
@@ -77,7 +79,8 @@ export function createEnergyBar(room: Room) {
             ["Fill", `${percent}%`]
         ],
         config: {
-            label: "Spawn Energy"
+            label: "Spawn Energy",
+            headers: ["", ""]
         }
     });
 }
@@ -90,7 +93,7 @@ export function createStorageBar(room: Room) {
     if (!storage) {
         return Table({
             data: [["Storage", "None"]],
-            config: { label: "Storage" }
+            config: { label: "Storage", headers: ["", ""] }
         });
     }
 
@@ -106,7 +109,8 @@ export function createStorageBar(room: Room) {
             ["Used", `${percent}%`]
         ],
         config: {
-            label: "Storage"
+            label: "Storage",
+            headers: ["", ""]
         }
     });
 }
@@ -495,7 +499,8 @@ export function createGCLBar() {
             ["Progress", `${percent}%`]
         ],
         config: {
-            label: "Global Control"
+            label: "Global Control",
+            headers: ["", ""]
         }
     });
 }
@@ -519,7 +524,8 @@ export function createEmpireStats() {
             ["GPL", (Game.gpl?.level ?? 0).toString()]
         ],
         config: {
-            label: "Empire"
+            label: "Empire",
+            headers: ["", ""]
         }
     });
 }

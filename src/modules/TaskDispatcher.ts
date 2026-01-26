@@ -20,7 +20,11 @@ class TaskDispatcher {
     dispatchTasks(room: Room): void {
         if (!room.controller?.my) return;
 
-        const queue = room.memory.taskQueue ?? [];
+        const queue = room.memory.taskQueue;
+        if (!queue || !Array.isArray(queue)) {
+            room.memory.taskQueue = [];
+            return;
+        }
         const pendingTasks = queue
             .filter(t => t.status === TaskStatus.PENDING)
             .sort((a, b) => a.priority - b.priority);
@@ -375,7 +379,11 @@ class TaskDispatcher {
 
             // If we have visibility of target room
             if (targetRoom?.controller?.my) {
-                const queue = targetRoom.memory.taskQueue ?? [];
+                const queue = targetRoom.memory.taskQueue;
+                if (!queue || !Array.isArray(queue)) {
+                    targetRoom.memory.taskQueue = [];
+                    continue;
+                }
                 const pendingTasks = queue
                     .filter(t => t.status === TaskStatus.PENDING)
                     .sort((a, b) => a.priority - b.priority);

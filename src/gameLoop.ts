@@ -104,10 +104,10 @@ export const gameLoop = () => {
     { name: "FactoryManager", fn: factoryManagerModule, runEvery: 5 },
 
     // 23. Base planner: layout visualization (every 100 ticks)
-    { name: "BasePlanner", fn: basePlannerModule, runEvery: 100 },
+    { name: "BasePlanner", fn: basePlannerModule, runEvery: 100, tier: "auxiliary" as const, maxSkips: 5 },
 
     // 24. Dashboard for visualization
-    { name: "Dashboard", fn: dashboardModule.fn, mandatory: false },
+    { name: "Dashboard", fn: dashboardModule.fn, tier: "auxiliary" as const, maxSkips: 10 },
   ];
 
   runModuleManager(modules, cpuLimit * 0.8, false);

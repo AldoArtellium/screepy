@@ -48,7 +48,10 @@ class TaskGenerator {
      */
     private cleanupTasks(room: Room): void {
         const queue = room.memory.taskQueue;
-        if (!queue) return;
+        if (!queue || !Array.isArray(queue)) {
+            room.memory.taskQueue = [];
+            return;
+        }
 
         const now = Game.time;
 

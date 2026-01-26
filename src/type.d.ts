@@ -35,6 +35,8 @@ declare global {
         debugDashboard?: boolean;
         // Player username
         username?: string;
+        // Module state for CPU optimization (skip tracking, lastRun persistence)
+        moduleState?: { [name: string]: { lastRun: number; consecutiveSkips: number } };
     }
 
     interface CreepMemory {
