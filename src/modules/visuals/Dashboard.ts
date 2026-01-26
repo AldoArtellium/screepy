@@ -58,8 +58,8 @@ const CACHE_DURATION = 5; // Refresh charts every 5 ticks
 
 // Layout constants - left side of room
 const X_LEFT = 0;     // Left column start
-const X_RIGHT = 30;   // Right column start
-const COL_WIDTH = 20; // Wider to fit table label+value columns
+const X_RIGHT = 35;   // Right column start
+const COL_WIDTH = 10; // Wider to fit table label+value columns
 
 /**
  * Render the unified dashboard for a room
