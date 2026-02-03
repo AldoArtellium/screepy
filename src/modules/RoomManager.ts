@@ -193,18 +193,34 @@ class RoomManager {
                 }
             }
 
-            // Check if containerSite completed
+            // Check if containerSite completed or was destroyed
             if (sourceMemory.containerSite) {
                 const site = Game.getObjectById(sourceMemory.containerSite);
                 if (!site) {
+                    // Site is gone - check if a container was built in its place
                     const container = source.pos.findInRange(FIND_STRUCTURES, 1, {
                         filter: (structure) => structure.structureType === STRUCTURE_CONTAINER
                     })[0] as StructureContainer | undefined;
 
                     if (container) {
                         sourceMemory.container = container.id;
+                        delete sourceMemory.containerSite;
                     }
-                    delete sourceMemory.containerSite;
+                    // If no container found, keep containerSite reference - it may have been
+                    // destroyed and needs to be re-placed. Only delete if container exists.
+                }
+            }
+
+            // If we have neither container nor site, try to find an existing container nearby
+            // This handles cases where containers were built before tracking started
+            if (!sourceMemory.container && !sourceMemory.containerSite) {
+                const container = source.pos.findInRange(FIND_STRUCTURES, 1, {
+                    filter: (structure) => structure.structureType === STRUCTURE_CONTAINER
+                })[0] as StructureContainer | undefined;
+
+                if (container) {
+                    sourceMemory.container = container.id;
+                    log.debug("RoomManager", `${room.name}: Found existing container for source ${source.id}`);
                 }
             }
 
@@ -425,6 +441,96 @@ class RoomManager {
         return 6;
     }
 
+    /**
+     * Debug method to diagnose phase calculation
+     * Call from console: roomManager.debugPhase('roomName')
+     */
+    debugPhase(roomName: string): void {
+        const room = Game.rooms[roomName];
+        if (!room) {
+            console.log(`Room ${roomName} not visible`);
+            return;
+        }
+
+        const totalCreeps = room.find(FIND_MY_CREEPS).length;
+        const rcl = room.controller?.level ?? 0;
+        const rclProgress = room.controller
+            ? ((room.controller.progress / room.controller.progressTotal) * 100).toFixed(1)
+            : "0";
+
+        const maxExtensions = RCL_EXTENSION_LIMITS[rcl] ?? 0;
+        const currentExtensions = room.find(FIND_MY_STRUCTURES, {
+            filter: s => s.structureType === STRUCTURE_EXTENSION
+        }).length;
+        const extensionRatio = maxExtensions > 0 ? currentExtensions / maxExtensions : 1;
+
+        const hasStorage = this.hasStructure(room, STRUCTURE_STORAGE);
+        const hasTerminal = this.hasStructure(room, STRUCTURE_TERMINAL);
+
+        // Check source containers
+        const sources = room.memory.sources || {};
+        const sourceCount = Object.keys(sources).length;
+        const sourcesInRoom = room.find(FIND_SOURCES).length;
+        let containerStatus: string[] = [];
+        for (const sourceId in sources) {
+            const sm = sources[sourceId as Id<Source>];
+            const status = sm.container ? "✓container" : sm.containerSite ? "⏳site" : "✗none";
+            containerStatus.push(`${sourceId.slice(-4)}: ${status}`);
+        }
+        const hasAllContainers = this.hasAllSourceContainers(room);
+
+        const currentPhase = room.memory.phase ?? 0;
+        const calculatedPhase = this.calculatePhase(room);
+
+        console.log(`\n=== Phase Debug: ${roomName} ===`);
+        console.log(`Current Phase: ${currentPhase} (${getPhaseName(currentPhase)})`);
+        console.log(`Calculated Phase: ${calculatedPhase} (${getPhaseName(calculatedPhase)})`);
+        console.log(`\n--- Conditions ---`);
+        console.log(`Creeps: ${totalCreeps} (need >2 for Phase 1+)`);
+        console.log(`RCL: ${rcl} (progress: ${rclProgress}%)`);
+        console.log(`Sources: ${sourceCount}/${sourcesInRoom} tracked`);
+        console.log(`Containers: ${containerStatus.join(", ") || "none tracked"}`);
+        console.log(`Has All Containers: ${hasAllContainers} (need true for Phase 2+)`);
+        console.log(`Extensions: ${currentExtensions}/${maxExtensions} (${(extensionRatio * 100).toFixed(0)}%, need 80% for Phase 3)`);
+        console.log(`Has Storage: ${hasStorage} (need true for Phase 4+)`);
+        console.log(`Has Terminal: ${hasTerminal} (need true for Phase 5+)`);
+
+        // Phase blocking reason
+        console.log(`\n--- Blocking Reason ---`);
+        if (totalCreeps <= 2) {
+            console.log(`⚠ PHASE 0: Only ${totalCreeps} creeps (need >2)`);
+        } else if (!hasAllContainers) {
+            console.log(`⚠ PHASE 1: Missing source containers`);
+        } else if (rcl < 3) {
+            console.log(`⚠ PHASE 2: RCL ${rcl} < 3 (need RCL 3 for Phase 3)`);
+        } else if (extensionRatio < 0.8) {
+            console.log(`⚠ PHASE 2: Extensions ${(extensionRatio * 100).toFixed(0)}% < 80%`);
+        } else if (!hasStorage) {
+            console.log(`⚠ PHASE 3: No storage built`);
+        } else if (rcl < 4) {
+            console.log(`⚠ PHASE 3: RCL ${rcl} < 4`);
+        } else if (rcl < 6) {
+            console.log(`⚠ PHASE 4: RCL ${rcl} < 6`);
+        } else if (!hasTerminal) {
+            console.log(`⚠ PHASE 4: No terminal built`);
+        } else if (rcl < 8) {
+            console.log(`⚠ PHASE 5: RCL ${rcl} < 8`);
+        } else {
+            console.log(`✓ All conditions met for PHASE 6`);
+        }
+
+        // Phase transition status
+        if (room.memory.phaseData?.targetPhase !== undefined) {
+            const ticks = Game.time - (room.memory.phaseData.transitionTick ?? Game.time);
+            const threshold = room.memory.phaseData.targetPhase > currentPhase
+                ? PHASE_TRANSITION.UP_THRESHOLD
+                : PHASE_TRANSITION.DOWN_THRESHOLD;
+            console.log(`\n--- Transition in Progress ---`);
+            console.log(`Target: Phase ${room.memory.phaseData.targetPhase}`);
+            console.log(`Progress: ${ticks}/${threshold} ticks`);
+        }
+    }
+
     private transitionPhase(room: Room, newPhase: RoomPhase): void {
         const oldPhase = room.memory.phase ?? 0;
         room.memory.phase = newPhase;
@@ -462,6 +568,70 @@ class RoomManager {
 
     isDefenseMode(room: Room): boolean {
         return room.memory.defenseMode ?? false;
+    }
+
+    /**
+     * Repair source container memory for a room
+     * Call from console: roomManager.repairSourceMemory('roomName')
+     */
+    repairSourceMemory(roomName: string): void {
+        const room = Game.rooms[roomName];
+        if (!room) {
+            console.log(`Room ${roomName} not visible`);
+            return;
+        }
+
+        if (!Memory.rooms[roomName]) {
+            console.log(`No memory for room ${roomName}`);
+            return;
+        }
+
+        const sources = room.find(FIND_SOURCES);
+        console.log(`Found ${sources.length} sources in ${roomName}`);
+
+        // Initialize sources if needed
+        if (!Memory.rooms[roomName].sources) {
+            Memory.rooms[roomName].sources = {};
+        }
+
+        for (const source of sources) {
+            // Ensure source memory exists
+            if (!Memory.rooms[roomName].sources[source.id]) {
+                Memory.rooms[roomName].sources[source.id] = {
+                    distance: 0,
+                    miners: []
+                };
+                console.log(`Created memory for source ${source.id}`);
+            }
+
+            const sourceMemory = Memory.rooms[roomName].sources[source.id];
+
+            // Find container near source
+            const container = source.pos.findInRange(FIND_STRUCTURES, 1, {
+                filter: s => s.structureType === STRUCTURE_CONTAINER
+            })[0] as StructureContainer | undefined;
+
+            // Find container site near source
+            const containerSite = source.pos.findInRange(FIND_CONSTRUCTION_SITES, 1, {
+                filter: s => s.structureType === STRUCTURE_CONTAINER
+            })[0] as ConstructionSite | undefined;
+
+            if (container) {
+                sourceMemory.container = container.id;
+                delete sourceMemory.containerSite;
+                console.log(`Source ${source.id.slice(-4)}: Found container ${container.id.slice(-4)}`);
+            } else if (containerSite) {
+                sourceMemory.containerSite = containerSite.id;
+                delete sourceMemory.container;
+                console.log(`Source ${source.id.slice(-4)}: Found container site ${containerSite.id.slice(-4)}`);
+            } else {
+                delete sourceMemory.container;
+                delete sourceMemory.containerSite;
+                console.log(`Source ${source.id.slice(-4)}: No container or site found`);
+            }
+        }
+
+        console.log(`\nSource memory repaired. Run debugPhase('${roomName}') to check status.`);
     }
 
     // ==================== Multi-Room Coordination ====================

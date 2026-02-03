@@ -54,6 +54,9 @@ class TaskGenerator {
         }
 
         const now = Game.time;
+        const phase = room.memory.phase ?? 0;
+        // Use lower threshold in early phases (0-2)
+        const containerMinEnergy = phase <= 2 ? 50 : ENERGY_THRESHOLDS.CONTAINER_MIN;
 
         room.memory.taskQueue = queue.filter(task => {
             // Remove completed or failed tasks
@@ -91,7 +94,7 @@ class TaskGenerator {
             if (task.type === TaskType.WITHDRAW_CONTAINER ||
                 task.type === TaskType.WITHDRAW_STORAGE) {
                 const structure = target as StructureContainer | StructureStorage;
-                if (structure.store.getUsedCapacity(RESOURCE_ENERGY) < ENERGY_THRESHOLDS.CONTAINER_MIN) {
+                if (structure.store.getUsedCapacity(RESOURCE_ENERGY) < containerMinEnergy) {
                     return false;
                 }
             }
@@ -238,10 +241,12 @@ class TaskGenerator {
         }
 
         // Withdraw from containers
+        // Use lower threshold in early phases (0-2) to help workers get energy sooner
+        const containerMinEnergy = phase <= 2 ? 50 : ENERGY_THRESHOLDS.CONTAINER_MIN;
         const containers = room.find(FIND_STRUCTURES, {
             filter: (s): s is StructureContainer =>
                 s.structureType === STRUCTURE_CONTAINER &&
-                s.store.getUsedCapacity(RESOURCE_ENERGY) > ENERGY_THRESHOLDS.CONTAINER_MIN
+                s.store.getUsedCapacity(RESOURCE_ENERGY) > containerMinEnergy
         });
         for (const container of containers) {
             if (this.hasExistingTask(room, TaskType.WITHDRAW_CONTAINER, container.id)) continue;
@@ -567,10 +572,12 @@ class TaskGenerator {
         // Priority boost if at risk of downgrade
         const priorityBoost = downgradeRisk ? -20 : 0;
 
-        // Priority boost at RCL 1 to ensure upgrading happens before building
+        // Priority boost at early RCL or phase to ensure upgrading happens
         // Without this, upgrade tasks (priority 55) never get assigned because
         // spawn filling (10) and building (45) always take precedence
-        const rclBoost = controller.level < 2 ? EARLY_PHASE_UPGRADE_BOOST : 0;
+        // At phase 2, with limited harvest tasks (1 per source), workers need
+        // upgrade tasks to have something productive to do
+        const rclBoost = (controller.level < 2 || phase <= 2) ? EARLY_PHASE_UPGRADE_BOOST : 0;
 
         this.addTask(room, {
             id: generateTaskId(TaskType.UPGRADE_CONTROLLER, controller.id),

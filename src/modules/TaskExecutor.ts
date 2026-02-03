@@ -156,6 +156,10 @@ class TaskExecutor {
         const room = creep.room;
         const phase = room.memory.phase ?? 0;
 
+        // Use lower container threshold in early phases (0-2) to help workers get energy
+        // from partially-filled containers during colony bootstrap
+        const containerMinEnergy = phase <= 2 ? 50 : ENERGY_THRESHOLDS.CONTAINER_MIN;
+
         // Priority: dropped (urgent) > container > storage > harvest
         // Try dropped resources first (they decay quickly)
         const dropped = creep.pos.findClosestByPath(FIND_DROPPED_RESOURCES, {
@@ -171,7 +175,7 @@ class TaskExecutor {
         const container = creep.pos.findClosestByPath(FIND_STRUCTURES, {
             filter: (s): s is StructureContainer =>
                 s.structureType === STRUCTURE_CONTAINER &&
-                s.store.getUsedCapacity(RESOURCE_ENERGY) > ENERGY_THRESHOLDS.CONTAINER_MIN
+                s.store.getUsedCapacity(RESOURCE_ENERGY) > containerMinEnergy
         });
 
         if (container) {
