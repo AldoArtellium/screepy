@@ -14,19 +14,19 @@
  *                                [--list-rooms]             (list candidate rooms and exit)
  *                                [--client] [--client-port 8080] [--package path/to/package.nw]
  *                                    (watch the run in the steamless client, see pserver-client.mjs)
+ *                                [--force]                  (replace a run in progress from another session)
  *
+ * The run state is published on the server: `npm run watch:server` follows it from any session/worktree.
  * Exit code 0 when every check passes, 1 otherwise.
  */
 
 import { execFileSync } from "node:child_process";
 import { readFileSync, mkdirSync, writeFileSync } from "node:fs";
-import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
+import { join } from "node:path";
 import { gunzipSync } from "node:zlib";
 import { startClient } from "./pserver-client.mjs";
+import { ROOT, SERVER, cli, isRunActive, readRun, writeRun } from "./pserver-lib.mjs";
 
-const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
-const SERVER = "http://localhost:21025";
 const USER = { username: "screepy", email: "screepy@localhost", password: "screepy" };
 
 // ---------- args ----------
@@ -60,19 +60,6 @@ const CLIENT_PORT = Number(opt("client-port", 8080));
 // ---------- helpers ----------
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 const log = (...a) => console.log(`[${new Date().toLocaleTimeString()}]`, ...a);
-
-/** Run a command in the server CLI (only reachable from inside the container) */
-function cli(command) {
-    const snippet =
-        "const h=require('http');const q=h.request({host:'127.0.0.1',port:21026,path:'/cli',method:'POST'," +
-        "headers:{'Content-Type':'text/plain'}},r=>{let b='';r.on('data',d=>b+=d);r.on('end',()=>process.stdout.write(b))});" +
-        "q.end(process.argv[1]);";
-    return execFileSync(
-        "docker",
-        ["compose", "exec", "-T", "screeps", "/screeps/deps/node/bin/node", "-e", snippet, command],
-        { cwd: ROOT, encoding: "utf-8", env: { ...process.env, MSYS_NO_PATHCONV: "1" }, maxBuffer: 64 * 1024 * 1024 }
-    ).trim();
-}
 
 let token = null;
 async function api(path, body) {
@@ -350,6 +337,14 @@ async function gameTime() {
 async function main() {
     await waitForServer();
     if (flag("list-rooms")) pickRoom(); // prints and exits, touches nothing
+    // One test user for the whole server: a second run would respawn it and kill the first one
+    const current = readRun();
+    if (isRunActive(current) && !flag("force")) {
+        throw new Error(
+            `A test run is already in progress (room ${current.room}, tick ${current.tick}/${current.ticks}). ` +
+                "Watch it with `npm run watch:server`, or pass --force to replace it."
+        );
+    }
     if (BUILD) build();
 
     // Fresh mongo database: import the default world map (also wipes users)
@@ -362,7 +357,6 @@ async function main() {
     cli(`system.setTickDuration(${TICK_MS})`);
 
     const userId = await login();
-    const client = CLIENT && (await startClient({ port: CLIENT_PORT, packagePath: opt("package", undefined) }));
     await respawn(userId);
     await upload();
     const spot = pickRoom();
@@ -372,6 +366,10 @@ async function main() {
     const start = await gameTime();
     const end = start + TICKS;
     log(`Running ${TICKS} ticks (${start} -> ${end}), min tick duration ${TICK_MS}ms`);
+    run = { status: "running", room: spot.room, start, end, ticks: TICKS, tick: 0, code: CODE, startedAt: Date.now() };
+    writeRun(run);
+    const client =
+        CLIENT && (await startClient({ port: CLIENT_PORT, packagePath: opt("package", undefined), room: spot.room }));
 
     let stats;
     let world;
@@ -388,6 +386,14 @@ async function main() {
             stats ? `| cpu avg ${stats.cpuAvg.toFixed(1)}` : "",
             errors.length ? `| ${errors.length} module errors` : ""
         );
+        Object.assign(run, {
+            tick: Math.min(now - start, TICKS),
+            rcl: world.rcl,
+            creeps: world.creeps,
+            cpuAvg: stats?.cpuAvg,
+            errors: errors.length
+        });
+        writeRun(run);
         if (now >= end) break;
     }
 
@@ -449,6 +455,7 @@ async function main() {
     console.log(`\nFull report: ${file}`);
 
     const code = checks.every(c => c[1]) ? 0 : 1;
+    writeRun({ ...run, status: code === 0 ? "passed" : "failed", checks: checks.map(([name, ok, detail]) => ({ name, ok, detail })) });
     if (client) {
         // Keep the client up to inspect the final state (the server keeps ticking)
         log(`Client still running at ${client.url}, Ctrl+C to stop`);
@@ -458,7 +465,17 @@ async function main() {
     process.exit(code);
 }
 
+/** Published run state (see pserver-lib.mjs), null until the run starts */
+let run = null;
+
 main().catch(err => {
     console.error(err);
+    if (run) {
+        try {
+            writeRun({ ...run, status: "crashed", error: String(err?.message ?? err) });
+        } catch {
+            // server unreachable
+        }
+    }
     process.exit(1);
 });
