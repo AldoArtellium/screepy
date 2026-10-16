@@ -42,6 +42,13 @@ Elle est aussi le prérequis de deux chantiers à venir :
 - **Mémoire qui grossit** avec le nombre de demandes. Les demandes vivent en heap, seule la réservation de chaque creep va en `Memory`.
 - **Régression dans les rooms en marais** (W9N5), où ce bot fait aujourd'hui mieux que Hivemind.
 
+## Contexte d'usage
+
+Le bot est destiné au **serveur officiel, face à de vrais joueurs** (réponse de l'utilisateur). Trois conséquences :
+- **CPU** : le budget de départ est de 20 CPU, donc l'anti-objectif CPU est une limite stricte.
+- **Robustesse** : une erreur ne doit jamais bloquer le remplissage du spawn.
+- **Défense** : en mode défense, le remplissage des tours passe avant les extensions.
+
 ## Contraintes
 
 - TypeScript, lodash 3, architecture actuelle : `ModuleManager`, `TrafficManager` (cartographer), système de tâches, registre de rôles, `requestSpawn`.
