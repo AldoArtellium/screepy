@@ -5,16 +5,41 @@
 
 import { BodyType, generateBody, generateOptimalBody, getBodyCost } from "../config/bodyTypes";
 import { log } from "../utils/logger";
+import { countStat } from "../utils/stats";
 
 interface SpawnRequest {
-    bodyType: BodyType;
+    bodyType?: BodyType;
     body: BodyPartConstant[];
     priority: number;
     roomName: string;
     reason?: string;
     /** Target room for cross-room creeps (bootstrap, remote mining) */
     targetRoom?: string;
+    /** Extra creep memory (module-driven creeps set `role`) */
+    memory?: Partial<CreepMemory>;
+    /** Id of the external request this comes from */
+    externalId?: string;
 }
+
+/**
+ * Spawn request from a module (scout, remote miner, claimer...).
+ * Creeps spawned this way carry `memory.role`: they are driven by the role handler
+ * registered in TaskExecutor (`registerRole`) and never take tasks from the task queue.
+ */
+export interface ExternalSpawnRequest {
+    /** Unique id: re-requesting with the same id updates the request instead of duplicating it */
+    id: string;
+    /** Room whose spawns should build the creep */
+    roomName: string;
+    body: BodyPartConstant[];
+    /** Same scale as SPAWN_PRIORITIES (lower = sooner). Economy workers use 1-2. */
+    priority: number;
+    memory: Partial<CreepMemory> & { role: string };
+    /** Ticks the request stays queued without being renewed (default 20) */
+    ttl?: number;
+}
+
+const DEFAULT_REQUEST_TTL = 20;
 
 /**
  * Spawn priorities (lower = higher priority)
@@ -25,8 +50,14 @@ const SPAWN_PRIORITIES: Record<BodyType, number> = {
     [BodyType.TRANSPORT]: 2,
     [BodyType.CLAIM]: 3,
     [BodyType.SCOUT]: 4,
-    [BodyType.RESERVER]: 3
+    [BodyType.RESERVER]: 3,
+    // Before workers, even "urgent" ones (0.5): a missing miner inflates the WORK deficit,
+    // so workers would otherwise always win and miners never spawn. Phase >= 1 (3+ creeps) only.
+    [BodyType.MINER]: 0.4
 };
+
+/** WORK parts that fully drain a source (10 energy/tick) */
+const SOURCE_WORK_TARGET = 5;
 
 /**
  * Energy thresholds for spawning decisions
@@ -43,6 +74,51 @@ const SPAWN_ENERGY = {
 class SpawnManager {
     private spawnQueue: SpawnRequest[] = [];
 
+    /** Module requests, kept until spawned or expired (heap only: modules renew them) */
+    private externalRequests: Map<string, ExternalSpawnRequest & { expiresAt: number }> = new Map();
+
+    /**
+     * Ask for a creep. Call it each time the module runs while the creep is still needed;
+     * the request expires after `ttl` ticks without renewal and is removed once spawned.
+     * The caller must count its existing creeps (including spawning ones) to avoid over-requesting.
+     */
+    requestSpawn(request: ExternalSpawnRequest): void {
+        this.externalRequests.set(request.id, {
+            ...request,
+            expiresAt: Game.time + (request.ttl ?? DEFAULT_REQUEST_TTL)
+        });
+    }
+
+    /** Whether a request is still queued (not spawned, not expired) */
+    hasPendingRequest(id: string): boolean {
+        const request = this.externalRequests.get(id);
+        return !!request && request.expiresAt >= Game.time;
+    }
+
+    private queueExternalRequests(): void {
+        for (const [id, request] of this.externalRequests) {
+            if (request.expiresAt < Game.time) {
+                this.externalRequests.delete(id);
+                continue;
+            }
+            const room = Game.rooms[request.roomName];
+            if (!room?.controller?.my) continue;
+            if (getBodyCost(request.body) > room.energyCapacityAvailable) {
+                log.warn("SpawnManager", `Request ${id} body costs more than ${room.name} capacity, dropped`);
+                this.externalRequests.delete(id);
+                continue;
+            }
+            this.spawnQueue.push({
+                body: request.body,
+                priority: request.priority,
+                roomName: request.roomName,
+                reason: `request ${id}`,
+                memory: request.memory,
+                externalId: id
+            });
+        }
+    }
+
     /**
      * Main spawn management function
      */
@@ -57,6 +133,8 @@ class SpawnManager {
             this.calculateSpawnNeeds(room);
         }
 
+        this.queueExternalRequests();
+
         // Sort by priority
         this.spawnQueue.sort((a, b) => a.priority - b.priority);
 
@@ -70,7 +148,7 @@ class SpawnManager {
     private calculateSpawnNeeds(room: Room): void {
         const demand = room.memory.partDemand;
         const phase = room.memory.phase ?? 0;
-        const totalCreeps = room.find(FIND_MY_CREEPS).length;
+        const totalCreeps = room.find(FIND_MY_CREEPS, { filter: c => !c.memory.role }).length;
         const defenseMode = room.memory.defenseMode ?? false;
         const energyRatio = room.energyAvailable / room.energyCapacityAvailable;
 
@@ -119,6 +197,9 @@ class SpawnManager {
             spawnEnergy = room.energyAvailable;
         }
 
+        // Static miners first: they are the energy income
+        this.calculateMinerNeeds(room, phase);
+
         // Check WORK deficit - spawn workers
         if (demand[WORK] && demand[WORK].deficit > 0) {
             // Calculate how many workers needed
@@ -128,10 +209,7 @@ class SpawnManager {
             for (let i = 0; i < Math.min(workersNeeded, 2); i++) {
                 const body = generateBody(BodyType.WORKER, spawnEnergy);
                 if (body.length > 0) {
-                    // Prioritize first worker higher if deficit is severe
-                    const priority = i === 0 && demand[WORK].deficit > 5
-                        ? SPAWN_PRIORITIES[BodyType.WORKER] - 0.5
-                        : SPAWN_PRIORITIES[BodyType.WORKER] + i * 0.1;
+                    const priority = this.coveragePriority(demand[WORK]) + i * 0.1;
 
                     this.spawnQueue.push({
                         bodyType: BodyType.WORKER,
@@ -153,10 +231,7 @@ class SpawnManager {
             for (let i = 0; i < Math.min(transportsNeeded, 2); i++) {
                 const body = generateBody(BodyType.TRANSPORT, spawnEnergy);
                 if (body.length > 0) {
-                    // Prioritize first transport higher if deficit is severe
-                    const priority = i === 0 && demand[CARRY].deficit > 10
-                        ? SPAWN_PRIORITIES[BodyType.TRANSPORT] - 0.5
-                        : SPAWN_PRIORITIES[BodyType.TRANSPORT] + i * 0.1;
+                    const priority = this.coveragePriority(demand[CARRY]) + i * 0.1;
 
                     this.spawnQueue.push({
                         bodyType: BodyType.TRANSPORT,
@@ -186,6 +261,45 @@ class SpawnManager {
 
         // Spawn workers for bootstrap targets (newly claimed rooms)
         this.calculateBootstrapSpawnNeeds(room, spawnEnergy);
+    }
+
+    /**
+     * Worker/transport priority from how well the part is covered (supplied/total): the least
+     * covered type spawns first. With fixed priorities the queue is strictly ordered, and since
+     * there is always some WORK deficit (upgrading, building), transports never spawned.
+     * Range 1-2: after miners (0.4) and population (0.5), before claimers and remotes (2.4+).
+     */
+    private coveragePriority(part: { total: number; supplied: number }): number {
+        const coverage = part.total > 0 ? Math.min(1, part.supplied / part.total) : 1;
+        return 1 + coverage;
+    }
+
+    /**
+     * Spawn static miners until every source has SOURCE_WORK_TARGET WORK (max 2 miners per source)
+     */
+    private calculateMinerNeeds(room: Room, phase: number): void {
+        if (phase < 1) return;
+        // Off by default: on 3 benchmark rooms (8000 ticks) static miners did 12-29% worse than
+        // self-harvesting workers. Memory.config.staticMiners = true turns them on (A/B tests).
+        if (Memory.config?.staticMiners !== true) return;
+
+        const sources = room.find(FIND_SOURCES).length;
+        const miners = _.filter(Game.creeps, c =>
+            c.memory.bodyType === BodyType.MINER && c.memory.room === room.name &&
+            (c.spawning || (c.ticksToLive ?? 0) > c.body.length * CREEP_SPAWN_TIME + 50)
+        );
+        const minerWork = _.sum(miners, c => c.getActiveBodyparts(WORK));
+        if (minerWork >= sources * SOURCE_WORK_TARGET || miners.length >= sources * 2) return;
+
+        // Full-size miner (waits for full energy): a small miner wastes a source slot for its whole life
+        const body = generateBody(BodyType.MINER, room.energyCapacityAvailable);
+        this.spawnQueue.push({
+            bodyType: BodyType.MINER,
+            body,
+            priority: SPAWN_PRIORITIES[BodyType.MINER],
+            roomName: room.name,
+            reason: `miner work ${minerWork}/${sources * SOURCE_WORK_TARGET}`
+        });
     }
 
     /**
@@ -232,18 +346,15 @@ class SpawnManager {
     private getEmergencyBody(room: Room): BodyPartConstant[] {
         const energy = room.energyAvailable;
 
-        // Minimum functional creep: WORK + MOVE = 150 energy (can harvest)
-        if (energy < 150) {
-            return []; // Don't spawn useless creeps
+        // Minimum functional creep: WORK + CARRY + MOVE = 200 energy.
+        // A WORK+MOVE creep can't carry energy to the spawn, so it doesn't bootstrap anything:
+        // wait for 200 (the spawn regenerates energy on its own).
+        if (energy < 200) {
+            return [];
         }
 
-        if (energy >= 200) {
-            // Build largest worker possible with available energy
-            return generateOptimalBody(BodyType.WORKER, energy);
-        }
-
-        // 150-199 energy: harvester-only (can bootstrap economy)
-        return [WORK, MOVE];
+        // Build largest worker possible with available energy
+        return generateOptimalBody(BodyType.WORKER, energy);
     }
 
     /**
@@ -259,17 +370,12 @@ class SpawnManager {
 
             // Find best match for this spawn's room
             const spawnRoomName = spawn.room.name;
-            let bestIndex = 0;
-
-            for (let i = 0; i < this.spawnQueue.length; i++) {
-                if (this.spawnQueue[i].roomName === spawnRoomName) {
-                    bestIndex = i;
-                    break;
-                }
-            }
+            const bestIndex = this.spawnQueue.findIndex(r => r.roomName === spawnRoomName);
+            if (bestIndex === -1) continue;
 
             const request = this.spawnQueue[bestIndex];
             const { bodyType, body } = request;
+            const label = request.memory?.role ?? bodyType ?? "creep";
 
             // Check if spawn can afford this body
             const cost = getBodyCost(body);
@@ -277,11 +383,12 @@ class SpawnManager {
                 continue;
             }
 
-            const newName = `${bodyType}-${Game.time}-${spawn.name}`;
+            const newName = `${label}-${Game.time}-${spawn.name}`;
             const memory: CreepMemory = {
-                bodyType,
+                ...(bodyType && { bodyType }),
                 room: request.roomName,
-                ...(request.targetRoom && { targetRoom: request.targetRoom })
+                ...(request.targetRoom && { targetRoom: request.targetRoom }),
+                ...request.memory
             };
 
             const result = spawn.spawnCreep(body, newName, { memory });
@@ -289,11 +396,14 @@ class SpawnManager {
             if (result === OK) {
                 Memory.creeps[newName] = memory;
                 const targetInfo = request.targetRoom ? ` → ${request.targetRoom}` : "";
-                log.info("SpawnManager", `Spawning ${bodyType}: ${newName} (${body.length} parts, cost: ${cost})${targetInfo}`);
+                log.info("SpawnManager", `Spawning ${label}: ${newName} (${body.length} parts, cost: ${cost})${targetInfo}`);
                 this.spawnQueue.splice(bestIndex, 1);
+                if (request.externalId) this.externalRequests.delete(request.externalId);
+                countStat(`spawned:${label}`);
             } else if (result !== ERR_NOT_ENOUGH_ENERGY) {
-                log.warn("SpawnManager", `Failed to spawn ${bodyType}: ${result}`);
+                log.warn("SpawnManager", `Failed to spawn ${label}: ${result}`);
                 this.spawnQueue.splice(bestIndex, 1);
+                if (request.externalId) this.externalRequests.delete(request.externalId);
             }
         }
     }
@@ -303,7 +413,7 @@ class SpawnManager {
      */
     getSpawnQueueSnapshot(): { bodyType: string; priority: number; roomName: string; bodyCost: number }[] {
         return this.spawnQueue.map(request => ({
-            bodyType: request.bodyType,
+            bodyType: request.memory?.role ?? request.bodyType ?? "creep",
             priority: request.priority,
             roomName: request.roomName,
             bodyCost: getBodyCost(request.body)
@@ -319,3 +429,5 @@ export const spawnManagerModule = () => {
 };
 
 export const getSpawnQueueSnapshot = () => spawnManagerInstance.getSpawnQueueSnapshot();
+
+export const spawnManager = spawnManagerInstance;

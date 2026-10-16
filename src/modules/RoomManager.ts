@@ -169,6 +169,8 @@ class RoomManager {
             };
         }
         if (!mem.sources) mem.sources = {};
+        // Memory may have been created elsewhere (e.g. intel on a neighbour room) without it
+        if (!mem.constructionSites) mem.constructionSites = {};
         if (!mem.taskQueue) mem.taskQueue = [];
         if (!mem.partDemand) mem.partDemand = {};
     }
@@ -425,7 +427,7 @@ class RoomManager {
     }
 
     private calculatePhase(room: Room): RoomPhase {
-        const totalCreeps = room.find(FIND_MY_CREEPS).length;
+        const totalCreeps = room.find(FIND_MY_CREEPS, { filter: c => !c.memory.role }).length;
         const rcl = room.controller?.level ?? 0;
         const hasAllContainers = this.hasAllSourceContainers(room);
         const extensionRatio = this.getExtensionRatio(room);
@@ -471,7 +473,7 @@ class RoomManager {
         const sources = room.memory.sources || {};
         const sourceCount = Object.keys(sources).length;
         const sourcesInRoom = room.find(FIND_SOURCES).length;
-        let containerStatus: string[] = [];
+        const containerStatus: string[] = [];
         for (const sourceId in sources) {
             const sm = sources[sourceId as Id<Source>];
             const status = sm.container ? "✓container" : sm.containerSite ? "⏳site" : "✗none";
@@ -485,7 +487,7 @@ class RoomManager {
         console.log(`\n=== Phase Debug: ${roomName} ===`);
         console.log(`Current Phase: ${currentPhase} (${getPhaseName(currentPhase)})`);
         console.log(`Calculated Phase: ${calculatedPhase} (${getPhaseName(calculatedPhase)})`);
-        console.log(`\n--- Conditions ---`);
+        console.log("\n--- Conditions ---");
         console.log(`Creeps: ${totalCreeps} (need >2 for Phase 1+)`);
         console.log(`RCL: ${rcl} (progress: ${rclProgress}%)`);
         console.log(`Sources: ${sourceCount}/${sourcesInRoom} tracked`);
@@ -496,27 +498,27 @@ class RoomManager {
         console.log(`Has Terminal: ${hasTerminal} (need true for Phase 5+)`);
 
         // Phase blocking reason
-        console.log(`\n--- Blocking Reason ---`);
+        console.log("\n--- Blocking Reason ---");
         if (totalCreeps <= 2) {
             console.log(`⚠ PHASE 0: Only ${totalCreeps} creeps (need >2)`);
         } else if (!hasAllContainers) {
-            console.log(`⚠ PHASE 1: Missing source containers`);
+            console.log("⚠ PHASE 1: Missing source containers");
         } else if (rcl < 3) {
             console.log(`⚠ PHASE 2: RCL ${rcl} < 3 (need RCL 3 for Phase 3)`);
         } else if (extensionRatio < 0.8) {
             console.log(`⚠ PHASE 2: Extensions ${(extensionRatio * 100).toFixed(0)}% < 80%`);
         } else if (!hasStorage) {
-            console.log(`⚠ PHASE 3: No storage built`);
+            console.log("⚠ PHASE 3: No storage built");
         } else if (rcl < 4) {
             console.log(`⚠ PHASE 3: RCL ${rcl} < 4`);
         } else if (rcl < 6) {
             console.log(`⚠ PHASE 4: RCL ${rcl} < 6`);
         } else if (!hasTerminal) {
-            console.log(`⚠ PHASE 4: No terminal built`);
+            console.log("⚠ PHASE 4: No terminal built");
         } else if (rcl < 8) {
             console.log(`⚠ PHASE 5: RCL ${rcl} < 8`);
         } else {
-            console.log(`✓ All conditions met for PHASE 6`);
+            console.log("✓ All conditions met for PHASE 6");
         }
 
         // Phase transition status
@@ -525,7 +527,7 @@ class RoomManager {
             const threshold = room.memory.phaseData.targetPhase > currentPhase
                 ? PHASE_TRANSITION.UP_THRESHOLD
                 : PHASE_TRANSITION.DOWN_THRESHOLD;
-            console.log(`\n--- Transition in Progress ---`);
+            console.log("\n--- Transition in Progress ---");
             console.log(`Target: Phase ${room.memory.phaseData.targetPhase}`);
             console.log(`Progress: ${ticks}/${threshold} ticks`);
         }

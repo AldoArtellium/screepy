@@ -30,6 +30,8 @@ import { log } from "utils/logger";
 export const gameLoop = () => {
   const memLimit = 1000000;
   const cpuLimit = Game.cpu.limit;
+  // Modules flagged `disabled` are design sketches not yet wired to spawning/roles.
+  // Re-enable one at a time once validated on the private server.
   const modules = [
     // 0. Metrics collection (mandatory, lightweight, every tick)
     { name: "MetricsCollector", fn: metricsCollectorModule, mandatory: true },
@@ -40,8 +42,8 @@ export const gameLoop = () => {
     // 2. Room management: memory refresh, phase evaluation, defense mode (every 5 ticks)
     { name: "RoomManager", fn: roomManagerModule.run, runEvery: 5, mandatory: true },
 
-    // 3. Demand calculator: calculates part needs (every 10 ticks)
-    { name: "DemandCalculator", fn: demandCalculatorModule, runEvery: 10 },
+    // 3. Demand calculator: calculates part needs (same cadence as SpawnManager, so spawning uses fresh demand)
+    { name: "DemandCalculator", fn: demandCalculatorModule, runEvery: 3 },
 
     // 4. Task generator: creates tasks from room state (every 5 ticks)
     { name: "TaskGenerator", fn: taskGeneratorModule, runEvery: 5 },
@@ -51,9 +53,6 @@ export const gameLoop = () => {
 
     // 6. Task executor: runs all creeps with tasks (mandatory)
     { name: "TaskExecutor", fn: taskExecutorModule, mandatory: true },
-
-    // 7. Traffic manager: processes all movement requests (mandatory)
-    { name: "TrafficManager", fn: trafficManagerModule, mandatory: true },
 
     // 8. Spawn manager: spawns by part deficit (every 3 ticks)
     { name: "SpawnManager", fn: spawnManagerModule, runEvery: 3 },
@@ -80,31 +79,34 @@ export const gameLoop = () => {
     { name: "ExpansionManager", fn: expansionManagerModule, runEvery: 50 },
 
     // 16. Combat manager: offensive operations (every 10 ticks, RCL 5+)
-    { name: "CombatManager", fn: combatManagerModule, runEvery: 10 },
+    { name: "CombatManager", fn: combatManagerModule, runEvery: 10, disabled: true },
 
     // 16. Market manager: trading operations (every 20 ticks)
     { name: "MarketManager", fn: marketManagerModule, runEvery: 20 },
 
     // 17. Lab manager: compound production and boosts (every 5 ticks, RCL 6+)
-    { name: "LabManager", fn: labManagerModule, runEvery: 5 },
+    { name: "LabManager", fn: labManagerModule, runEvery: 5, disabled: true },
 
     // 18. Highway manager: power banks and deposits (every 5 ticks, RCL 7+)
-    { name: "HighwayManager", fn: highwayManagerModule, runEvery: 5 },
+    { name: "HighwayManager", fn: highwayManagerModule, runEvery: 5, disabled: true },
 
     // 19. SK manager: source keeper room mining (every 5 ticks, RCL 7+)
-    { name: "SKManager", fn: skManagerModule, runEvery: 5 },
+    { name: "SKManager", fn: skManagerModule, runEvery: 5, disabled: true },
 
     // 20. Stronghold manager: invader stronghold attacks (every 10 ticks, RCL 5+)
-    { name: "StrongholdManager", fn: strongholdManagerModule, runEvery: 10 },
+    { name: "StrongholdManager", fn: strongholdManagerModule, runEvery: 10, disabled: true },
 
     // 21. Power creep manager: power creep operations (every 3 ticks, RCL 8)
-    { name: "PowerCreepManager", fn: powerCreepManagerModule, runEvery: 3 },
+    { name: "PowerCreepManager", fn: powerCreepManagerModule, runEvery: 3, disabled: true },
 
     // 22. Factory manager: commodity production (every 5 ticks, RCL 7+)
-    { name: "FactoryManager", fn: factoryManagerModule, runEvery: 5 },
+    { name: "FactoryManager", fn: factoryManagerModule, runEvery: 5, disabled: true },
 
     // 23. Base planner: layout visualization (every 100 ticks)
-    { name: "BasePlanner", fn: basePlannerModule, runEvery: 100, tier: "auxiliary" as const, maxSkips: 5 },
+    { name: "BasePlanner", fn: basePlannerModule, runEvery: 100, tier: "auxiliary" as const, maxSkips: 5, disabled: true },
+
+    // Traffic manager: resolves all movement requests issued above (mandatory, must run after every creep-moving module)
+    { name: "TrafficManager", fn: trafficManagerModule, mandatory: true },
 
     // 24. Dashboard for visualization
     { name: "Dashboard", fn: dashboardModule.fn, tier: "auxiliary" as const, maxSkips: 10 },

@@ -6,6 +6,8 @@
 import { TaskStatus, TaskType, requiresEnergy } from "../types/TaskTypes";
 import { ENERGY_THRESHOLDS } from "../utils/creepUtils";
 import { log } from "../utils/logger";
+import { countStat } from "../utils/stats";
+import { getRoleHandler } from "../roles/registry";
 import { metricsCollector } from "./MetricsCollector";
 import { taskDispatcher } from "./TaskDispatcher";
 import { trafficManager } from "./TrafficManager";
@@ -13,7 +15,10 @@ import { trafficManager } from "./TrafficManager";
 /** Maximum ticks a creep can be stuck before task is marked failed */
 const MAX_STUCK_TICKS = 10;
 
-/** Maximum ticks for a task before timeout */
+/** Anything a creep can get energy from */
+type EnergySource = Resource | Source | StructureContainer | StructureStorage | Tombstone | Ruin;
+
+/** Maximum ticks without any successful action before a task times out */
 const MAX_TASK_TICKS = 300;
 
 class TaskExecutor {
@@ -25,11 +30,30 @@ class TaskExecutor {
             const creep = Game.creeps[name];
             if (creep.spawning) continue;
 
-            if (creep.memory.currentTask) {
+            if (creep.memory.role) {
+                this.runRole(creep, creep.memory.role);
+            } else if (creep.memory.currentTask) {
                 this.executeCreepTask(creep);
             } else {
                 this.handleIdleCreep(creep);
             }
+        }
+    }
+
+    /**
+     * Run a module-driven creep through its role handler (isolated: one failing creep doesn't stop the others)
+     */
+    private runRole(creep: Creep, role: string): void {
+        const handler = getRoleHandler(role);
+        if (!handler) {
+            this.handleIdleCreep(creep);
+            return;
+        }
+        try {
+            handler(creep);
+        } catch (error) {
+            log.error("TaskExecutor", `Role ${role} failed for ${creep.name}:`, (error as Error).stack);
+            countStat(`roleError:${role}`);
         }
     }
 
@@ -61,27 +85,20 @@ class TaskExecutor {
             return;
         }
 
-        // Check for task timeout
-        if (Game.time - taskState.startedAt > MAX_TASK_TICKS) {
+        // Check for task timeout (no successful action for too long)
+        if (Game.time - (taskState.lastProgress ?? taskState.startedAt) > MAX_TASK_TICKS) {
             log.debug("TaskExecutor", `Task ${task.type} timed out for ${creep.name}`);
-            this.failTask(creep, task);
+            this.failTask(creep, task, "timeout");
             return;
         }
 
-        // Check for stuck creep
-        if (this.isCreepStuck(creep, taskState)) {
-            taskState.stuckTicks = (taskState.stuckTicks ?? 0) + 1;
-            if (taskState.stuckTicks >= MAX_STUCK_TICKS) {
-                log.debug("TaskExecutor", `Creep ${creep.name} stuck on task ${task.type}`);
-                this.failTask(creep, task);
-                return;
-            }
-        } else {
-            taskState.stuckTicks = 0;
+        // Check for stuck creep (wanted to move last ticks but position didn't change)
+        taskState.stuckTicks = trafficManager.getStuckTicks(creep);
+        if (taskState.stuckTicks >= MAX_STUCK_TICKS) {
+            log.debug("TaskExecutor", `Creep ${creep.name} stuck on task ${task.type}`);
+            this.failTask(creep, task, "stuck");
+            return;
         }
-
-        // Update last position for stuck detection
-        taskState.lastPos = { x: creep.pos.x, y: creep.pos.y };
 
         // Update task status to in progress
         if (task.status === TaskStatus.ASSIGNED) {
@@ -106,11 +123,28 @@ class TaskExecutor {
     }
 
     /**
-     * Check if creep is stuck (same position as last tick)
+     * Record a creep action result: any successful action counts as task progress (resets the timeout)
      */
-    private isCreepStuck(creep: Creep, taskState: { lastPos?: { x: number; y: number } }): boolean {
-        if (!taskState.lastPos) return false;
-        return creep.pos.x === taskState.lastPos.x && creep.pos.y === taskState.lastPos.y;
+    private act<T extends ScreepsReturnCode>(creep: Creep, result: T): T {
+        if (result === OK && creep.memory.currentTask) {
+            creep.memory.currentTask.lastProgress = Game.time;
+        }
+        return result;
+    }
+
+    /**
+     * Register movement towards a position, or an intent to stay in range when already there.
+     * Must be called every tick by working creeps so the traffic reconciler doesn't shove them away.
+     * Returns true when the creep is in range.
+     */
+    private approach(
+        creep: Creep,
+        pos: RoomPosition,
+        range: number,
+        opts: { priority?: number; combat?: boolean } = {}
+    ): boolean {
+        trafficManager.requestMove(creep, pos, { ...opts, range });
+        return creep.pos.roomName === pos.roomName && creep.pos.inRangeTo(pos, range);
     }
 
     /**
@@ -125,7 +159,7 @@ class TaskExecutor {
     /**
      * Mark a task as failed and clear creep assignment
      */
-    private failTask(creep: Creep, task: { id: string; type: TaskType }): void {
+    private failTask(creep: Creep, task: { id: string; type: TaskType }, reason: string): void {
         const taskState = creep.memory.currentTask;
         const retryCount = taskState?.retryCount ?? 0;
 
@@ -136,12 +170,15 @@ class TaskExecutor {
                 ...taskState!,
                 stuckTicks: 0,
                 retryCount: retryCount + 1,
-                startedAt: Game.time
+                startedAt: Game.time,
+                lastProgress: Game.time
             };
             return;
         }
 
         log.warn("TaskExecutor", `Task ${task.type} failed for ${creep.name} after ${retryCount + 1} attempts`);
+        countStat("taskFailed");
+        countStat(`taskFailed:${task.type}:${reason}`);
         const taskRoom = this.getTaskRoom(creep);
         if (taskRoom) {
             taskDispatcher.updateTaskStatus(taskRoom, task.id, TaskStatus.FAILED);
@@ -150,75 +187,89 @@ class TaskExecutor {
     }
 
     /**
-     * Acquire energy for a task
+     * Acquire energy for a task.
+     * The chosen source is cached in the task state until it runs dry, so the
+     * (range-based) search only runs when a new source is needed.
      */
     private acquireEnergy(creep: Creep): void {
+        const taskState = creep.memory.currentTask!;
+        let source = taskState.energySourceId
+            ? Game.getObjectById(taskState.energySourceId as Id<EnergySource>)
+            : null;
+        if (!source || !this.hasEnergy(source, creep)) {
+            source = this.findEnergySource(creep);
+            taskState.energySourceId = source?.id;
+        }
+
+        if (!source) {
+            // Nothing available - wait near spawn for energy to become available
+            this.handleIdleCreep(creep);
+            return;
+        }
+
+        if (source instanceof Resource) {
+            this.moveToAndPickup(creep, source);
+        } else if (source instanceof Source) {
+            this.moveToAndHarvest(creep, source);
+        } else {
+            this.moveToAndWithdraw(creep, source);
+        }
+    }
+
+    /**
+     * Pick the best energy source. Priority: dropped (decays) > container > storage > tombstone/ruin > harvest
+     */
+    private findEnergySource(creep: Creep): EnergySource | null {
         const room = creep.room;
         const phase = room.memory.phase ?? 0;
 
-        // Use lower container threshold in early phases (0-2) to help workers get energy
-        // from partially-filled containers during colony bootstrap
-        const containerMinEnergy = phase <= 2 ? 50 : ENERGY_THRESHOLDS.CONTAINER_MIN;
-
-        // Priority: dropped (urgent) > container > storage > harvest
-        // Try dropped resources first (they decay quickly)
-        const dropped = creep.pos.findClosestByPath(FIND_DROPPED_RESOURCES, {
+        const dropped = creep.pos.findClosestByRange(FIND_DROPPED_RESOURCES, {
             filter: r => r.resourceType === RESOURCE_ENERGY && r.amount > ENERGY_THRESHOLDS.DROPPED_MIN
         });
+        if (dropped) return dropped;
 
-        if (dropped) {
-            this.moveToAndPickup(creep, dropped);
-            return;
-        }
-
-        // Try containers
-        const container = creep.pos.findClosestByPath(FIND_STRUCTURES, {
+        const container = creep.pos.findClosestByRange(FIND_STRUCTURES, {
             filter: (s): s is StructureContainer =>
-                s.structureType === STRUCTURE_CONTAINER &&
-                s.store.getUsedCapacity(RESOURCE_ENERGY) > containerMinEnergy
+                s.structureType === STRUCTURE_CONTAINER && this.hasEnergy(s, creep)
         });
+        if (container) return container;
 
-        if (container) {
-            this.moveToAndWithdraw(creep, container);
-            return;
+        if (phase >= 4 && room.storage && this.hasEnergy(room.storage, creep)) {
+            return room.storage;
         }
 
-        // Try storage (phase 4+)
-        if (phase >= 4 && room.storage) {
-            if (room.storage.store.getUsedCapacity(RESOURCE_ENERGY) > ENERGY_THRESHOLDS.STORAGE_PULL) {
-                this.moveToAndWithdraw(creep, room.storage);
-                return;
-            }
-        }
-
-        // Try tombstones and ruins
-        const tombstone = creep.pos.findClosestByPath(FIND_TOMBSTONES, {
+        const tombstone = creep.pos.findClosestByRange(FIND_TOMBSTONES, {
             filter: t => t.store.getUsedCapacity(RESOURCE_ENERGY) > 0
         });
-        if (tombstone) {
-            this.moveToAndWithdraw(creep, tombstone as unknown as StructureContainer);
-            return;
-        }
+        if (tombstone) return tombstone;
 
-        const ruin = creep.pos.findClosestByPath(FIND_RUINS, {
+        const ruin = creep.pos.findClosestByRange(FIND_RUINS, {
             filter: r => r.store.getUsedCapacity(RESOURCE_ENERGY) > 0
         });
-        if (ruin) {
-            this.moveToAndWithdraw(creep, ruin as unknown as StructureContainer);
-            return;
-        }
+        if (ruin) return ruin;
 
         // Last resort: harvest directly (only if creep has WORK parts)
         if (creep.getActiveBodyparts(WORK) > 0) {
-            const source = creep.pos.findClosestByPath(FIND_SOURCES_ACTIVE);
-            if (source) {
-                this.moveToAndHarvest(creep, source);
-                return;
-            }
+            return creep.pos.findClosestByRange(FIND_SOURCES_ACTIVE);
         }
 
-        // Nothing available - wait near spawn for energy to become available
-        this.handleIdleCreep(creep);
+        return null;
+    }
+
+    /**
+     * Whether an energy source is still worth going to
+     */
+    private hasEnergy(source: EnergySource, creep: Creep): boolean {
+        if (source instanceof Resource) return source.amount > ENERGY_THRESHOLDS.DROPPED_MIN;
+        if (source instanceof Source) return source.energy > 0;
+        const energy = source.store.getUsedCapacity(RESOURCE_ENERGY);
+        if (source instanceof StructureContainer) {
+            // Lower threshold in early phases (0-2) so workers can use partially-filled containers
+            const phase = creep.room.memory.phase ?? 0;
+            return energy > (phase <= 2 ? 50 : ENERGY_THRESHOLDS.CONTAINER_MIN);
+        }
+        if (source instanceof StructureStorage) return energy > ENERGY_THRESHOLDS.STORAGE_PULL;
+        return energy > 0;
     }
 
     /**
@@ -307,33 +358,30 @@ class TaskExecutor {
             filter: s => s.structureType === STRUCTURE_CONTAINER
         })[0];
 
-        if (container) {
+        // Only one creep fits on the container: others harvest from an adjacent tile
+        const containerTaken = container && container.pos.lookFor(LOOK_CREEPS).some(c => c.name !== creep.name);
+
+        if (container && !containerTaken) {
             // Stand on container to harvest (static mining)
-            if (!creep.pos.isEqualTo(container.pos)) {
-                trafficManager.requestMove(creep, container.pos, { range: 0, priority: 5 });
-                return;
-            }
+            if (!this.approach(creep, container.pos, 0, { priority: 5 })) return;
 
             // Harvest and transfer to container
-            const harvestResult = creep.harvest(source);
+            const harvestResult = this.act(creep, creep.harvest(source));
             if (harvestResult === OK) {
                 // Track energy harvested (2 energy per WORK part per tick)
                 const workParts = creep.getActiveBodyparts(WORK);
                 metricsCollector.recordEnergyHarvested(creep.room.name, workParts * 2);
             }
             if (creep.store.getFreeCapacity() === 0) {
-                creep.transfer(container, RESOURCE_ENERGY);
+                this.act(creep, creep.transfer(container, RESOURCE_ENERGY));
             }
-        } else if (containerSite) {
+        } else if (containerSite && !containerSite.pos.lookFor(LOOK_CREEPS).some(c => c.name !== creep.name)) {
             // Stand on construction site while waiting
-            if (!creep.pos.isEqualTo(containerSite.pos)) {
-                trafficManager.requestMove(creep, containerSite.pos, { range: 0, priority: 5 });
-                return;
-            }
+            if (!this.approach(creep, containerSite.pos, 0, { priority: 5 })) return;
 
             // Harvest and drop on site (will be picked up after container built)
             if (creep.pos.isNearTo(source)) {
-                const harvestResult = creep.harvest(source);
+                const harvestResult = this.act(creep, creep.harvest(source));
                 if (harvestResult === OK) {
                     const workParts = creep.getActiveBodyparts(WORK);
                     metricsCollector.recordEnergyHarvested(creep.room.name, workParts * 2);
@@ -344,15 +392,15 @@ class TaskExecutor {
             }
         } else {
             // No container - find best position adjacent to source
-            if (creep.pos.isNearTo(source)) {
-                const harvestResult = creep.harvest(source);
+            if (this.approach(creep, source.pos, 1)) {
+                const harvestResult = this.act(creep, creep.harvest(source));
                 if (harvestResult === OK) {
                     const workParts = creep.getActiveBodyparts(WORK);
                     metricsCollector.recordEnergyHarvested(creep.room.name, workParts * 2);
                 }
 
-                // Drop energy when full (haulers will pick up)
-                if (creep.store.getFreeCapacity() === 0) {
+                // Drop energy when full (haulers will pick up). Creeps without CARRY drop as they harvest.
+                if (creep.store.getCapacity() > 0 && creep.store.getFreeCapacity() === 0) {
                     creep.drop(RESOURCE_ENERGY);
 
                     // In early game (Phase 0-1, no container), release worker for other tasks
@@ -363,8 +411,6 @@ class TaskExecutor {
                         return;
                     }
                 }
-            } else {
-                trafficManager.requestMove(creep, source.pos, { range: 1, visualize: true });
             }
         }
     }
@@ -391,8 +437,8 @@ class TaskExecutor {
             return;
         }
 
-        if (creep.pos.isNearTo(target)) {
-            const result = creep.transfer(target, RESOURCE_ENERGY);
+        if (this.approach(creep, target.pos, 1)) {
+            const result = this.act(creep, creep.transfer(target, RESOURCE_ENERGY));
             if (result === OK) {
                 // Check if task is complete
                 if (creep.store.getUsedCapacity(RESOURCE_ENERGY) === 0 ||
@@ -408,8 +454,6 @@ class TaskExecutor {
                     creep.memory.currentTask.state = "acquiring";
                 }
             }
-        } else {
-            trafficManager.requestMove(creep, target.pos, { range: 1, visualize: true });
         }
     }
 
@@ -417,8 +461,8 @@ class TaskExecutor {
      * Execute pickup task
      */
     private executePickup(creep: Creep, resource: Resource): void {
-        if (creep.pos.isNearTo(resource)) {
-            const result = creep.pickup(resource);
+        if (this.approach(creep, resource.pos, 1)) {
+            const result = this.act(creep, creep.pickup(resource));
             if (result === OK) {
                 // Only complete if we picked up everything or are full
                 if (!Game.getObjectById(resource.id) || creep.store.getFreeCapacity() === 0) {
@@ -431,8 +475,6 @@ class TaskExecutor {
                 // Resource is gone
                 this.completeTask(creep);
             }
-        } else {
-            trafficManager.requestMove(creep, resource.pos, { range: 1, visualize: true });
         }
     }
 
@@ -445,8 +487,8 @@ class TaskExecutor {
             return;
         }
 
-        if (creep.pos.isNearTo(target)) {
-            const result = creep.withdraw(target, RESOURCE_ENERGY);
+        if (this.approach(creep, target.pos, 1)) {
+            const result = this.act(creep, creep.withdraw(target, RESOURCE_ENERGY));
             if (result === OK) {
                 // Complete after successful withdraw
                 this.completeTask(creep);
@@ -457,8 +499,6 @@ class TaskExecutor {
                 // Container is empty
                 this.completeTask(creep);
             }
-        } else {
-            trafficManager.requestMove(creep, target.pos, { range: 1, visualize: true });
         }
     }
 
@@ -466,13 +506,11 @@ class TaskExecutor {
      * Execute build task
      */
     private executeBuild(creep: Creep, site: ConstructionSite): void {
-        if (creep.pos.inRangeTo(site, 3)) {
-            const result = creep.build(site);
+        if (this.approach(creep, site.pos, 3)) {
+            const result = this.act(creep, creep.build(site));
             if (result === ERR_NOT_ENOUGH_RESOURCES) {
                 creep.memory.currentTask!.state = "acquiring";
             }
-        } else {
-            trafficManager.requestMove(creep, site.pos, { range: 3, visualize: true });
         }
     }
 
@@ -504,15 +542,13 @@ class TaskExecutor {
             return;
         }
 
-        if (creep.pos.inRangeTo(structure, 3)) {
-            const result = creep.repair(structure);
+        if (this.approach(creep, structure.pos, 3)) {
+            const result = this.act(creep, creep.repair(structure));
             if (result === ERR_NOT_ENOUGH_RESOURCES) {
                 if (creep.memory.currentTask) {
                     creep.memory.currentTask.state = "acquiring";
                 }
             }
-        } else {
-            trafficManager.requestMove(creep, structure.pos, { range: 3, visualize: true });
         }
     }
 
@@ -538,13 +574,11 @@ class TaskExecutor {
      * Execute upgrade task
      */
     private executeUpgrade(creep: Creep, controller: StructureController): void {
-        if (creep.pos.inRangeTo(controller, 3)) {
-            const result = creep.upgradeController(controller);
+        if (this.approach(creep, controller.pos, 3)) {
+            const result = this.act(creep, creep.upgradeController(controller));
             if (result === ERR_NOT_ENOUGH_RESOURCES) {
                 creep.memory.currentTask!.state = "acquiring";
             }
-        } else {
-            trafficManager.requestMove(creep, controller.pos, { range: 3, visualize: true });
         }
     }
 
@@ -552,10 +586,8 @@ class TaskExecutor {
      * Execute attack task
      */
     private executeAttack(creep: Creep, target: Creep): void {
-        if (creep.pos.isNearTo(target)) {
-            creep.attack(target);
-        } else {
-            trafficManager.requestMove(creep, target.pos, { range: 1, combat: true, reusePath: 3 });
+        if (this.approach(creep, target.pos, 1)) {
+            this.act(creep, creep.attack(target));
         }
     }
 
@@ -565,14 +597,12 @@ class TaskExecutor {
      */
     private executeDefendRampart(creep: Creep, rampart: StructureRampart): void {
         // Move to rampart position
-        if (!creep.pos.isEqualTo(rampart.pos)) {
-            trafficManager.requestMove(creep, rampart.pos, { range: 0, combat: true, priority: 0 });
-        }
+        this.approach(creep, rampart.pos, 0, { combat: true, priority: 0 });
 
         // Attack any adjacent hostiles
         const hostile = creep.pos.findInRange(FIND_HOSTILE_CREEPS, 1)[0];
         if (hostile) {
-            creep.attack(hostile);
+            this.act(creep, creep.attack(hostile));
         }
 
         // Also use ranged attack if available
@@ -581,7 +611,7 @@ class TaskExecutor {
             if (creep.pos.getRangeTo(rangedHostile) === 1) {
                 creep.rangedMassAttack();
             } else {
-                creep.rangedAttack(rangedHostile);
+                this.act(creep, creep.rangedAttack(rangedHostile));
             }
         }
 
@@ -612,14 +642,11 @@ class TaskExecutor {
         }
 
         // Move to controller if not in range
-        if (!creep.pos.isNearTo(controller)) {
-            trafficManager.requestMove(creep, controller.pos, { range: 1, reusePath: 20, visualize: true });
-            return;
-        }
+        if (!this.approach(creep, controller.pos, 1)) return;
 
         // Execute the action
         if (taskType === TaskType.CLAIM_ROOM) {
-            const result = creep.claimController(controller);
+            const result = this.act(creep, creep.claimController(controller));
             if (result === OK) {
                 log.info("TaskExecutor", `Claimed controller in ${targetRoomName}`);
                 this.completeTask(creep);
@@ -633,7 +660,7 @@ class TaskExecutor {
             }
         } else {
             // RESERVE_ROOM
-            const result = creep.reserveController(controller);
+            const result = this.act(creep, creep.reserveController(controller));
             if (result === OK) {
                 // Keep reserving until creep dies or task expires
                 // Don't complete the task - reservation needs to be maintained
@@ -657,13 +684,8 @@ class TaskExecutor {
         }
 
         // Move to spawn if not adjacent
-        if (!creep.pos.isNearTo(spawn)) {
-            trafficManager.requestMove(creep, spawn.pos, {
-                range: 1,
-                priority: 90  // Low priority - don't block important moves
-            });
-            return;
-        }
+        // Low priority - don't block important moves
+        if (!this.approach(creep, spawn.pos, 1, { priority: 90 })) return;
 
         // Attempt to recycle
         const result = spawn.recycleCreep(creep);
@@ -672,12 +694,9 @@ class TaskExecutor {
             // Creep will be removed from game - no need to complete task
         } else if (result === ERR_BUSY) {
             // Spawn is busy spawning - wait
-        } else if (result === ERR_NOT_IN_RANGE) {
-            // Should not happen since we checked isNearTo, but handle it
-            trafficManager.requestMove(creep, spawn.pos, { range: 1, priority: 90 });
         } else {
             log.warn("TaskExecutor", `Failed to recycle ${creep.name}: ${result}`);
-            this.failTask(creep, { id: creep.memory.currentTask!.taskId, type: TaskType.RECYCLE_CREEP });
+            this.failTask(creep, { id: creep.memory.currentTask!.taskId, type: TaskType.RECYCLE_CREEP }, "recycle");
         }
     }
 
@@ -685,17 +704,7 @@ class TaskExecutor {
      * Move creep to a different room
      */
     private moveToRoom(creep: Creep, targetRoom: string): void {
-        const exitDir = creep.room.findExitTo(targetRoom);
-        if (exitDir === ERR_NO_PATH || exitDir === ERR_INVALID_ARGS) {
-            log.warn("TaskExecutor", `No path from ${creep.room.name} to ${targetRoom}`);
-            return;
-        }
-
-        // exitDir is now guaranteed to be ExitConstant (FIND_EXIT_TOP, etc.)
-        const exit = creep.pos.findClosestByRange(exitDir) as RoomPosition | null;
-        if (exit) {
-            trafficManager.requestMove(creep, exit, { range: 0, reusePath: 20, visualize: true });
-        }
+        trafficManager.requestMove(creep, new RoomPosition(25, 25, targetRoom), { range: 20 });
     }
 
     /**
@@ -712,27 +721,17 @@ class TaskExecutor {
         if (!spawn) {
             // No spawn in room - stay near controller if we own it
             if (creep.room.controller?.my) {
-                if (!creep.pos.inRangeTo(creep.room.controller, 5)) {
-                    trafficManager.requestMove(creep, creep.room.controller.pos, { range: 5, priority: 100 });
-                }
+                trafficManager.requestMove(creep, creep.room.controller.pos, { range: 5, priority: 100 });
             }
             return;
         }
 
-        // Find an idle position to move to
+        // Park on an idle spot; the traffic reconciler shoves idle creeps out of the way when needed
         const idlePos = trafficManager.findIdlePosition(creep);
-        if (idlePos && !creep.pos.isEqualTo(idlePos)) {
+        if (idlePos) {
             trafficManager.requestMove(creep, idlePos, { range: 0, priority: 100 });
-        } else if (!creep.pos.inRangeTo(spawn, 5)) {
-            // Move towards spawn if no idle position found
-            trafficManager.requestMove(creep, spawn.pos, { range: 3, priority: 100 });
-        } else if (creep.pos.isNearTo(spawn) && Game.time % 5 === 0) {
-            // Occasionally move away from spawn to avoid blocking
-            const directions: DirectionConstant[] = [
-                TOP, TOP_RIGHT, RIGHT, BOTTOM_RIGHT, BOTTOM, BOTTOM_LEFT, LEFT, TOP_LEFT
-            ];
-            const direction = directions[Math.floor(Math.random() * directions.length)];
-            creep.move(direction);
+        } else {
+            trafficManager.requestMove(creep, spawn.pos, { range: 5, priority: 100 });
         }
     }
 
@@ -747,6 +746,7 @@ class TaskExecutor {
         if (taskRoom) {
             taskDispatcher.updateTaskStatus(taskRoom, taskState.taskId, TaskStatus.COMPLETED);
         }
+        countStat("taskCompleted");
 
         delete creep.memory.currentTask;
     }
@@ -768,11 +768,9 @@ class TaskExecutor {
     /**
      * Helper: Move to and withdraw from structure
      */
-    private moveToAndWithdraw(creep: Creep, target: StructureContainer | StructureStorage): void {
-        if (creep.pos.isNearTo(target)) {
-            creep.withdraw(target, RESOURCE_ENERGY);
-        } else {
-            trafficManager.requestMove(creep, target.pos, { range: 1 });
+    private moveToAndWithdraw(creep: Creep, target: StructureContainer | StructureStorage | Tombstone | Ruin): void {
+        if (this.approach(creep, target.pos, 1)) {
+            this.act(creep, creep.withdraw(target, RESOURCE_ENERGY));
         }
     }
 
@@ -780,10 +778,8 @@ class TaskExecutor {
      * Helper: Move to and pickup resource
      */
     private moveToAndPickup(creep: Creep, target: Resource): void {
-        if (creep.pos.isNearTo(target)) {
-            creep.pickup(target);
-        } else {
-            trafficManager.requestMove(creep, target.pos, { range: 1 });
+        if (this.approach(creep, target.pos, 1)) {
+            this.act(creep, creep.pickup(target));
         }
     }
 
@@ -791,14 +787,12 @@ class TaskExecutor {
      * Helper: Move to and harvest source
      */
     private moveToAndHarvest(creep: Creep, source: Source): void {
-        if (creep.pos.isNearTo(source)) {
-            const result = creep.harvest(source);
+        if (this.approach(creep, source.pos, 1)) {
+            const result = this.act(creep, creep.harvest(source));
             if (result === OK) {
                 const workParts = creep.getActiveBodyparts(WORK);
                 metricsCollector.recordEnergyHarvested(creep.room.name, workParts * 2);
             }
-        } else {
-            trafficManager.requestMove(creep, source.pos, { range: 1 });
         }
     }
 }

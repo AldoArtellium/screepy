@@ -15,6 +15,17 @@ import {
 import { ENERGY_THRESHOLDS, shouldRecycleCreep } from "../utils/creepUtils";
 import { log } from "../utils/logger";
 
+/** Build order within BUILD_STRUCTURE tasks (lower = sooner) */
+const BUILD_PRIORITY_OFFSETS: Partial<Record<BuildableStructureConstant, number>> = {
+    [STRUCTURE_SPAWN]: -10,
+    [STRUCTURE_EXTENSION]: -5,
+    [STRUCTURE_TOWER]: -5,
+    [STRUCTURE_STORAGE]: -3,
+    [STRUCTURE_ROAD]: 5,
+    [STRUCTURE_RAMPART]: 5,
+    [STRUCTURE_WALL]: 8
+};
+
 class TaskGenerator {
     /**
      * Generate tasks for a room
@@ -99,16 +110,14 @@ class TaskGenerator {
                 }
             }
 
-            // Remove assigned tasks if assignee is dead
-            if (task.assignedTo && !Game.creeps[task.assignedTo]) {
-                task.status = TaskStatus.PENDING;
-                delete task.assignedTo;
-            }
-
-            // Remove in-progress tasks that have been running too long (stuck)
-            if (task.status === TaskStatus.IN_PROGRESS && now - task.createdAt > 300) {
-                task.status = TaskStatus.PENDING;
-                delete task.assignedTo;
+            // Release tasks whose assignee is dead or no longer holds them.
+            // (Timeouts are handled per creep by TaskExecutor, from the assignment tick.)
+            if (task.status === TaskStatus.ASSIGNED || task.status === TaskStatus.IN_PROGRESS) {
+                const assignee = task.assignedTo ? Game.creeps[task.assignedTo] : undefined;
+                if (!assignee || assignee.memory.currentTask?.taskId !== task.id) {
+                    task.status = TaskStatus.PENDING;
+                    delete task.assignedTo;
+                }
             }
 
             return true;
@@ -327,16 +336,16 @@ class TaskGenerator {
                      t.status !== TaskStatus.FAILED
             );
 
-            // Check if source has a container (static mining)
-            const hasContainer = source.pos.findInRange(FIND_STRUCTURES, 1, {
-                filter: s => s.structureType === STRUCTURE_CONTAINER
-            }).length > 0;
+            // Add harvesters until the source is drained (5 WORK), within its free tiles,
+            // one pending task at a time so idle creeps don't all rush the same source
+            const assignedWork = _.sum(existingTasks, t => {
+                const creep = t.assignedTo ? Game.creeps[t.assignedTo] : undefined;
+                return creep ? creep.getActiveBodyparts(WORK) : 0;
+            });
+            const hasPending = existingTasks.some(t => t.status === TaskStatus.PENDING);
+            const maxHarvesters = Math.min(this.getSourceAccessPositions(source), phase >= 1 ? 3 : 8);
 
-            // For static mining (phase 1+), only need 1 miner per source
-            // For early game (phase 0), allow multiple miners
-            const maxMiners = (hasContainer || phase >= 1) ? 1 : this.getSourceAccessPositions(source);
-
-            if (existingTasks.length >= maxMiners) continue;
+            if (hasPending || assignedWork >= 5 || existingTasks.length >= maxHarvesters) continue;
 
             // Priority boost if source has lots of energy and no miner
             const priorityBoost = (source.energy > 2000 && existingTasks.length === 0) ? -5 : 0;
@@ -393,7 +402,8 @@ class TaskGenerator {
                 category: TaskCategory.BUILD,
                 targetId: site.id,
                 roomName: room.name,
-                priority: getEffectivePriority(TaskType.BUILD_STRUCTURE, false),
+                priority: getEffectivePriority(TaskType.BUILD_STRUCTURE, false) +
+                    (BUILD_PRIORITY_OFFSETS[site.structureType] ?? 0),
                 status: TaskStatus.PENDING,
                 createdAt: Game.time,
                 data: {
@@ -563,8 +573,6 @@ class TaskGenerator {
         };
         const maxUpgraders = maxUpgradersByPhase[phase] ?? 3;
 
-        if (existingTasks.length >= maxUpgraders) return;
-
         // Check for controller downgrade risk
         const ticksToDowngrade = controller.ticksToDowngrade ?? 20000;
         const downgradeRisk = ticksToDowngrade < 5000;
@@ -572,12 +580,27 @@ class TaskGenerator {
         // Priority boost if at risk of downgrade
         const priorityBoost = downgradeRisk ? -20 : 0;
 
-        // Priority boost at early RCL or phase to ensure upgrading happens
-        // Without this, upgrade tasks (priority 55) never get assigned because
-        // spawn filling (10) and building (45) always take precedence
-        // At phase 2, with limited harvest tasks (1 per source), workers need
-        // upgrade tasks to have something productive to do
-        const rclBoost = (controller.level < 2 || phase <= 2) ? EARLY_PHASE_UPGRADE_BOOST : 0;
+        // One steady upgrader: without a boost, upgrade tasks (55) never get assigned because
+        // filling (10-15) and building (40-45) always take precedence. Only that one is boosted
+        // (all of them at RCL 1): the others must come after building, or extensions never get built.
+        const steadyPriority = getEffectivePriority(TaskType.UPGRADE_CONTROLLER, false) + priorityBoost +
+            EARLY_PHASE_UPGRADE_BOOST;
+        const hasActiveUpgrader = existingTasks.some(
+            t => t.status === TaskStatus.ASSIGNED || t.status === TaskStatus.IN_PROGRESS
+        );
+        const pending = existingTasks
+            .filter(t => t.status === TaskStatus.PENDING)
+            .sort((a, b) => a.priority - b.priority);
+        if (!hasActiveUpgrader && pending.length > 0) {
+            // Promote an existing pending task instead of waiting for a new boosted one
+            pending[0].priority = Math.min(pending[0].priority, steadyPriority);
+        }
+
+        if (existingTasks.length >= maxUpgraders) return;
+
+        const rclBoost = controller.level < 2 || (!hasActiveUpgrader && pending.length === 0)
+            ? EARLY_PHASE_UPGRADE_BOOST
+            : 0;
 
         this.addTask(room, {
             id: generateTaskId(TaskType.UPGRADE_CONTROLLER, controller.id),
@@ -609,7 +632,9 @@ class TaskGenerator {
             if (creep.memory.currentTask?.type === TaskType.RECYCLE_CREEP) continue;
 
             // Skip if there's already a pending recycle task for this creep
-            if (this.hasExistingTask(room, TaskType.RECYCLE_CREEP, creep.id)) continue;
+            // (recycle tasks target the spawn, the creep is in data.creepId)
+            const queue = room.memory.taskQueue ?? [];
+            if (queue.some(t => t.type === TaskType.RECYCLE_CREEP && t.data?.creepId === creep.id)) continue;
 
             log.info("TaskGenerator", `Creating recycle task for damaged creep ${creep.name} (${creep.hits}/${creep.hitsMax} HP)`);
 

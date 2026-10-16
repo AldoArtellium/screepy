@@ -100,3 +100,5 @@ applicationhost.config
 *.suo
 *.njsproj
 *.sln
+# Local server test reports
+/test-results

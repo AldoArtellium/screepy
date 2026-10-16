@@ -8,9 +8,16 @@
  * - Scout routing optimization
  */
 
-import { BodyType } from "../config/bodyTypes";
 import { intelManager } from "./IntelManager";
 import { log } from "../utils/logger";
+import { trafficManager } from "./TrafficManager";
+import { spawnManager } from "./SpawnManager";
+import { registerRole } from "../roles/registry";
+
+const SCOUT_ROLE = "scout";
+
+/** After the economy (workers 1, transports 2) */
+const SCOUT_SPAWN_PRIORITY = 4;
 
 /** Scout configuration */
 const SCOUT_CONFIG = {
@@ -39,70 +46,40 @@ class ScoutManager {
             this.manageRoomScouts(room);
         }
 
-        // Run existing scouts
-        this.runScouts();
     }
 
     /**
-     * Manage scouts for a specific room
+     * Manage scouts for a specific room: request one through SpawnManager when needed
      */
     private manageRoomScouts(room: Room): void {
-        // Count existing scouts for this room
-        const scouts = _.filter(Game.creeps, c =>
-            c.memory.bodyType === BodyType.SCOUT &&
-            c.memory.room === room.name
-        );
+        const scouts = _.filter(Game.creeps, c => c.memory.role === SCOUT_ROLE && c.memory.room === room.name);
+        if (scouts.length > 0) {
+            // Cooldown counts from the last tick a scout was alive
+            room.memory.lastScoutSpawn = Game.time;
+            if (scouts.length >= SCOUT_CONFIG.MAX_SCOUTS_PER_ROOM) return;
+        }
 
-        if (scouts.length >= SCOUT_CONFIG.MAX_SCOUTS_PER_ROOM) return;
-
-        // Check spawn cooldown
         const lastSpawn = room.memory.lastScoutSpawn ?? 0;
         if (Game.time - lastSpawn < SCOUT_CONFIG.SPAWN_COOLDOWN) return;
 
-        // Check if there are rooms to scout
         const roomsToScout = intelManager.getRoomsNeedingScouting(room.name, SCOUT_CONFIG.SCOUT_RANGE);
         if (roomsToScout.length === 0) return;
 
-        // Request scout spawn
-        this.requestScout(room);
-    }
-
-    /**
-     * Request a scout spawn
-     */
-    private requestScout(room: Room): void {
-        // This integrates with SpawnManager through the demand system
-        // For scouts, we just check if we need one and set a flag
-
-        // Store scout request in room memory
-        if (!room.memory.scoutRequest) {
-            room.memory.scoutRequest = {
-                requested: Game.time,
-                targetRooms: intelManager.getRoomsNeedingScouting(room.name, SCOUT_CONFIG.SCOUT_RANGE).slice(0, 5)
-            };
-            log.debug("ScoutManager", `${room.name}: Requested scout for ${room.memory.scoutRequest.targetRooms.length} rooms`);
-        }
-    }
-
-    /**
-     * Run all scout creeps
-     */
-    private runScouts(): void {
-        for (const name in Game.creeps) {
-            const creep = Game.creeps[name];
-            if (creep.memory.bodyType !== BodyType.SCOUT) continue;
-            if (creep.spawning) continue;
-
-            this.runScout(creep);
-        }
+        spawnManager.requestSpawn({
+            id: `scout-${room.name}`,
+            roomName: room.name,
+            body: [MOVE],
+            priority: SCOUT_SPAWN_PRIORITY,
+            memory: { role: SCOUT_ROLE, room: room.name }
+        });
     }
 
     /**
      * Run individual scout behavior
      */
-    private runScout(scout: Creep): void {
+    runScout(scout: Creep): void {
         // Get or assign target room
-        if (!scout.memory.targetRoom) {
+        if (!scout.memory.scoutTarget) {
             const homeRoom = scout.memory.room ?? scout.room.name;
             const roomsToScout = intelManager.getRoomsNeedingScouting(homeRoom, SCOUT_CONFIG.SCOUT_RANGE);
 
@@ -119,35 +96,27 @@ class ScoutManager {
                 return distA - distB;
             });
 
-            scout.memory.targetRoom = sorted[0];
-            log.debug("ScoutManager", `Scout ${scout.name} assigned to ${scout.memory.targetRoom}`);
+            scout.memory.scoutTarget = sorted[0];
+            log.debug("ScoutManager", `Scout ${scout.name} assigned to ${scout.memory.scoutTarget}`);
         }
 
-        const targetRoom = scout.memory.targetRoom;
+        const targetRoom = scout.memory.scoutTarget;
 
         // If in target room, we're done scouting it
         if (scout.room.name === targetRoom) {
             // Intel is recorded automatically by IntelManager
             log.debug("ScoutManager", `Scout ${scout.name} completed scouting ${targetRoom}`);
-            delete scout.memory.targetRoom;
+            delete scout.memory.scoutTarget;
             return;
         }
 
         // Move towards target room
-        const exitDir = scout.room.findExitTo(targetRoom);
-        if (exitDir === ERR_NO_PATH || exitDir === ERR_INVALID_ARGS) {
+        if (Game.map.findRoute(scout.room.name, targetRoom) === ERR_NO_PATH) {
             log.warn("ScoutManager", `Scout ${scout.name} cannot path to ${targetRoom}`);
-            delete scout.memory.targetRoom;
+            delete scout.memory.scoutTarget;
             return;
         }
-
-        const exit = scout.pos.findClosestByRange(exitDir as FindConstant);
-        if (exit) {
-            scout.moveTo(exit, {
-                reusePath: 20,
-                visualizePathStyle: { stroke: "#00ffff", opacity: 0.3 }
-            });
-        }
+        trafficManager.moveToRoom(scout, targetRoom, { priority: 80 });
     }
 
     /**
@@ -159,64 +128,27 @@ class ScoutManager {
 
         // Return to home room if not there
         if (scout.room.name !== homeRoom) {
-            const exitDir = scout.room.findExitTo(homeRoom);
-            if (exitDir !== ERR_NO_PATH && exitDir !== ERR_INVALID_ARGS) {
-                const exit = scout.pos.findClosestByRange(exitDir as FindConstant);
-                if (exit) {
-                    scout.moveTo(exit);
-                }
-            }
+            trafficManager.moveToRoom(scout, homeRoom, { priority: 80 });
             return;
         }
 
         // In home room - move near spawn
         const spawn = scout.room.find(FIND_MY_SPAWNS)[0];
-        if (spawn && !scout.pos.inRangeTo(spawn, 5)) {
-            scout.moveTo(spawn);
+        if (spawn) {
+            trafficManager.requestMove(scout, spawn, { range: 5, priority: 100 });
         }
-    }
-
-    /**
-     * Check if a room needs scouts spawned
-     */
-    needsScout(roomName: string): boolean {
-        const room = Game.rooms[roomName];
-        if (!room?.controller?.my) return false;
-
-        const phase = room.memory.phase ?? 0;
-        if (phase < SCOUT_CONFIG.MIN_PHASE) return false;
-
-        const scouts = _.filter(Game.creeps, c =>
-            c.memory.bodyType === BodyType.SCOUT &&
-            c.memory.room === roomName
-        );
-
-        if (scouts.length >= SCOUT_CONFIG.MAX_SCOUTS_PER_ROOM) return false;
-
-        const roomsToScout = intelManager.getRoomsNeedingScouting(roomName, SCOUT_CONFIG.SCOUT_RANGE);
-        return roomsToScout.length > 0;
-    }
-
-    /**
-     * Get scout body for spawning
-     */
-    getScoutBody(): BodyPartConstant[] {
-        return [MOVE]; // Scouts are just single MOVE parts
     }
 }
 
 // Extend CreepMemory for scout-specific fields
 declare global {
     interface CreepMemory {
-        targetRoom?: string;
+        /** Room the scout is heading to */
+        scoutTarget?: string;
     }
 
     interface RoomMemory {
         lastScoutSpawn?: number;
-        scoutRequest?: {
-            requested: number;
-            targetRooms: string[];
-        };
     }
 }
 
@@ -228,3 +160,5 @@ export const scoutManagerModule = () => {
 };
 
 export const scoutManager = scoutManagerInstance;
+
+registerRole(SCOUT_ROLE, creep => scoutManagerInstance.runScout(creep));

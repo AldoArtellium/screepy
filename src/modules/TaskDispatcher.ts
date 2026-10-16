@@ -34,9 +34,11 @@ class TaskDispatcher {
         // First, handle recycle tasks specially (can interrupt busy creeps)
         this.dispatchRecycleTasks(room, pendingTasks);
 
-        // Find idle creeps (no current task)
+        // Find idle creeps (no current task). Creeps bound to another room take tasks
+        // from that room only (see dispatchCrossRoomTasks), matching TaskExecutor's lookup.
         const idleCreeps = room.find(FIND_MY_CREEPS, {
-            filter: c => !c.spawning && !c.memory.currentTask
+            filter: c => !c.spawning && !c.memory.currentTask && !c.memory.role &&
+                (!c.memory.targetRoom || c.memory.targetRoom === room.name)
         });
 
         if (idleCreeps.length === 0) return;
@@ -93,9 +95,6 @@ class TaskDispatcher {
      * Find the best creep for a task based on capability and proximity
      */
     private findBestCreepForTask(task: Task, creeps: Creep[]): Creep | null {
-        // Category computed for potential future use in task filtering
-        getTaskCategory(task.type);
-
         let bestCreep: Creep | null = null;
         let bestScore = -Infinity;
 
@@ -357,6 +356,7 @@ class TaskDispatcher {
         const crossRoomCreeps = _.filter(Game.creeps, c =>
             !c.spawning &&
             !c.memory.currentTask &&
+            !c.memory.role &&
             c.memory.targetRoom
         );
 

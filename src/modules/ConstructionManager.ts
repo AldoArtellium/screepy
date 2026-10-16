@@ -30,18 +30,23 @@ class ConstructionManager {
 
         if (activeSites >= this.MAX_CONSTRUCTION_SITES) return;
 
+        // Extensions first (RCL 2+, out of emergency): they unlock bigger bodies and
+        // are cheaper (3000) than source containers (5000 each), so don't gate them on containers
+        if (phase >= 1 && rcl >= 2) {
+            this.planExtensions(room);
+        }
+
         // Phase 1+: Plan source containers
         if (phase >= 1) {
             this.planSourceContainers(room);
         }
 
-        // Phase 2+: Plan extensions
-        if (phase >= 2 && rcl >= 2) {
-            this.planExtensions(room);
-        }
-
-        // Phase 3+: Plan roads
-        if (phase >= 3 && rcl >= 3) {
+        // Roads spawn <-> sources <-> controller from RCL 2: without them haulers spend
+        // their life walking (swamps cost 5x). Extension sites are placed first (above) and
+        // built first (road build priority offset +5).
+        // Memory.config.earlyRoads = false restores the old gating (phase 3, RCL 3) for A/B tests.
+        const earlyRoads = Memory.config?.earlyRoads !== false;
+        if (earlyRoads ? phase >= 1 && rcl >= 2 : phase >= 3 && rcl >= 3) {
             this.planRoads(room);
         }
 

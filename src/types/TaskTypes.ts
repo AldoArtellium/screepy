@@ -175,9 +175,11 @@ export interface CreepTaskState {
     targetId: string;
     state: "acquiring" | "executing" | "returning";
     startedAt: number;
-    /** Last position for stuck detection */
-    lastPos?: { x: number; y: number };
-    /** Ticks spent at same position */
+    /** Last tick a creep action succeeded (timeout is measured from it) */
+    lastProgress?: number;
+    /** Energy source picked while acquiring (cached until depleted) */
+    energySourceId?: string;
+    /** Ticks spent wanting to move without moving */
     stuckTicks?: number;
     /** Number of times this task has been retried */
     retryCount?: number;

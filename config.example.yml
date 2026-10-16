@@ -5,7 +5,12 @@ pinnedPackages:
   passport-steam: 1.0.17
   minipass-fetch: 2.1.2
   express-rate-limit: 6.7.0
+  # 2.9+ crashes at load with screepsmod-mongo (config.mongo.client undefined)
+  screepsmod-auth: 2.8.3
 version: latest
+# Few active rooms: fewer processors = less redis coordination per tick (faster local tests)
+processors: 2
+runnerThreads: 2
 mods:
 - screepsmod-mongo
 - screepsmod-auth
@@ -14,6 +19,8 @@ bots:
   simplebot: "screepsbot-zeswarm"
 extraPackages:
   morgan: "*"
+  # Pin (see pinnedPackages): 2.9+ crashes at load
+  screepsmod-auth: "2.8.3"
 localMods: ./mods
 backup:
   dirs:

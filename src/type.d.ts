@@ -36,7 +36,43 @@ declare global {
         // Player username
         username?: string;
         // Module state for CPU optimization (skip tracking, lastRun persistence)
-        moduleState?: { [name: string]: { lastRun: number; consecutiveSkips: number } };
+        moduleState?: { [name: string]: ModuleState };
+        // Last module errors (ring buffer, read by the local test harness)
+        moduleErrors?: { tick: number; module: string; message: string }[];
+        // Bot stats for the local test harness
+        stats?: BotStats;
+        // Runtime feature switches (set from the console or the test harness --memory option)
+        config?: { staticMiners?: boolean; earlyRoads?: boolean };
+    }
+
+    interface BotStats {
+        tick: number;
+        cpu: number;
+        cpuAvg: number;
+        cpuMax: number;
+        bucket: number;
+        counters: { [name: string]: number };
+        rooms: {
+            [roomName: string]: {
+                rcl: number;
+                progress: number;
+                phase: number;
+                energyAvailable: number;
+                energyCapacity: number;
+                creeps: number;
+                idleCreeps: number;
+                pendingTasks: number;
+                structures: number;
+                constructionSites: number;
+            };
+        };
+    }
+
+    interface ModuleState {
+        lastRun: number;
+        consecutiveSkips: number;
+        sleepUntil?: number;
+        avgCpu?: number;
     }
 
     interface CreepMemory {

@@ -11,6 +11,7 @@
 
 import { intelManager } from "./IntelManager";
 import { log } from "../utils/logger";
+import { trafficManager } from "./TrafficManager";
 
 /** Attack operation types */
 export enum AttackType {
@@ -532,15 +533,15 @@ class CombatManager {
                 creep.heal(target);
             } else if (creep.pos.inRangeTo(target, 3)) {
                 creep.rangedHeal(target);
-                creep.moveTo(target);
+                trafficManager.requestMove(creep, target, { combat: true });
             } else {
-                creep.moveTo(target);
+                trafficManager.requestMove(creep, target, { combat: true });
             }
         } else if (alliedCreeps.length > 0) {
             // Follow closest ally
             const closest = creep.pos.findClosestByRange(alliedCreeps);
             if (closest && !creep.pos.isNearTo(closest)) {
-                creep.moveTo(closest);
+                trafficManager.requestMove(creep, closest, { combat: true });
             }
             // Pre-heal self
             creep.heal(creep);
@@ -555,14 +556,14 @@ class CombatManager {
             if (creep.pos.isNearTo(target)) {
                 creep.dismantle(target);
             } else {
-                creep.moveTo(target);
+                trafficManager.requestMove(creep, target, { combat: true });
             }
         } else {
             // Attack creeps if no structures
             if (creep.pos.isNearTo(target)) {
                 creep.attack(target);
             } else {
-                creep.moveTo(target);
+                trafficManager.requestMove(creep, target, { combat: true });
             }
         }
     }
@@ -574,7 +575,7 @@ class CombatManager {
         if (creep.pos.isNearTo(target)) {
             creep.attack(target);
         } else {
-            creep.moveTo(target);
+            trafficManager.requestMove(creep, target, { combat: true });
         }
     }
 
@@ -666,15 +667,7 @@ class CombatManager {
      * Move creep to a different room
      */
     private moveToRoom(creep: Creep, targetRoom: string): void {
-        const exitDir = creep.room.findExitTo(targetRoom);
-        if (exitDir === ERR_NO_PATH || exitDir === ERR_INVALID_ARGS) {
-            return;
-        }
-
-        const exit = creep.pos.findClosestByRange(exitDir as FindConstant) as RoomPosition | null;
-        if (exit) {
-            creep.moveTo(exit);
-        }
+        trafficManager.moveToRoom(creep, targetRoom, { combat: true });
     }
 
     /**

@@ -9,17 +9,16 @@
  * - Multi-room resource management
  */
 
-import { BodyType } from "../config/bodyTypes";
 import { intelManager, RoomIntel } from "./IntelManager";
-import {
-    generateTaskId,
-    getEffectivePriority,
-    Task,
-    TaskCategory,
-    TaskStatus,
-    TaskType
-} from "../types/TaskTypes";
 import { log } from "../utils/logger";
+import { trafficManager } from "./TrafficManager";
+import { spawnManager } from "./SpawnManager";
+import { registerRole } from "../roles/registry";
+
+const CLAIMER_ROLE = "claimer";
+
+/** After the base economy, before remotes */
+const CLAIMER_SPAWN_PRIORITY = 2.4;
 
 /** Expansion configuration */
 const EXPANSION_CONFIG = {
@@ -81,9 +80,6 @@ class ExpansionManager {
 
         // Process active expansion targets
         this.processExpansionTargets();
-
-        // Run claimers
-        this.runClaimers();
     }
 
     /**
@@ -269,12 +265,9 @@ class ExpansionManager {
         // Check if we still can expand
         if (!this.canExpand()) return;
 
-        // Check if we already have a claimer
-        const existingClaimers = _.filter(Game.creeps, c =>
-            c.memory.bodyType === BodyType.CLAIM
-        );
-
-        if (existingClaimers.length >= EXPANSION_CONFIG.MAX_CLAIMERS) return;
+        // Limit simultaneous claims
+        const claiming = Memory.expansion!.targets.filter(t => t.status === "claiming").length;
+        if (claiming >= EXPANSION_CONFIG.MAX_CLAIMERS) return;
 
         // Verify the room is still valid
         const intel = intelManager.getIntel(target.roomName);
@@ -283,46 +276,13 @@ class ExpansionManager {
             return;
         }
 
-        // Request claimer spawn
         const parentRoom = Game.rooms[target.parentRoom];
-        if (!parentRoom) return;
-
-        // Create claim task
-        this.createClaimTask(parentRoom, target);
+        if (!parentRoom?.controller?.my) return;
 
         target.status = "claiming";
         target.startedAt = Game.time;
 
         log.info("ExpansionManager", `Starting expansion to ${target.roomName} from ${target.parentRoom}`);
-    }
-
-    /**
-     * Create a CLAIM_ROOM task
-     */
-    private createClaimTask(parentRoom: Room, target: ExpansionTarget): void {
-        if (!parentRoom.memory.taskQueue) {
-            parentRoom.memory.taskQueue = [];
-        }
-
-        // Create a virtual target ID using room name
-        const targetId = `controller-${target.roomName}` as Id<StructureController>;
-
-        const task: Task = {
-            id: generateTaskId(TaskType.CLAIM_ROOM, targetId),
-            type: TaskType.CLAIM_ROOM,
-            category: TaskCategory.CLAIM,
-            targetId,
-            roomName: target.roomName,
-            priority: getEffectivePriority(TaskType.CLAIM_ROOM, false),
-            status: TaskStatus.PENDING,
-            createdAt: Game.time,
-            expiresAt: Game.time + 1500, // Claim parts last 600 ticks
-            data: {
-                targetPos: { x: 25, y: 25 } // Center of room as placeholder
-            }
-        };
-
-        parentRoom.memory.taskQueue.push(task);
     }
 
     /**
@@ -342,6 +302,21 @@ class ExpansionManager {
             log.warn("ExpansionManager", `Claim attempt for ${target.roomName} timed out`);
             target.status = "pending";
             target.startedAt = 0;
+            return;
+        }
+
+        // Keep a claimer on its way (requests renew while none is alive)
+        const claimer = _.find(Game.creeps, c =>
+            c.memory.role === CLAIMER_ROLE && c.memory.claimTarget === target.roomName
+        );
+        if (!claimer) {
+            spawnManager.requestSpawn({
+                id: `${CLAIMER_ROLE}-${target.roomName}`,
+                roomName: target.parentRoom,
+                body: [CLAIM, MOVE],
+                priority: CLAIMER_SPAWN_PRIORITY,
+                memory: { role: CLAIMER_ROLE, room: target.parentRoom, claimTarget: target.roomName }
+            });
         }
     }
 
@@ -483,40 +458,18 @@ class ExpansionManager {
     }
 
     /**
-     * Run claimer creeps
-     */
-    private runClaimers(): void {
-        for (const name in Game.creeps) {
-            const creep = Game.creeps[name];
-            if (creep.memory.bodyType !== BodyType.CLAIM) continue;
-            if (creep.spawning) continue;
-
-            this.runClaimer(creep);
-        }
-    }
-
-    /**
      * Run individual claimer behavior
      */
-    private runClaimer(creep: Creep): void {
-        // Find target room from expansion targets
-        const target = Memory.expansion?.targets.find(t =>
-            t.status === "claiming" && !t.claimerId
-        );
-
-        if (!target) {
-            // No target - assigned claimer behavior
-            if (creep.memory.targetRoom) {
-                this.moveToClaimRoom(creep, creep.memory.targetRoom);
-            }
+    runClaimer(creep: Creep): void {
+        const targetRoom = creep.memory.claimTarget;
+        const target = Memory.expansion?.targets.find(t => t.roomName === targetRoom);
+        if (!targetRoom || target?.status !== "claiming") {
+            creep.suicide(); // claim done or abandoned, a CLAIM creep has no other use
             return;
         }
 
-        // Assign to target
         target.claimerId = creep.name;
-        creep.memory.targetRoom = target.roomName;
-
-        this.moveToClaimRoom(creep, target.roomName);
+        this.moveToClaimRoom(creep, targetRoom);
     }
 
     /**
@@ -524,17 +477,7 @@ class ExpansionManager {
      */
     private moveToClaimRoom(creep: Creep, targetRoom: string): void {
         if (creep.room.name !== targetRoom) {
-            // Move to target room
-            const exitDir = creep.room.findExitTo(targetRoom);
-            if (exitDir !== ERR_NO_PATH && exitDir !== ERR_INVALID_ARGS) {
-                const exit = creep.pos.findClosestByRange(exitDir as FindConstant);
-                if (exit) {
-                    creep.moveTo(exit, {
-                        reusePath: 20,
-                        visualizePathStyle: { stroke: "#ffff00" }
-                    });
-                }
-            }
+            trafficManager.moveToRoom(creep, targetRoom);
             return;
         }
 
@@ -542,6 +485,7 @@ class ExpansionManager {
         const controller = creep.room.controller;
         if (!controller) return;
 
+        trafficManager.requestMove(creep, controller, { range: 1 });
         if (creep.pos.isNearTo(controller)) {
             const result = creep.claimController(controller);
             if (result === OK) {
@@ -549,33 +493,7 @@ class ExpansionManager {
             } else if (result === ERR_GCL_NOT_ENOUGH) {
                 log.warn("ExpansionManager", `GCL not enough to claim ${targetRoom}`);
             }
-        } else {
-            creep.moveTo(controller, {
-                reusePath: 10,
-                visualizePathStyle: { stroke: "#ffff00" }
-            });
         }
-    }
-
-    /**
-     * Check if a room needs claimer spawned
-     */
-    needsClaimer(roomName: string): boolean {
-        // Check if there's an active claiming target from this room
-        const target = Memory.expansion?.targets?.find(t =>
-            t.parentRoom === roomName &&
-            t.status === "claiming"
-        );
-
-        if (!target) return false;
-
-        // Check if claimer already exists
-        const claimers = _.filter(Game.creeps, c =>
-            c.memory.bodyType === BodyType.CLAIM &&
-            c.memory.room === roomName
-        );
-
-        return claimers.length === 0;
     }
 
     /**
@@ -607,10 +525,17 @@ declare global {
     interface RoomMemory {
         bootstrapTargets?: string[];
     }
+
+    interface CreepMemory {
+        /** Room a claimer must claim */
+        claimTarget?: string;
+    }
 }
 
 // Singleton instance
 const expansionManagerInstance = new ExpansionManager();
+
+registerRole(CLAIMER_ROLE, creep => expansionManagerInstance.runClaimer(creep));
 
 export const expansionManagerModule = () => {
     expansionManagerInstance.manage();

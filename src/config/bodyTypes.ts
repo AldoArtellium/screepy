@@ -9,7 +9,9 @@ export enum BodyType {
     COMBAT = "combat",
     CLAIM = "claim",
     SCOUT = "scout",
-    RESERVER = "reserver"
+    RESERVER = "reserver",
+    /** Static harvester: no CARRY, harvests into the container it stands on (or drops) */
+    MINER = "miner"
 }
 
 export interface BodyConfig {
@@ -60,6 +62,13 @@ export const BODY_CONFIGS: Record<BodyType, BodyConfig> = {
         unitCost: 50,
         minUnits: 1,
         maxUnits: 1
+    },
+    [BodyType.MINER]: {
+        // 2 WORK, 1 MOVE - up to 6 WORK (5 drain a source)
+        ratios: { [WORK]: 2, [MOVE]: 1 },
+        unitCost: 250,
+        minUnits: 1,
+        maxUnits: 3
     },
     [BodyType.RESERVER]: {
         // 2 CLAIM, 2 MOVE - room reservation

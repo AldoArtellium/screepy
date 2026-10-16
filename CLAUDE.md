@@ -27,6 +27,32 @@ npm run push-seasonal    # Seasonal server
 npm run push-screepsplus # ScreepsPlus server
 ```
 
+## Local Test Server
+
+Verify changes in a real engine before deploying (requires Docker Desktop and a valid Steam API key in `config.yml`):
+
+```bash
+docker compose up -d                       # start the local server (first start installs deps, ~3 min)
+npm run test:server                        # build, deploy, respawn user "screepy", run 3000 ticks, PASS/FAIL report
+npm run test:server -- --ticks 5000 --min-rcl 3
+npm run test:server -- --code other/dist/main.js   # test another bundle (e.g. baseline from a git worktree)
+npm run test:server -- --room W7N3                  # pick the room (default: first free 2-source room)
+npm run test:server -- --list-rooms                 # list candidate rooms with spawn-to-sources range, touches nothing
+npm run test:server -- --memory '{"config":{"staticMiners":false}}'   # initial Memory (A/B feature switches)
+npm run test:server -- --preset rcl4                # start from a fast-forwarded room (RCL 4, storage, extensions)
+SWITCH=earlyRoads bash scripts/bench.sh             # matrix rooms x Memory.config switch on/off (npm run compile first), summary in test-results/bench-summary.txt
+npm run inspect:server                     # live snapshot: creeps, tasks, queue, errors
+npm run inspect:server -- --memory rooms   # dump a Memory path
+```
+
+- Feature switches (`Memory.config`): `staticMiners` (default off: 12-29% worse than self-harvesting workers on the 3 benchmark rooms), `earlyRoads` (default on: roads from RCL 2).
+- Benchmark on several rooms (easy W7N3, medium W9N5, hard W1N3 where sources are ~30 tiles away): tuning on a single room overfits.
+- Checks: no module errors, RCL reached, creep count, avg CPU, task failure ratio. Reports saved to `test-results/`.
+- The bot writes `Memory.stats` (`src/utils/stats.ts`, `countStat()` for custom counters) and `Memory.moduleErrors` (ModuleManager).
+- RCL/creeps are read from the server's room objects, so baseline bundles without `Memory.stats` can still be compared.
+- Speed: the harness sets `system.setTickDuration(1)` (as fast as the engine goes, ~50 ms/tick). `config.yml` uses `processors: 2` / `runnerThreads: 2`: with 16 processors and one active room, redis coordination made ticks ~4x slower.
+- Server quirks: `screepsmod-auth` is pinned to 2.8.3 in `config.yml` (2.9+ crashes with screepsmod-mongo); the admin CLI (port 21026) is only reachable from inside the container, the harness uses `docker compose exec`.
+
 ## Configuration
 
 - Copy `screeps.example.json` to `screeps.json` with your Steam API key for deployment
@@ -41,9 +67,13 @@ npm run push-screepsplus # ScreepsPlus server
 ### Module System (`src/ModuleManager.ts`)
 The game loop uses a module manager that:
 - Runs modules in sequence with CPU budget management (80% of limit)
-- Supports `mandatory` modules that always run and auto-retry on failure
-- Supports `runEvery`, `runOnce`, and `threshold` (bucket) options
-- Skips non-mandatory modules when CPU budget is exceeded
+- Supports `mandatory` modules that are never skipped for CPU (errors are logged, never rerun in the same tick)
+- Supports `runEvery`, `runOnce`, `threshold` (bucket) and `disabled` options
+- Skips non-mandatory modules when CPU budget is exceeded; a module skipped `maxSkips` times (default 10) is forced to run
+- `sleepModule(name, ticks)` lets a module with nothing to do skip its next runs
+- Records per-module average CPU in `Memory.moduleState`
+
+Disabled for now (design sketches, no creeps are ever spawned for them): Combat, Lab, Highway, SK, Stronghold, PowerCreep, Factory, BasePlanner. Re-enable one at a time once wired to spawning and validated with `npm run test:server`.
 
 ### Module Execution Order
 
@@ -51,11 +81,10 @@ The game loop uses a module manager that:
 |---|--------|-----------|-------------|
 | 1 | RoomManager Init | mandatory | Initialize memory each tick |
 | 2 | RoomManager | every 5 | Phase evaluation, defense mode |
-| 3 | DemandCalculator | every 10 | Calculate part deficits |
+| 3 | DemandCalculator | every 3 | Calculate part deficits (same cadence as spawning) |
 | 4 | TaskGenerator | every 5 | Create tasks from room state |
 | 5 | TaskDispatcher | mandatory | Assign tasks to idle creeps |
 | 6 | TaskExecutor | mandatory | Execute creep tasks |
-| 7 | TrafficManager | mandatory | Process movement requests |
 | 8 | SpawnManager | every 3 | Spawn by part deficit |
 | 9 | TowerManager | every tick | Defense and repairs |
 | 10 | DefenderManager | every tick | Rampart defense positioning |
@@ -73,6 +102,7 @@ The game loop uses a module manager that:
 | 22 | PowerCreepManager | every 3 | Power creep operations |
 | 23 | FactoryManager | every 5 | Commodity production |
 | 24 | BasePlanner | every 100 | Layout visualization |
+| - | TrafficManager | mandatory, last | Resolve all movement (cartographer `reconcileTraffic`) |
 | - | Dashboard | optional | Visual debugging |
 
 ---
@@ -125,18 +155,17 @@ TrafficManager (processes movement)
 
 ### Traffic System (`src/modules/TrafficManager.ts`)
 
-Centralized movement control replacing all direct `moveTo()` calls.
+Centralized movement control replacing all direct `moveTo()` calls, backed by `screeps-cartographer`
+(path caching, repath when stuck, priority-based swapping and shoving via `reconcileTraffic()`).
 
-**Features:**
-- Move request queue with priority sorting
-- CostMatrix caching per room (roads=1, plains=2, swamps=10)
-- Path caching and serialization
-- Collision avoidance with creep swapping
+- `trafficManager.preTick()` runs at the start of the loop, `TrafficManager` module runs last (after every creep-moving module)
+- Working creeps must call `requestMove` **every tick, even when in range**: it registers a "stay in range" intent so they are not shoved away (see `TaskExecutor.approach()`)
+- `getStuckTicks(creep)`: ticks a creep wanted to move but didn't (used for task failure)
 - Idle position finding for parked creeps
 
 **Usage:**
 ```typescript
-trafficManager.requestMove(creep, targetPos, range, { priority: 5 });
+trafficManager.requestMove(creep, targetPos, { range: 1, priority: 5 }); // priority: lower = more important
 ```
 
 ### Demand Calculator (`src/modules/DemandCalculator.ts`)

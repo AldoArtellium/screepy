@@ -3,7 +3,7 @@
  * Instead of "spawn 2 harvesters", we ask "how many WORK parts do we need?"
  */
 
-import { countParts } from "../config/bodyTypes";
+import { BodyType, countParts } from "../config/bodyTypes";
 import { PartDemand } from "../types/TaskTypes";
 
 /**
@@ -48,7 +48,9 @@ class DemandCalculator {
         const repairWork = this.calculateRepairDemand(room);
         const upgradeWork = this.calculateUpgradeDemand(room, phase);
 
-        const totalWork = harvestWork + buildWork + repairWork + upgradeWork;
+        // Static miners cover harvesting; generic workers only fill what they don't
+        const minerWork = this.countSuppliedParts(room, WORK, true);
+        const totalWork = Math.max(0, harvestWork - minerWork) + buildWork + repairWork + upgradeWork;
         const suppliedWork = this.countSuppliedParts(room, WORK);
 
         demand[WORK] = {
@@ -213,13 +215,22 @@ class DemandCalculator {
     }
 
     /**
-     * Count supplied parts from all creeps in a room
+     * Count supplied parts from the creeps working for a room, wherever they are.
+     * Creeps sent to another room (targetRoom) count for that room instead, and
+     * creeps about to die are ignored so their replacement is spawned in time.
      */
-    private countSuppliedParts(room: Room, partType: BodyPartConstant): number {
-        const creeps = room.find(FIND_MY_CREEPS);
+    private countSuppliedParts(room: Room, partType: BodyPartConstant, miners = false): number {
         let total = 0;
 
-        for (const creep of creeps) {
+        for (const name in Game.creeps) {
+            const creep = Game.creeps[name];
+            if (creep.memory.role) continue; // module-driven creeps don't work for the task system
+            if ((creep.memory.bodyType === BodyType.MINER) !== miners) continue;
+            const workRoom = creep.memory.targetRoom ?? creep.memory.room ?? creep.room.name;
+            if (workRoom !== room.name) continue;
+            const replacementTime = creep.body.length * CREEP_SPAWN_TIME + 20;
+            if (creep.ticksToLive !== undefined && creep.ticksToLive < replacementTime) continue;
+
             total += countParts(creep, partType);
         }
 

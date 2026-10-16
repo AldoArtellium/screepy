@@ -12,6 +12,7 @@
 
 import { log } from "../utils/logger";
 import { intelManager } from "./IntelManager";
+import { trafficManager } from "./TrafficManager";
 
 /** Source Keeper lair respawn time - reserved for respawn prediction */
 // eslint-disable-next-line @typescript-eslint/no-unused-vars
@@ -437,7 +438,7 @@ class SKManager {
                     if (killer.pos.isNearTo(target)) {
                         killer.attack(target);
                     } else {
-                        killer.moveTo(target);
+                        trafficManager.requestMove(killer, target, { combat: true });
                     }
 
                     // Use ranged attack if available
@@ -478,7 +479,7 @@ class SKManager {
         }
 
         if (targetLair && !killer.pos.inRangeTo(targetLair, 3)) {
-            killer.moveTo(targetLair);
+            trafficManager.requestMove(killer, targetLair, { combat: true });
         }
 
         // Self-heal while waiting

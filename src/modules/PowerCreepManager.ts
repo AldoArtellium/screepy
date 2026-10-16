@@ -10,6 +10,7 @@
  */
 
 import { log } from "../utils/logger";
+import { trafficManager } from "./TrafficManager";
 
 /** Power types focused on economy */
 const ECONOMY_POWERS: PowerConstant[] = [
@@ -197,7 +198,7 @@ class PowerCreepManager {
             // Move to a room with PowerSpawn
             const targetRoom = this.findPowerSpawnRoom(pc);
             if (targetRoom) {
-                pc.moveTo(new RoomPosition(25, 25, targetRoom));
+                trafficManager.moveToRoom(pc, targetRoom);
             }
             return;
         }
@@ -212,7 +213,7 @@ class PowerCreepManager {
                 }
             }
         } else {
-            pc.moveTo(powerSpawn);
+            trafficManager.requestMove(pc, powerSpawn);
         }
     }
 
@@ -244,7 +245,7 @@ class PowerCreepManager {
                 log.info("PowerCreepManager", `Enabled power in ${pc.room?.name}`);
             }
         } else {
-            pc.moveTo(controller);
+            trafficManager.requestMove(pc, controller);
         }
     }
 
@@ -298,7 +299,7 @@ class PowerCreepManager {
         if (pc.pos.inRangeTo(target, powerInfo.range)) {
             pc.usePower(PWR_OPERATE_SPAWN, target);
         } else {
-            pc.moveTo(target);
+            trafficManager.requestMove(pc, target);
         }
     }
 
@@ -327,7 +328,7 @@ class PowerCreepManager {
         if (pc.pos.inRangeTo(storage, powerInfo.range)) {
             pc.usePower(PWR_OPERATE_EXTENSION, storage);
         } else {
-            pc.moveTo(storage);
+            trafficManager.requestMove(pc, storage);
         }
     }
 
@@ -352,7 +353,7 @@ class PowerCreepManager {
         if (pc.pos.inRangeTo(target, powerInfo.range)) {
             pc.usePower(PWR_REGEN_SOURCE, target);
         } else {
-            pc.moveTo(target);
+            trafficManager.requestMove(pc, target);
         }
     }
 
@@ -376,7 +377,7 @@ class PowerCreepManager {
         if (pc.pos.inRangeTo(factory, powerInfo.range)) {
             pc.usePower(PWR_OPERATE_FACTORY, factory);
         } else {
-            pc.moveTo(factory);
+            trafficManager.requestMove(pc, factory);
         }
     }
 
@@ -400,7 +401,7 @@ class PowerCreepManager {
         if (pc.pos.inRangeTo(target, powerInfo.range)) {
             pc.usePower(PWR_REGEN_MINERAL, target);
         } else {
-            pc.moveTo(target);
+            trafficManager.requestMove(pc, target);
         }
     }
 
