@@ -43,10 +43,14 @@ npm run test:server -- --preset rcl4                # start from a fast-forwarde
 SWITCH=earlyRoads bash scripts/bench.sh             # matrix rooms x Memory.config switch on/off (npm run compile first), summary in test-results/bench-summary.txt
 npm run inspect:server                     # live snapshot: creeps, tasks, queue, errors
 npm run inspect:server -- --memory rooms   # dump a Memory path
+npm run test:server -- --client            # also open the steamless client to watch the run
+npm run client:server                      # steamless client alone (http://localhost:8080/(http://localhost:21025)/)
 ```
 
 - Feature switches (`Memory.config`): `staticMiners` (default off: 12-29% worse than self-harvesting workers on the 3 benchmark rooms), `earlyRoads` (default on: roads from RCL 2).
 - Benchmark on several rooms (easy W7N3, medium W9N5, hard W1N3 where sources are ~30 tiles away): tuning on a single room overfits.
+- Steamless client: `screeps-steamless-client` (via npx) serves the official client from Steam's `package.nw` (Screeps must be installed through Steam; found in Steam libraries, or `--package <path>` / `SCREEPS_NW_PACKAGE`). Log in as `screepy` / `screepy`. With `--client` the harness stays up after the report until Ctrl+C; add `--tick-ms 200` to slow the run down enough to follow it.
+
 - Checks: no module errors, RCL reached, creep count, avg CPU, task failure ratio. Reports saved to `test-results/`.
 - The bot writes `Memory.stats` (`src/utils/stats.ts`, `countStat()` for custom counters) and `Memory.moduleErrors` (ModuleManager).
 - RCL/creeps are read from the server's room objects, so baseline bundles without `Memory.stats` can still be compared.

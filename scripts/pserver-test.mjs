@@ -12,6 +12,8 @@
  *                                [--preset rcl4]            (start from a fast-forwarded room)
  *                                [--memory '<json>']        (initial Memory, e.g. feature switches)
  *                                [--list-rooms]             (list candidate rooms and exit)
+ *                                [--client] [--client-port 8080] [--package path/to/package.nw]
+ *                                    (watch the run in the steamless client, see pserver-client.mjs)
  *
  * Exit code 0 when every check passes, 1 otherwise.
  */
@@ -21,6 +23,7 @@ import { readFileSync, mkdirSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { gunzipSync } from "node:zlib";
+import { startClient } from "./pserver-client.mjs";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const SERVER = "http://localhost:21025";
@@ -50,6 +53,9 @@ const CODE = opt("code", join(ROOT, "dist", "main.js"));
 const BUILD = !flag("no-build") && !args.includes("--code");
 /** Start from a fast-forwarded room (see PRESETS), e.g. --preset rcl4 */
 const PRESET = opt("preset", null);
+/** Open the steamless client on the server during the run (kept open after the report until Ctrl+C) */
+const CLIENT = flag("client");
+const CLIENT_PORT = Number(opt("client-port", 8080));
 
 // ---------- helpers ----------
 const sleep = ms => new Promise(r => setTimeout(r, ms));
@@ -356,6 +362,7 @@ async function main() {
     cli(`system.setTickDuration(${TICK_MS})`);
 
     const userId = await login();
+    const client = CLIENT && (await startClient({ port: CLIENT_PORT, packagePath: opt("package", undefined) }));
     await respawn(userId);
     await upload();
     const spot = pickRoom();
@@ -441,7 +448,14 @@ async function main() {
     writeFileSync(file, JSON.stringify(report, null, 2));
     console.log(`\nFull report: ${file}`);
 
-    process.exit(checks.every(c => c[1]) ? 0 : 1);
+    const code = checks.every(c => c[1]) ? 0 : 1;
+    if (client) {
+        // Keep the client up to inspect the final state (the server keeps ticking)
+        log(`Client still running at ${client.url}, Ctrl+C to stop`);
+        process.on("SIGINT", () => process.exit(code));
+        return;
+    }
+    process.exit(code);
 }
 
 main().catch(err => {
