@@ -177,7 +177,7 @@ export interface CreepTaskState {
     startedAt: number;
     /** Last tick a creep action succeeded (timeout is measured from it) */
     lastProgress?: number;
-    /** Energy source picked while acquiring (cached until depleted) */
+    /** Source picked by the harvest fallback while acquiring (cached until depleted) */
     energySourceId?: string;
     /** Ticks spent wanting to move without moving */
     stuckTicks?: number;

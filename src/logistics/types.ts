@@ -36,5 +36,7 @@ export interface LogisticsReservation {
 declare global {
     interface CreepMemory {
         logistics?: LogisticsReservation;
+        /** Worker temporarily hauling for the spawn/extensions */
+        hauling?: boolean;
     }
 }

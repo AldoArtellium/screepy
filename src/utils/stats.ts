@@ -59,7 +59,10 @@ export function recordTickStats(): void {
             energyAvailable: room.energyAvailable,
             energyCapacity: room.energyCapacityAvailable,
             creeps: creepsByRoom[roomName] ?? 0,
-            idleCreeps: room.find(FIND_MY_CREEPS, { filter: c => !c.spawning && !c.memory.currentTask }).length,
+            // Idle = no task and no logistics reservation (haulers have no task by design)
+            idleCreeps: room.find(FIND_MY_CREEPS, {
+                filter: c => !c.spawning && !c.memory.currentTask && !c.memory.logistics && !c.memory.role
+            }).length,
             pendingTasks: queue.filter(t => t.status === "pending").length,
             structures: room.find(FIND_MY_STRUCTURES).length,
             constructionSites: room.find(FIND_MY_CONSTRUCTION_SITES).length

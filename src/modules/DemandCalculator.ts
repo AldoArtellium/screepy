@@ -4,6 +4,7 @@
  */
 
 import { BodyType, countParts } from "../config/bodyTypes";
+import { countStat } from "../utils/stats";
 import { PartDemand } from "../types/TaskTypes";
 
 /**
@@ -33,6 +34,9 @@ const MIN_CREEPS_BY_PHASE: Record<number, number> = {
     6: 15  // Dominant
 };
 
+/** Stop adding WORK when this many workers are waiting for energy */
+const STARVED_WORKERS_BRAKE = 2;
+
 class DemandCalculator {
     /**
      * Calculate part demands for a room
@@ -50,8 +54,15 @@ class DemandCalculator {
 
         // Static miners cover harvesting; generic workers only fill what they don't
         const minerWork = this.countSuppliedParts(room, WORK, true);
-        const totalWork = Math.max(0, harvestWork - minerWork) + buildWork + repairWork + upgradeWork;
         const suppliedWork = this.countSuppliedParts(room, WORK);
+        const wantedWork = Math.max(0, harvestWork - minerWork) + buildWork + repairWork + upgradeWork;
+        let totalWork = Math.min(wantedWork, this.maxSustainableWork(room));
+        // Adaptive brake: workers already waiting for energy means income is the bottleneck,
+        // more WORK would only add waiting creeps (W1N3: sources far, 21 creeps, -20% points)
+        if (this.starvedWorkers(room) >= STARVED_WORKERS_BRAKE) {
+            totalWork = Math.min(totalWork, suppliedWork);
+            countStat("demand:workBraked");
+        }
 
         demand[WORK] = {
             total: totalWork,
@@ -92,6 +103,42 @@ class DemandCalculator {
     private calculateHarvestDemand(room: Room): number {
         const sources = room.find(FIND_SOURCES);
         return sources.length * 5;
+    }
+
+    /**
+     * Task workers waiting for energy with nothing to go to: no logistics reservation and no source
+     * to harvest (or no task at all while not hauling)
+     */
+    private starvedWorkers(room: Room): number {
+        return room.find(FIND_MY_CREEPS, {
+            filter: c => {
+                if (c.spawning || c.memory.role || c.memory.hauling) return false;
+                if (c.memory.bodyType !== BodyType.WORKER) return false;
+                const task = c.memory.currentTask;
+                if (!task) return true;
+                return task.state === "acquiring" && !c.memory.logistics && !task.energySourceId;
+            }
+        }).length;
+    }
+
+    /**
+     * Without storage, workers harvest their own energy: each harvesting tile around a source
+     * feeds about two workers (they spend roughly half their time harvesting). More WORK only adds
+     * creeps waiting for energy (seen on W7N3: 26 creeps, 13 waiting, 8 idle). With storage the
+     * economy runs on stored energy and static mining, so no cap.
+     */
+    private maxSustainableWork(room: Room): number {
+        if (room.storage) return Infinity;
+        const terrain = room.getTerrain();
+        let slots = 0;
+        for (const source of room.find(FIND_SOURCES)) {
+            for (let dx = -1; dx <= 1; dx++) {
+                for (let dy = -1; dy <= 1; dy++) {
+                    if ((dx || dy) && terrain.get(source.pos.x + dx, source.pos.y + dy) !== TERRAIN_MASK_WALL) slots++;
+                }
+            }
+        }
+        return slots * 2;
     }
 
     /**

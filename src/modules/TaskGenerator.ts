@@ -39,14 +39,12 @@ class TaskGenerator {
         }
 
         const defenseMode = room.memory.defenseMode ?? false;
-        const phase = room.memory.phase ?? 0;
 
         // Clean up old tasks first
         this.cleanupTasks(room);
 
         // Generate tasks by category
         this.generateCombatTasks(room, defenseMode);
-        this.generateTransportTasks(room, defenseMode, phase);
         this.generateHarvestTasks(room);
         this.generateBuildTasks(room);
         this.generateRepairTasks(room, defenseMode);
@@ -147,173 +145,6 @@ class TaskGenerator {
                 createdAt: Game.time,
                 expiresAt: Game.time + 50
             });
-        }
-    }
-
-    /**
-     * Generate transport tasks for spawn, extensions, towers, storage
-     */
-    private generateTransportTasks(room: Room, defenseMode: boolean, phase: number): void {
-        // Fill spawn (highest transport priority)
-        const spawns = room.find(FIND_MY_SPAWNS, {
-            filter: s => s.store.getFreeCapacity(RESOURCE_ENERGY) > 0
-        });
-        for (const spawn of spawns) {
-            if (this.hasExistingTask(room, TaskType.FILL_SPAWN, spawn.id)) continue;
-
-            // Boost priority if spawn is empty
-            const priorityBoost = spawn.store.getUsedCapacity(RESOURCE_ENERGY) === 0 ? -5 : 0;
-
-            this.addTask(room, {
-                id: generateTaskId(TaskType.FILL_SPAWN, spawn.id),
-                type: TaskType.FILL_SPAWN,
-                category: TaskCategory.TRANSPORT,
-                targetId: spawn.id,
-                roomName: room.name,
-                priority: getEffectivePriority(TaskType.FILL_SPAWN, defenseMode) + priorityBoost,
-                status: TaskStatus.PENDING,
-                createdAt: Game.time,
-                data: { amount: spawn.store.getFreeCapacity(RESOURCE_ENERGY) }
-            });
-        }
-
-        // Fill extensions
-        const extensions = room.find(FIND_MY_STRUCTURES, {
-            filter: (s): s is StructureExtension =>
-                s.structureType === STRUCTURE_EXTENSION &&
-                s.store.getFreeCapacity(RESOURCE_ENERGY) > 0
-        });
-        for (const ext of extensions) {
-            if (this.hasExistingTask(room, TaskType.FILL_EXTENSION, ext.id)) continue;
-
-            this.addTask(room, {
-                id: generateTaskId(TaskType.FILL_EXTENSION, ext.id),
-                type: TaskType.FILL_EXTENSION,
-                category: TaskCategory.TRANSPORT,
-                targetId: ext.id,
-                roomName: room.name,
-                priority: getEffectivePriority(TaskType.FILL_EXTENSION, defenseMode),
-                status: TaskStatus.PENDING,
-                createdAt: Game.time,
-                data: { amount: ext.store.getFreeCapacity(RESOURCE_ENERGY) }
-            });
-        }
-
-        // Fill towers (priority boost in defense mode or when low)
-        const towers = room.find(FIND_MY_STRUCTURES, {
-            filter: (s): s is StructureTower =>
-                s.structureType === STRUCTURE_TOWER &&
-                s.store.getFreeCapacity(RESOURCE_ENERGY) > 100
-        });
-        for (const tower of towers) {
-            if (this.hasExistingTask(room, TaskType.FILL_TOWER, tower.id)) continue;
-
-            // Boost priority if tower is below 50% or in defense mode
-            const energyRatio = tower.store.getUsedCapacity(RESOURCE_ENERGY) / 1000;
-            const priorityBoost = energyRatio < 0.5 ? -10 : 0;
-
-            this.addTask(room, {
-                id: generateTaskId(TaskType.FILL_TOWER, tower.id),
-                type: TaskType.FILL_TOWER,
-                category: TaskCategory.TRANSPORT,
-                targetId: tower.id,
-                roomName: room.name,
-                priority: getEffectivePriority(TaskType.FILL_TOWER, defenseMode) + priorityBoost,
-                status: TaskStatus.PENDING,
-                createdAt: Game.time,
-                data: { amount: tower.store.getFreeCapacity(RESOURCE_ENERGY) }
-            });
-        }
-
-        // Pickup dropped resources (higher priority for larger amounts, decay urgency)
-        const dropped = room.find(FIND_DROPPED_RESOURCES, {
-            filter: r => r.resourceType === RESOURCE_ENERGY && r.amount > ENERGY_THRESHOLDS.DROPPED_MIN
-        });
-        for (const resource of dropped) {
-            if (this.hasExistingTask(room, TaskType.PICKUP_RESOURCE, resource.id)) continue;
-
-            // Priority boost for large amounts (urgent to collect before decay)
-            const priorityBoost = resource.amount > 500 ? -10 : (resource.amount > 200 ? -5 : 0);
-
-            this.addTask(room, {
-                id: generateTaskId(TaskType.PICKUP_RESOURCE, resource.id),
-                type: TaskType.PICKUP_RESOURCE,
-                category: TaskCategory.TRANSPORT,
-                targetId: resource.id,
-                roomName: room.name,
-                priority: getEffectivePriority(TaskType.PICKUP_RESOURCE, defenseMode) + priorityBoost,
-                status: TaskStatus.PENDING,
-                createdAt: Game.time,
-                expiresAt: Game.time + 100,
-                data: { amount: resource.amount }
-            });
-        }
-
-        // Withdraw from containers
-        // Use lower threshold in early phases (0-2) to help workers get energy sooner
-        const containerMinEnergy = phase <= 2 ? 50 : ENERGY_THRESHOLDS.CONTAINER_MIN;
-        const containers = room.find(FIND_STRUCTURES, {
-            filter: (s): s is StructureContainer =>
-                s.structureType === STRUCTURE_CONTAINER &&
-                s.store.getUsedCapacity(RESOURCE_ENERGY) > containerMinEnergy
-        });
-        for (const container of containers) {
-            if (this.hasExistingTask(room, TaskType.WITHDRAW_CONTAINER, container.id)) continue;
-
-            // Higher priority if container is nearly full (at mining capacity)
-            const fillRatio = container.store.getUsedCapacity(RESOURCE_ENERGY) / container.store.getCapacity();
-            const priorityBoost = fillRatio > 0.8 ? -5 : 0;
-
-            this.addTask(room, {
-                id: generateTaskId(TaskType.WITHDRAW_CONTAINER, container.id),
-                type: TaskType.WITHDRAW_CONTAINER,
-                category: TaskCategory.TRANSPORT,
-                targetId: container.id,
-                roomName: room.name,
-                priority: getEffectivePriority(TaskType.WITHDRAW_CONTAINER, defenseMode) + priorityBoost,
-                status: TaskStatus.PENDING,
-                createdAt: Game.time,
-                data: { amount: container.store.getUsedCapacity(RESOURCE_ENERGY) }
-            });
-        }
-
-        // Withdraw from storage (phase 4+ when structures need energy)
-        if (phase >= 4 && room.storage) {
-            const storageEnergy = room.storage.store.getUsedCapacity(RESOURCE_ENERGY);
-            const structuresNeedEnergy = spawns.length > 0 || extensions.length > 0 || towers.length > 0;
-
-            // Create withdraw from storage if there's enough energy and structures need it
-            if (structuresNeedEnergy && storageEnergy > ENERGY_THRESHOLDS.STORAGE_PULL) {
-                if (!this.hasExistingTask(room, TaskType.WITHDRAW_STORAGE, room.storage.id)) {
-                    this.addTask(room, {
-                        id: generateTaskId(TaskType.WITHDRAW_STORAGE, room.storage.id),
-                        type: TaskType.WITHDRAW_STORAGE,
-                        category: TaskCategory.TRANSPORT,
-                        targetId: room.storage.id,
-                        roomName: room.name,
-                        priority: getEffectivePriority(TaskType.WITHDRAW_STORAGE, defenseMode),
-                        status: TaskStatus.PENDING,
-                        createdAt: Game.time,
-                        data: { amount: storageEnergy }
-                    });
-                }
-            }
-
-            // Fill storage if structures are satisfied and we have excess energy
-            if (!structuresNeedEnergy && room.storage.store.getFreeCapacity(RESOURCE_ENERGY) > 0) {
-                if (!this.hasExistingTask(room, TaskType.FILL_STORAGE, room.storage.id)) {
-                    this.addTask(room, {
-                        id: generateTaskId(TaskType.FILL_STORAGE, room.storage.id),
-                        type: TaskType.FILL_STORAGE,
-                        category: TaskCategory.TRANSPORT,
-                        targetId: room.storage.id,
-                        roomName: room.name,
-                        priority: getEffectivePriority(TaskType.FILL_STORAGE, defenseMode),
-                        status: TaskStatus.PENDING,
-                        createdAt: Game.time
-                    });
-                }
-            }
         }
     }
 

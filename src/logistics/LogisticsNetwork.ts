@@ -142,7 +142,12 @@ class LogisticsNetwork {
 
     /** Whether a need at or above this priority (<= value) still lacks deliveries */
     hasUncoveredNeed(room: Room, maxPriority: number): boolean {
-        return this.getRequests(room).needs.some(n => n.priority <= maxPriority && n.amount > 0);
+        return this.uncoveredNeedAmount(room, maxPriority) > 0;
+    }
+
+    /** Energy still missing on needs at or above this priority (<= value), reservations deducted */
+    uncoveredNeedAmount(room: Room, maxPriority: number): number {
+        return _.sum(this.getRequests(room).needs.filter(n => n.priority <= maxPriority), n => n.amount);
     }
 
     // ------------------------------------------------------------------ internals

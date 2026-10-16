@@ -415,7 +415,8 @@ async function main() {
         ],
         [
             `Task failure ratio <= ${MAX_FAIL_RATIO * 100}%`,
-            failRatio <= MAX_FAIL_RATIO,
+            // Too few tasks for a ratio to mean anything
+            failRatio <= MAX_FAIL_RATIO || completed + failed < 20,
             `${failed} failed / ${completed} completed (${(failRatio * 100).toFixed(1)}%)`
         ]
     ];

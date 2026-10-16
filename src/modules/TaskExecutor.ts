@@ -7,7 +7,8 @@ import { TaskStatus, TaskType, requiresEnergy } from "../types/TaskTypes";
 import { log } from "../utils/logger";
 import { countStat } from "../utils/stats";
 import { getRoleHandler } from "../roles/registry";
-import { logistics } from "../logistics/LogisticsNetwork";
+import { logistics, NEED_PRIORITY } from "../logistics/LogisticsNetwork";
+import { runHaul } from "../logistics/haul";
 import { LogisticsTarget } from "../logistics/types";
 import { BodyType } from "../config/bodyTypes";
 import { metricsCollector } from "./MetricsCollector";
@@ -31,6 +32,10 @@ class TaskExecutor {
 
             if (creep.memory.role) {
                 this.runRole(creep, creep.memory.role);
+            } else if (creep.memory.bodyType === BodyType.TRANSPORT) {
+                if (!runHaul(creep)) this.handleIdleCreep(creep);
+            } else if (this.haulForSpawn(creep)) {
+                // worker filling spawn/extensions; its task (if any) resumes afterwards
             } else if (creep.memory.currentTask) {
                 this.executeCreepTask(creep);
             } else {
@@ -39,6 +44,42 @@ class TaskExecutor {
                 this.handleIdleCreep(creep);
             }
         }
+    }
+
+    /**
+     * Workers fill the spawn and extensions when haulers don't cover them (early game, haulers dead).
+     * A worker never drops a task in progress: it only switches when it has no task or is about
+     * to fetch energy, and only as many workers switch as the missing energy needs.
+     * Returns true while the creep is hauling this tick.
+     */
+    private haulForSpawn(creep: Creep): boolean {
+        if (creep.getActiveBodyparts(CARRY) === 0) return false;
+        const maxPriority = NEED_PRIORITY.EXTENSION;
+
+        if (!creep.memory.hauling) {
+            const task = creep.memory.currentTask;
+            if (task && task.state !== "acquiring") return false;
+            if (!this.spawnNeedsMoreHaulers(creep.room, maxPriority)) return false;
+            if (creep.memory.logistics?.kind === "offer") logistics.release(creep);
+            creep.memory.hauling = true;
+        }
+
+        if (runHaul(creep, { maxPriority })) return true;
+
+        // Nothing left to fetch or deliver
+        delete creep.memory.hauling;
+        return false;
+    }
+
+    /** Missing spawn/extension energy exceeds what switched-but-unreserved workers will carry */
+    private spawnNeedsMoreHaulers(room: Room, maxPriority: number): boolean {
+        const missing = logistics.uncoveredNeedAmount(room, maxPriority);
+        if (missing <= 0) return false;
+        const incoming = _.sum(
+            room.find(FIND_MY_CREEPS, { filter: c => c.memory.hauling && c.memory.logistics?.kind !== "need" }),
+            c => c.store.getCapacity(RESOURCE_ENERGY)
+        );
+        return missing > incoming;
     }
 
     /**

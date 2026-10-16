@@ -3,7 +3,7 @@
  * Assigns tasks based on capability and proximity
  */
 
-import { countParts, hasRequiredParts } from "../config/bodyTypes";
+import { BodyType, countParts, hasRequiredParts } from "../config/bodyTypes";
 import {
     getTaskCategory,
     Task,
@@ -37,7 +37,8 @@ class TaskDispatcher {
         // Find idle creeps (no current task). Creeps bound to another room take tasks
         // from that room only (see dispatchCrossRoomTasks), matching TaskExecutor's lookup.
         const idleCreeps = room.find(FIND_MY_CREEPS, {
-            filter: c => !c.spawning && !c.memory.currentTask && !c.memory.role &&
+            filter: c => !c.spawning && !c.memory.currentTask && !c.memory.role && !c.memory.hauling &&
+                c.memory.bodyType !== BodyType.TRANSPORT && // haulers work through logistics only
                 (!c.memory.targetRoom || c.memory.targetRoom === room.name)
         });
 
@@ -357,6 +358,7 @@ class TaskDispatcher {
             !c.spawning &&
             !c.memory.currentTask &&
             !c.memory.role &&
+            c.memory.bodyType !== BodyType.TRANSPORT &&
             c.memory.targetRoom
         );
 

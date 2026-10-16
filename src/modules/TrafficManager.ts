@@ -146,6 +146,14 @@ class TrafficManager {
      */
     getCreepPriority(creep: Creep | PowerCreep): number {
         if (!("body" in creep)) return 20; // power creeps
+
+        // Delivering to the spawn/extensions
+        const reservation = creep.memory.logistics;
+        if (reservation?.kind === "need") {
+            const target = Game.getObjectById(reservation.targetId as Id<Structure>);
+            if (target?.structureType === STRUCTURE_SPAWN || target?.structureType === STRUCTURE_EXTENSION) return 10;
+        }
+
         const task = creep.memory.currentTask;
         if (!task) return 100;
 
@@ -155,11 +163,6 @@ class TrafficManager {
 
         if (task.type === TaskType.HARVEST_SOURCE && task.state === "executing") {
             return 5;
-        }
-
-        if (task.type === TaskType.FILL_SPAWN || task.type === TaskType.FILL_EXTENSION) {
-            const fillRatio = creep.store.getUsedCapacity() / Math.max(1, creep.store.getCapacity());
-            if (fillRatio > 0.5) return 10;
         }
 
         return 50;
