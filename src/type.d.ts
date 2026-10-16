@@ -52,6 +52,7 @@ declare global {
         cpuMax: number;
         bucket: number;
         counters: { [name: string]: number };
+        samples?: { [name: string]: string[] };
         rooms: {
             [roomName: string]: {
                 rcl: number;

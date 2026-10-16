@@ -217,6 +217,17 @@ async function respawn(userId) {
     await sleep(1000);
 }
 
+/** Leftovers of previous runs (respawn keeps them): remove so every run starts from the same state */
+const LEFTOVER_TYPES = ["ruin", "road", "container", "constructionSite", "energy", "tombstone", "wall", "rampart"];
+
+function cleanRoom(room) {
+    const removed = cli(
+        `storage.db['rooms.objects'].removeWhere({room:'${room}',type:{$in:${JSON.stringify(LEFTOVER_TYPES)}}})` +
+            ".then(r=>String(r.n ?? (r.result && r.result.n)))"
+    );
+    log(`Cleaned ${room}: ${removed} leftover objects removed`);
+}
+
 async function placeSpawn(spot) {
     const res = await api("/api/game/place-spawn", { room: spot.room, x: spot.x, y: spot.y, name: "Spawn1", shard: "test1" });
     if (!res.ok) throw new Error(`place-spawn failed: ${JSON.stringify(res)}`);
@@ -359,6 +370,7 @@ async function main() {
     await respawn(userId);
     await upload();
     const spot = pickRoom();
+    cleanRoom(spot.room);
     await placeSpawn(spot);
     if (PRESET) await applyPreset(PRESET, spot, userId);
 

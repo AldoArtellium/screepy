@@ -248,12 +248,39 @@ class TaskExecutor {
         });
         if (ruin) return ruin;
 
-        // Last resort: harvest directly (only if creep has WORK parts)
+        // Last resort: harvest directly (only if creep has WORK parts), at a source with a free tile.
+        // Without this check every creep picks the closest source; once its few walkable tiles
+        // are taken, the others get ERR_NO_PATH forever (seen on W7N3: ~8000 failed moves/run).
         if (creep.getActiveBodyparts(WORK) > 0) {
-            return creep.pos.findClosestByRange(FIND_SOURCES_ACTIVE);
+            const sources = room.find(FIND_SOURCES_ACTIVE)
+                .filter(s => this.harvestSlotsLeft(s, creep) > 0)
+                .sort((a, b) => creep.pos.getRangeTo(a) - creep.pos.getRangeTo(b));
+            return sources[0] ?? null;
         }
 
         return null;
+    }
+
+    /**
+     * Walkable tiles around a source minus creeps already harvesting there or heading to it
+     * (harvest tasks and energy acquisition). The asking creep itself doesn't count.
+     */
+    private harvestSlotsLeft(source: Source, creep: Creep): number {
+        const terrain = source.room.getTerrain();
+        let slots = 0;
+        for (let dx = -1; dx <= 1; dx++) {
+            for (let dy = -1; dy <= 1; dy++) {
+                if ((dx || dy) && terrain.get(source.pos.x + dx, source.pos.y + dy) !== TERRAIN_MASK_WALL) slots++;
+            }
+        }
+
+        const users = source.room.find(FIND_MY_CREEPS, {
+            filter: c => c.name !== creep.name && (
+                c.memory.currentTask?.energySourceId === source.id ||
+                (c.memory.currentTask?.type === TaskType.HARVEST_SOURCE && c.memory.currentTask.targetId === source.id)
+            )
+        }).length;
+        return slots - users;
     }
 
     /**

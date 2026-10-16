@@ -15,6 +15,15 @@ export function countStat(name: string, amount = 1): void {
     counters[name] = (counters[name] ?? 0) + amount;
 }
 
+/** Keep the last 20 samples of a diagnostic (e.g. failed moves) in Memory.stats.samples */
+export function recordSample(name: string, sample: string): void {
+    const stats = getStats();
+    if (!stats.samples) stats.samples = {};
+    const list = (stats.samples[name] ??= []);
+    list.push(`${Game.time} ${sample}`);
+    if (list.length > 20) list.shift();
+}
+
 /** Last tick recorded by this global (undefined right after a global reset) */
 let lastRecordedTick: number | undefined;
 

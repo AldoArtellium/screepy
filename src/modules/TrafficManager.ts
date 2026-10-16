@@ -14,7 +14,7 @@
 
 import { moveTo, preTick, reconcileTraffic } from "screeps-cartographer";
 import { TaskType } from "../types/TaskTypes";
-import { countStat } from "../utils/stats";
+import { countStat, recordSample } from "../utils/stats";
 
 /** Move request options */
 interface MoveOptions {
@@ -94,6 +94,7 @@ class TrafficManager {
         if (result !== OK && result !== ERR_TIRED) {
             const what = "body" in creep ? creep.memory.role ?? creep.memory.currentTask?.type ?? "idle" : "powerCreep";
             countStat(`moveError:${result}:${what}`);
+            recordSample("moveErrors", `${result} ${what} ${creep.pos} -> ${targetPos} r${range}`);
         }
     }
 
