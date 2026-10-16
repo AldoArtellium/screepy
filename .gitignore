@@ -102,3 +102,6 @@ applicationhost.config
 *.sln
 # Local server test reports
 /test-results
+
+# Plan execution workspaces
+/.superpowers

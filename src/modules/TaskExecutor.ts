@@ -4,19 +4,18 @@
  */
 
 import { TaskStatus, TaskType, requiresEnergy } from "../types/TaskTypes";
-import { ENERGY_THRESHOLDS } from "../utils/creepUtils";
 import { log } from "../utils/logger";
 import { countStat } from "../utils/stats";
 import { getRoleHandler } from "../roles/registry";
+import { logistics } from "../logistics/LogisticsNetwork";
+import { LogisticsTarget } from "../logistics/types";
+import { BodyType } from "../config/bodyTypes";
 import { metricsCollector } from "./MetricsCollector";
 import { taskDispatcher } from "./TaskDispatcher";
 import { trafficManager } from "./TrafficManager";
 
 /** Maximum ticks a creep can be stuck before task is marked failed */
 const MAX_STUCK_TICKS = 10;
-
-/** Anything a creep can get energy from */
-type EnergySource = Resource | Source | StructureContainer | StructureStorage | Tombstone | Ruin;
 
 /** Maximum ticks without any successful action before a task times out */
 const MAX_TASK_TICKS = 300;
@@ -35,6 +34,8 @@ class TaskExecutor {
             } else if (creep.memory.currentTask) {
                 this.executeCreepTask(creep);
             } else {
+                // A task creep without task holds no energy claim
+                if (creep.memory.logistics?.kind === "offer") logistics.release(creep);
                 this.handleIdleCreep(creep);
             }
         }
@@ -109,6 +110,7 @@ class TaskExecutor {
         if (requiresEnergy(task.type)) {
             if (taskState.state === "acquiring" && creep.store.getFreeCapacity() === 0) {
                 creep.memory.currentTask!.state = "executing";
+                logistics.release(creep);
             } else if (taskState.state === "executing" && creep.store.getUsedCapacity(RESOURCE_ENERGY) === 0) {
                 creep.memory.currentTask!.state = "acquiring";
             }
@@ -187,78 +189,78 @@ class TaskExecutor {
     }
 
     /**
-     * Acquire energy for a task.
-     * The chosen source is cached in the task state until it runs dry, so the
-     * (range-based) search only runs when a new source is needed.
+     * Acquire energy for a task through the logistics network (offers with reservations).
+     * Fallback: harvest at a source that still has a free tile (cached in energySourceId).
      */
     private acquireEnergy(creep: Creep): void {
         const taskState = creep.memory.currentTask!;
-        let source = taskState.energySourceId
-            ? Game.getObjectById(taskState.energySourceId as Id<EnergySource>)
-            : null;
-        if (!source || !this.hasEnergy(source, creep)) {
-            source = this.findEnergySource(creep);
-            taskState.energySourceId = source?.id;
+
+        // Ongoing reservation: go take it
+        if (creep.memory.logistics?.kind === "offer") {
+            const target = logistics.getTarget(creep);
+            if (target) {
+                this.takeEnergy(creep, target);
+                return;
+            }
         }
 
-        if (!source) {
-            // Nothing available - wait near spawn for energy to become available
-            this.handleIdleCreep(creep);
+        const offer = logistics.claimOffer(creep, { forUpgrade: taskState.type === TaskType.UPGRADE_CONTROLLER });
+        if (offer) {
+            delete taskState.energySourceId;
+            const target = logistics.getTarget(creep);
+            if (target) this.takeEnergy(creep, target);
             return;
         }
 
-        if (source instanceof Resource) {
-            this.moveToAndPickup(creep, source);
-        } else if (source instanceof Source) {
-            this.moveToAndHarvest(creep, source);
-        } else {
-            this.moveToAndWithdraw(creep, source);
+        // Last resort: harvest directly (only with WORK parts)
+        let source = taskState.energySourceId
+            ? Game.getObjectById(taskState.energySourceId as Id<Source>)
+            : null;
+        if (!source || source.energy === 0) {
+            source = this.findHarvestSource(creep);
+            taskState.energySourceId = source?.id;
         }
+        if (source) {
+            this.moveToAndHarvest(creep, source);
+            return;
+        }
+
+        // Nothing available - wait near spawn for energy to become available
+        this.handleIdleCreep(creep);
     }
 
     /**
-     * Pick the best energy source. Priority: dropped (decays) > container > storage > tombstone/ruin > harvest
+     * Withdraw or pick up the reserved energy, then release the reservation
      */
-    private findEnergySource(creep: Creep): EnergySource | null {
-        const room = creep.room;
-        const phase = room.memory.phase ?? 0;
-
-        const dropped = creep.pos.findClosestByRange(FIND_DROPPED_RESOURCES, {
-            filter: r => r.resourceType === RESOURCE_ENERGY && r.amount > ENERGY_THRESHOLDS.DROPPED_MIN
-        });
-        if (dropped) return dropped;
-
-        const container = creep.pos.findClosestByRange(FIND_STRUCTURES, {
-            filter: (s): s is StructureContainer =>
-                s.structureType === STRUCTURE_CONTAINER && this.hasEnergy(s, creep)
-        });
-        if (container) return container;
-
-        if (phase >= 4 && room.storage && this.hasEnergy(room.storage, creep)) {
-            return room.storage;
+    private takeEnergy(creep: Creep, target: LogisticsTarget): void {
+        if (!this.approach(creep, target.pos, 1)) return;
+        if (target instanceof Resource) {
+            this.act(creep, creep.pickup(target));
+        } else {
+            this.act(creep, creep.withdraw(target as AnyStoreStructure, RESOURCE_ENERGY));
         }
+        logistics.release(creep);
+    }
 
-        const tombstone = creep.pos.findClosestByRange(FIND_TOMBSTONES, {
-            filter: t => t.store.getUsedCapacity(RESOURCE_ENERGY) > 0
-        });
-        if (tombstone) return tombstone;
+    /**
+     * Closest active source with a free tile. Sources whose container is occupied by a static
+     * miner are skipped: their energy is taken from the container (logistics offer).
+     * Without the free-tile check every creep picks the closest source; once its few walkable
+     * tiles are taken, the others get ERR_NO_PATH forever (seen on W7N3: ~8000 failed moves/run).
+     */
+    private findHarvestSource(creep: Creep): Source | null {
+        if (creep.getActiveBodyparts(WORK) === 0) return null;
+        const sources = creep.room.find(FIND_SOURCES_ACTIVE)
+            .filter(s => this.harvestSlotsLeft(s, creep) > 0 && !this.hasMinedContainer(s))
+            .sort((a, b) => creep.pos.getRangeTo(a) - creep.pos.getRangeTo(b));
+        return sources[0] ?? null;
+    }
 
-        const ruin = creep.pos.findClosestByRange(FIND_RUINS, {
-            filter: r => r.store.getUsedCapacity(RESOURCE_ENERGY) > 0
-        });
-        if (ruin) return ruin;
-
-        // Last resort: harvest directly (only if creep has WORK parts), at a source with a free tile.
-        // Without this check every creep picks the closest source; once its few walkable tiles
-        // are taken, the others get ERR_NO_PATH forever (seen on W7N3: ~8000 failed moves/run).
-        if (creep.getActiveBodyparts(WORK) > 0) {
-            const sources = room.find(FIND_SOURCES_ACTIVE)
-                .filter(s => this.harvestSlotsLeft(s, creep) > 0)
-                .sort((a, b) => creep.pos.getRangeTo(a) - creep.pos.getRangeTo(b));
-            return sources[0] ?? null;
-        }
-
-        return null;
+    private hasMinedContainer(source: Source): boolean {
+        return source.pos.findInRange(FIND_STRUCTURES, 1, {
+            filter: s => s.structureType === STRUCTURE_CONTAINER &&
+                s.pos.lookFor(LOOK_CREEPS).some(c => c.memory.bodyType === BodyType.MINER)
+        }).length > 0;
     }
 
     /**
@@ -281,22 +283,6 @@ class TaskExecutor {
             )
         }).length;
         return slots - users;
-    }
-
-    /**
-     * Whether an energy source is still worth going to
-     */
-    private hasEnergy(source: EnergySource, creep: Creep): boolean {
-        if (source instanceof Resource) return source.amount > ENERGY_THRESHOLDS.DROPPED_MIN;
-        if (source instanceof Source) return source.energy > 0;
-        const energy = source.store.getUsedCapacity(RESOURCE_ENERGY);
-        if (source instanceof StructureContainer) {
-            // Lower threshold in early phases (0-2) so workers can use partially-filled containers
-            const phase = creep.room.memory.phase ?? 0;
-            return energy > (phase <= 2 ? 50 : ENERGY_THRESHOLDS.CONTAINER_MIN);
-        }
-        if (source instanceof StructureStorage) return energy > ENERGY_THRESHOLDS.STORAGE_PULL;
-        return energy > 0;
     }
 
     /**
@@ -790,24 +776,6 @@ class TaskExecutor {
             }
         }
         delete creep.memory.currentTask;
-    }
-
-    /**
-     * Helper: Move to and withdraw from structure
-     */
-    private moveToAndWithdraw(creep: Creep, target: StructureContainer | StructureStorage | Tombstone | Ruin): void {
-        if (this.approach(creep, target.pos, 1)) {
-            this.act(creep, creep.withdraw(target, RESOURCE_ENERGY));
-        }
-    }
-
-    /**
-     * Helper: Move to and pickup resource
-     */
-    private moveToAndPickup(creep: Creep, target: Resource): void {
-        if (this.approach(creep, target.pos, 1)) {
-            this.act(creep, creep.pickup(target));
-        }
     }
 
     /**
