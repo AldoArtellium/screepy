@@ -56,10 +56,13 @@ class DemandCalculator {
         const minerWork = this.countSuppliedParts(room, WORK, true);
         const suppliedWork = this.countSuppliedParts(room, WORK);
         const wantedWork = Math.max(0, harvestWork - minerWork) + buildWork + repairWork + upgradeWork;
-        let totalWork = Math.min(wantedWork, this.maxSustainableWork(room));
+        // Off by default (Memory.config.demandLimits = true enables both limits below): on the
+        // 3 benchmark rooms they cost up to 48% points (W9N5) and never helped by more than 2%
+        const limits = Memory.config?.demandLimits === true;
+        let totalWork = limits ? Math.min(wantedWork, this.maxSustainableWork(room)) : wantedWork;
         // Adaptive brake: workers already waiting for energy means income is the bottleneck,
         // more WORK would only add waiting creeps (W1N3: sources far, 21 creeps, -20% points)
-        if (this.starvedWorkers(room) >= STARVED_WORKERS_BRAKE) {
+        if (limits && this.starvedWorkers(room) >= STARVED_WORKERS_BRAKE) {
             totalWork = Math.min(totalWork, suppliedWork);
             countStat("demand:workBraked");
         }

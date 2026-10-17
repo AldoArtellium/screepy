@@ -59,6 +59,9 @@ class TaskExecutor {
         if (!creep.memory.hauling) {
             const task = creep.memory.currentTask;
             if (task && task.state !== "acquiring") return false;
+            // Upgraders keep their energy: at RCL 1 the spawn always wants energy and switching them
+            // stalled the controller (benchmark: RCL 2 reached ~800 ticks later, -10% to -38% points)
+            if (task?.type === TaskType.UPGRADE_CONTROLLER) return false;
             if (!this.spawnNeedsMoreHaulers(creep.room, maxPriority)) return false;
             if (creep.memory.logistics?.kind === "offer") logistics.release(creep);
             creep.memory.hauling = true;

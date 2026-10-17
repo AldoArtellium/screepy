@@ -42,7 +42,7 @@ declare global {
         // Bot stats for the local test harness
         stats?: BotStats;
         // Runtime feature switches (set from the console or the test harness --memory option)
-        config?: { staticMiners?: boolean; earlyRoads?: boolean };
+        config?: { staticMiners?: boolean; earlyRoads?: boolean; demandLimits?: boolean };
     }
 
     interface BotStats {

@@ -40,12 +40,15 @@ npm run test:server -- --room W7N3                  # pick the room (default: fi
 npm run test:server -- --list-rooms                 # list candidate rooms with spawn-to-sources range, touches nothing
 npm run test:server -- --memory '{"config":{"staticMiners":false}}'   # initial Memory (A/B feature switches)
 npm run test:server -- --preset rcl4                # start from a fast-forwarded room (RCL 4, storage, extensions)
+CODES="before=a.js after=dist/main.js" RUNS=2 bash scripts/compare.sh   # bundles x rooms x runs, mean points
 SWITCH=earlyRoads bash scripts/bench.sh             # matrix rooms x Memory.config switch on/off (npm run compile first), summary in test-results/bench-summary.txt
 npm run inspect:server                     # live snapshot: creeps, tasks, queue, errors
 npm run inspect:server -- --memory rooms   # dump a Memory path
 ```
 
-- Feature switches (`Memory.config`): `staticMiners` (default off: 12-29% worse than self-harvesting workers on the 3 benchmark rooms), `earlyRoads` (default on: roads from RCL 2).
+- Feature switches (`Memory.config`): `staticMiners` (default off: 12-29% worse than self-harvesting workers on the 3 benchmark rooms, measured before rooms were cleaned between runs), `earlyRoads` (default on: roads from RCL 2), `demandLimits` (default off).
+- Runs are close to deterministic (two runs of the same bundle and room differ by ~1%), so one run per configuration is enough for A/B tests.
+- Logistics benchmark (8000 ticks, controller points; before = cd62340, after = logistics without demand limits): W7N3 6669 -> 4783 (-28%, open regression), W9N5 2917 -> 4861 (+67%), W1N3 4516 -> 7419 (+64%). CPU +0.6 to +2.2 (more creeps, same CPU per creep). Hivemind 3.0.0 reference: W7N3 107085, W9N5 189, W1N3 20300.
 - Benchmark on several rooms (easy W7N3, medium W9N5, hard W1N3 where sources are ~30 tiles away): tuning on a single room overfits.
 - Checks: no module errors, RCL reached, creep count, avg CPU, task failure ratio. Reports saved to `test-results/`.
 - The bot writes `Memory.stats` (`src/utils/stats.ts`, `countStat()` for custom counters) and `Memory.moduleErrors` (ModuleManager).
@@ -130,16 +133,9 @@ TrafficManager (processes movement)
 | Task Type | Priority | Category | Description |
 |-----------|----------|----------|-------------|
 | ATTACK_HOSTILE | 5 | ATTACK | Attack hostile creeps |
-| FILL_SPAWN | 10 | TRANSPORT | Fill spawn with energy |
-| FILL_EXTENSION | 15 | TRANSPORT | Fill extensions |
-| FILL_TOWER | 25 | TRANSPORT | Fill towers |
-| PICKUP_RESOURCE | 35 | TRANSPORT | Pick up dropped resources |
-| WITHDRAW_CONTAINER | 40 | TRANSPORT | Withdraw from container |
-| WITHDRAW_STORAGE | 42 | TRANSPORT | Withdraw from storage |
 | BUILD_STRUCTURE | 45 | BUILD | Build construction sites |
 | HARVEST_SOURCE | 50 | HARVEST | Harvest from source |
 | REPAIR_STRUCTURE | 55 | REPAIR | Repair structures |
-| FILL_STORAGE | 60 | TRANSPORT | Deposit to storage |
 | UPGRADE_CONTROLLER | 65 | UPGRADE | Upgrade controller |
 | REPAIR_RAMPART | 68 | REPAIR | Repair ramparts |
 | REPAIR_WALL | 70 | REPAIR | Repair walls |
@@ -152,6 +148,22 @@ TrafficManager (processes movement)
 - `IN_PROGRESS` - Being executed
 - `COMPLETED` - Successfully finished
 - `FAILED` - Task failed or expired
+
+Energy transport is no longer a task: FILL_*/PICKUP_RESOURCE/WITHDRAW_* are not generated anymore (enum values kept so old tasks in Memory get purged). See Logistics below.
+
+### Logistics (`src/logistics/`)
+
+Room-level energy **offers** (dropped energy, tombstones, ruins, containers, storage) and **needs** (spawn, extensions, towers, controller container, storage), matched greedily with **reservations**.
+
+- `LogisticsNetwork.ts` (`logistics` singleton): requests are rebuilt in the heap at most once per tick and room, on first query. Reservations live in `creep.memory.logistics` (survive global resets): effective offer = stock - reserved withdrawals, effective need = free capacity - reserved deliveries. Expired after 100 ticks.
+- API: `claimOffer(creep, { forUpgrade })`, `claimNeed(creep, { maxPriority })`, `getTarget(creep)`, `release(creep)`, `uncoveredNeedAmount(room, maxPriority)`.
+- Priorities (`NEED_PRIORITY`, lower first): tower in defense 0, spawn/extension 1, tower 3, controller container 5, storage 9. Score = priority * 10 + range. Offers far away and smaller than half the creep's free capacity are skipped.
+- Controller container (range 3 of the controller, not next to a source): a need for everyone, an offer only for upgraders (`forUpgrade`). `STORAGE_FLOOR` (5000): non-haulers can't take storage below it when the room has haulers.
+- `haul.ts` `runHaul(creep, { maxPriority })`: fetch from an offer, deliver to a need. Run by `BodyType.TRANSPORT` creeps (out of the task dispatcher, no role) and by workers (`memory.hauling`) while spawn/extensions lack energy; a worker never drops a task in progress.
+- Workers fetch energy for their tasks through `claimOffer`; fallback: harvest at a source with a free tile.
+- Upgraders never switch to hauling (switching them stalled RCL 1 by ~800 ticks).
+- `DemandCalculator` has optional WORK limits (cap at 2x source harvest tiles without storage, brake while >= 2 workers starve), **off by default** (`Memory.config.demandLimits`): they cost points on the benchmark rooms.
+- Counters: `logistics:offerClaimed`, `needClaimed`, `delivered`, `offerSkippedSmall`, `reservationExpired`, `demand:workBraked`.
 
 ### Traffic System (`src/modules/TrafficManager.ts`)
 
