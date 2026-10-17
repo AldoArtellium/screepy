@@ -27,7 +27,8 @@
     "push-screepsplus": "rollup -c --environment DEST:screepsplus",
     "test": "npm run clean && npm run build",
     "test:server": "node scripts/pserver-test.mjs",
-    "inspect:server": "node scripts/pserver-inspect.mjs"
+    "inspect:server": "node scripts/pserver-inspect.mjs",
+    "watch:server": "node scripts/pserver-client.mjs"
   },
   "engines": {
     "node": "^20.11"

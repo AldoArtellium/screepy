@@ -1,3 +1,6 @@
+# Fixed project name: every checkout / git worktree shares the same server stack
+name: screepy
+
 services:
   screeps:
     image: screepers/screeps-launcher

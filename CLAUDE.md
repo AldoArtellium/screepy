@@ -44,12 +44,18 @@ CODES="before=a.js after=dist/main.js" RUNS=2 bash scripts/compare.sh   # bundle
 SWITCH=earlyRoads bash scripts/bench.sh             # matrix rooms x Memory.config switch on/off (npm run compile first), summary in test-results/bench-summary.txt
 npm run inspect:server                     # live snapshot: creeps, tasks, queue, errors
 npm run inspect:server -- --memory rooms   # dump a Memory path
+npm run test:server -- --client            # also open the steamless client on the tested room
+npm run watch:server                       # from any other session/worktree: client + progress of the run in progress
 ```
 
 - Feature switches (`Memory.config`): `staticMiners` (default off: 12-29% worse than self-harvesting workers on the 3 benchmark rooms, measured before rooms were cleaned between runs), `earlyRoads` (default on: roads from RCL 2), `demandLimits` (default off).
 - Runs are close to deterministic (two runs of the same bundle and room differ by ~1%), so one run per configuration is enough for A/B tests.
 - Logistics benchmark (8000 ticks, controller points; before = cd62340, after = logistics without demand limits): W7N3 6669 -> 4783 (-28%, open regression), W9N5 2917 -> 4861 (+67%), W1N3 4516 -> 7419 (+64%). CPU +0.6 to +2.2 (more creeps, same CPU per creep). Hivemind 3.0.0 reference: W7N3 107085, W9N5 189, W1N3 20300.
 - Benchmark on several rooms (easy W7N3, medium W9N5, hard W1N3 where sources are ~30 tiles away): tuning on a single room overfits.
+- Watching: the harness publishes the run state on the server (redis key `pserver:run`, see `scripts/pserver-lib.mjs`), so `watch:server` follows a run started from another session or worktree (opens the client on the tested room, prints progress and the final PASS/FAIL). `--no-client` for progress only. The compose project is named `screepy` so every worktree talks to the same server.
+- One run at a time: the test user is shared, `test:server` refuses to start while another session's run is in progress (`--force` to replace it).
+- Steamless client: `screeps-steamless-client` (via npx) serves the official client from Steam's `package.nw` (Screeps must be installed through Steam; found in Steam libraries, or `--package <path>` / `SCREEPS_NW_PACKAGE`), at `http://localhost:8080/(http://localhost:21025)/`, reused if already running. Log in as `screepy` / `screepy`. With `--client` the harness stays up after the report until Ctrl+C; add `--tick-ms 200` to slow the run down enough to follow it.
+
 - Checks: no module errors, RCL reached, creep count, avg CPU, task failure ratio. Reports saved to `test-results/`.
 - The bot writes `Memory.stats` (`src/utils/stats.ts`, `countStat()` for custom counters) and `Memory.moduleErrors` (ModuleManager).
 - RCL/creeps are read from the server's room objects, so baseline bundles without `Memory.stats` can still be compared.
