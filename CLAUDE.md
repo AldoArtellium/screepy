@@ -4,12 +4,12 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-Screepy is a TypeScript-based AI bot for the game [Screeps](https://screeps.com/). The code compiles to JavaScript and gets deployed to Screeps servers where it runs autonomously to control game entities (creeps, spawns, towers). The bot implements a full progression from early-game survival through late-game dominance including remote mining, combat, market trading, labs, power creeps, and factories.
+Screepy is a TypeScript-based AI bot for the game [Screeps](https://screeps.com/). The code compiles to JavaScript and gets deployed to Screeps servers where it runs autonomously to control game entities (creeps, spawns, towers). Since October 2026 its economy core follows Hivemind's model (roles, spawn options, resource dispatcher, room planner), ported from Hivemind (MIT, see `THIRD_PARTY_NOTICES.md`). Remote mining follows Hivemind too (milestone 2); expansion, scouting and the market remain from the previous design.
 
 ## Build & Deploy Commands
 
 ```bash
-npm install              # Install dependencies (requires Node.js ^20.11)
+npm install              # Install dependencies (requires Node.js ^24)
 npm run build            # TypeScript compilation only (tsc)
 npm run compile          # Rollup bundle without deployment
 npm run lint             # Run ESLint
@@ -38,19 +38,17 @@ npm run test:server -- --ticks 5000 --min-rcl 3
 npm run test:server -- --code other/dist/main.js   # test another bundle (e.g. baseline from a git worktree)
 npm run test:server -- --room W7N3                  # pick the room (default: first free 2-source room)
 npm run test:server -- --list-rooms                 # list candidate rooms with spawn-to-sources range, touches nothing
-npm run test:server -- --memory '{"config":{"staticMiners":false}}'   # initial Memory (A/B feature switches)
+npm run test:server -- --memory '{"foo":1}'          # initial Memory
 npm run test:server -- --preset rcl4                # start from a fast-forwarded room (RCL 4, storage, extensions)
 CODES="before=a.js after=dist/main.js" RUNS=2 bash scripts/compare.sh   # bundles x rooms x runs, mean points
-SWITCH=earlyRoads bash scripts/bench.sh             # matrix rooms x Memory.config switch on/off (npm run compile first), summary in test-results/bench-summary.txt
-npm run inspect:server                     # live snapshot: creeps, tasks, queue, errors
+npm run inspect:server                     # live snapshot: creeps, structures, errors
 npm run inspect:server -- --memory rooms   # dump a Memory path
 npm run test:server -- --client            # also open the steamless client on the tested room
 npm run watch:server                       # from any other session/worktree: client + progress of the run in progress
 ```
 
-- Feature switches (`Memory.config`): `staticMiners` (default off: 12-29% worse than self-harvesting workers on the 3 benchmark rooms, measured before rooms were cleaned between runs), `earlyRoads` (default on: roads from RCL 2), `demandLimits` (default off).
 - Runs are close to deterministic (two runs of the same bundle and room differ by ~1%), so one run per configuration is enough for A/B tests.
-- Logistics benchmark (8000 ticks, controller points; before = cd62340, after = logistics without demand limits): W7N3 6669 -> 4783 (-28%, open regression), W9N5 2917 -> 4861 (+67%), W1N3 4516 -> 7419 (+64%). CPU +0.6 to +2.2 (more creeps, same CPU per creep). Hivemind 3.0.0 reference: W7N3 107085, W9N5 189, W1N3 20300.
+- Hivemind rework benchmark: see "Economy core" below. Hivemind 3.0.0 reference (8000 ticks): W7N3 107085, W9N5 189, W1N3 20300.
 - Benchmark on several rooms (easy W7N3, medium W9N5, hard W1N3 where sources are ~30 tiles away): tuning on a single room overfits.
 - Watching: the harness publishes the run state on the server (redis key `pserver:run`, see `scripts/pserver-lib.mjs`), so `watch:server` follows a run started from another session or worktree (opens the client on the tested room, prints progress and the final PASS/FAIL). `--no-client` for progress only. The compose project is named `screepy` so every worktree talks to the same server.
 - One run at a time: the test user is shared, `test:server` refuses to start while another session's run is in progress (`--force` to replace it).
@@ -62,413 +60,88 @@ npm run watch:server                       # from any other session/worktree: cl
 - Speed: the harness sets `system.setTickDuration(1)` (as fast as the engine goes, ~50 ms/tick). `config.yml` uses `processors: 2` / `runnerThreads: 2`: with 16 processors and one active room, redis coordination made ticks ~4x slower.
 - Server quirks: `screepsmod-auth` is pinned to 2.8.3 in `config.yml` (2.9+ crashes with screepsmod-mongo); the admin CLI (port 21026) is only reachable from inside the container, the harness uses `docker compose exec`.
 
+### Mockup (fast)
+
+In-process engine (`screeps-server-mockup` master, vendored built in `scripts/mockup/vendor/`, same engine as the private server: screeps 4.3.0 on Node 24) in a dedicated Docker image `screepy-mockup` (built on first use, ~4 min; `@screeps/driver` compiles native code, no C++ toolchain needed on the host). Independent from the compose stack: runs can go in parallel. ~100 ticks/s on W7N3 (~10 ms/tick over 3000 ticks, ~17 ms/tick over 8000 ticks with 3 runs in parallel; about half of it is the bot own CPU); runs are nearly deterministic (the bot's own randomness, `_.sample`, gives a few % between runs).
+
+```bash
+npm run test:mockup                                    # build, 3000 ticks on W7N3, same PASS/FAIL checks as test:server
+npm run test:mockup -- --code test-results/bundles/before-ac17616.js --room W1N3 --ticks 8000
+npm run test:mockup -- --memory '{"foo":1}' --verbose   # initial Memory, print the bot console
+npm run test:mockup -- --list-rooms                    # rooms with a fixture
+npm run test:mockup -- --profile                       # + wall ms/tick per main loop stage and CPU per engine process
+npm run test:mockup -- --no-fast                       # unpatched engine (upstream main loop, 1 processor, TCP): A/B check of the speed-ups
+CODES="before=a.js after=dist/main.js" RUNS=1 JOBS=6 bash scripts/mockup/compare.sh   # like scripts/compare.sh, parallel
+node scripts/mockup/extract-fixtures.mjs W5N5          # add a room fixture from the private server (read-only)
+```
+
+- Rooms are fixtures (`scripts/mockup/fixtures/<room>.json`): real terrain and natural objects of the room and its 8 neighbours; rooms beyond are walled. Spawn spot = same `findSpawnSpot` as the harness.
+- Reports in `test-results/mockup-*.json` (`world.points` = same definition as the harness), compare summary in `test-results/mockup-compare-summary.txt`.
+- Not the full world: no other players, no backend/cron jobs. Use it to iterate, confirm on the private server before concluding.
+- Speed-ups (default, `--no-fast` disables them all; checked on 3 rooms x 8000 ticks: same points within noise):
+  - `scripts/mockup/fast.cjs` (preload, inherited by the engine child processes): no room history (`roomHistory:<room>`, replay data for the web client: the LokiJS storage answers each `hmset` with the whole hash, which grows without bound for rooms not active on a multiple of 20 ticks, so ticks got slower over a run: 16 ms/tick over 3000 ticks, 30-46 ms/tick over 8000 with 3-4 runs in parallel, vs 17-31 now) and no `mapView` writes; the runner fetches `users.code` (the 400+ KB bundle) once instead of every tick; the processor caches room terrain.
+  - `sim.cjs` main loop: accessible rooms / room statuses refreshed every 20 ticks like the engine main loop (upstream mockup: every tick), no `tickStarted`/`roomsDone` notifications (backend only), CPU read from the runner `user:<id>/cpu` pubsub instead of a `users.findOne` per tick, storage RPC over a Unix socket, `--processors 2` engine processors (rooms of a tick processed in parallel, as on the private server; 3 brings nothing with ~2 active rooms).
+  - Tried without gain: `--max-semi-space-size`. The rest is the bot (isolated-vm) and ~10 storage round trips per stage.
+- `scripts/mockup/nodelay.cjs` disables Nagle on the storage RPC sockets (without it a tick takes ~280 ms); the vendored `screepsServer.js` passes `STORAGE_HOST=127.0.0.1` to child processes (Node 17+ resolves `localhost` to `::1`).
+
 ## Configuration
 
 - Copy `screeps.example.json` to `screeps.json` with your Steam API key for deployment
 - Copy `config.example.yml` to `config.yml` for local dev server, then `docker compose up -d`
 
+
 ## Architecture
 
-### Entry Point & Game Loop
-- `src/main.ts` - Entry point, initializes MemHack and profiler, exports the `loop()` function
-- `src/gameLoop.ts` - Registers and runs all 24 modules through the ModuleManager
-
-### Module System (`src/ModuleManager.ts`)
-The game loop uses a module manager that:
-- Runs modules in sequence with CPU budget management (80% of limit)
-- Supports `mandatory` modules that are never skipped for CPU (errors are logged, never rerun in the same tick)
-- Supports `runEvery`, `runOnce`, `threshold` (bucket) and `disabled` options
-- Skips non-mandatory modules when CPU budget is exceeded; a module skipped `maxSkips` times (default 10) is forced to run
-- `sleepModule(name, ticks)` lets a module with nothing to do skip its next runs
-- Records per-module average CPU in `Memory.moduleState`
-
-Disabled for now (design sketches, no creeps are ever spawned for them): Combat, Lab, Highway, SK, Stronghold, PowerCreep, Factory, BasePlanner. Re-enable one at a time once wired to spawning and validated with `npm run test:server`.
-
-### Module Execution Order
-
-| # | Module | Frequency | Description |
-|---|--------|-----------|-------------|
-| 1 | RoomManager Init | mandatory | Initialize memory each tick |
-| 2 | RoomManager | every 5 | Phase evaluation, defense mode |
-| 3 | DemandCalculator | every 3 | Calculate part deficits (same cadence as spawning) |
-| 4 | TaskGenerator | every 5 | Create tasks from room state |
-| 5 | TaskDispatcher | mandatory | Assign tasks to idle creeps |
-| 6 | TaskExecutor | mandatory | Execute creep tasks |
-| 8 | SpawnManager | every 3 | Spawn by part deficit |
-| 9 | TowerManager | every tick | Defense and repairs |
-| 10 | DefenderManager | every tick | Rampart defense positioning |
-| 11 | ConstructionManager | every 20 | Building planning |
-| 12 | IntelManager | every tick | Record room intel |
-| 13 | ScoutManager | every 10 | Exploration routing |
-| 14 | RemoteMiningManager | every 5 | Remote operations |
-| 15 | ExpansionManager | every 50 | Room claiming |
-| 16 | CombatManager | every 10 | Offensive operations |
-| 17 | MarketManager | every 20 | Terminal trading |
-| 18 | LabManager | every 5 | Compound production |
-| 19 | HighwayManager | every 5 | Power banks & deposits |
-| 20 | SKManager | every 5 | Source keeper mining |
-| 21 | StrongholdManager | every 10 | Stronghold attacks |
-| 22 | PowerCreepManager | every 3 | Power creep operations |
-| 23 | FactoryManager | every 5 | Commodity production |
-| 24 | BasePlanner | every 100 | Layout visualization |
-| - | TrafficManager | mandatory, last | Resolve all movement (cartographer `reconcileTraffic`) |
-| - | Dashboard | optional | Visual debugging |
-
----
-
-## Core Systems
-
-### Task System (`src/modules/TaskGenerator.ts`, `TaskDispatcher.ts`, `TaskExecutor.ts`)
-
-Pure task-driven architecture where all creep work comes from the task queue.
-
-```
-TaskGenerator (every 5 ticks)
-       ↓
-TaskQueue (room.memory.taskQueue)
-       ↓
-TaskDispatcher (assigns to idle creeps)
-       ↓
-TaskExecutor (executes all creep actions)
-       ↓
-TrafficManager (processes movement)
-```
-
-#### Task Types & Priorities (lower = higher priority)
-
-| Task Type | Priority | Category | Description |
-|-----------|----------|----------|-------------|
-| ATTACK_HOSTILE | 5 | ATTACK | Attack hostile creeps |
-| BUILD_STRUCTURE | 45 | BUILD | Build construction sites |
-| HARVEST_SOURCE | 50 | HARVEST | Harvest from source |
-| REPAIR_STRUCTURE | 55 | REPAIR | Repair structures |
-| UPGRADE_CONTROLLER | 65 | UPGRADE | Upgrade controller |
-| REPAIR_RAMPART | 68 | REPAIR | Repair ramparts |
-| REPAIR_WALL | 70 | REPAIR | Repair walls |
-| RESERVE_CONTROLLER | 75 | CLAIM | Reserve remote room |
-| CLAIM_CONTROLLER | 80 | CLAIM | Claim new room |
-
-#### Task States
-- `PENDING` - Waiting for assignment
-- `ASSIGNED` - Assigned to a creep
-- `IN_PROGRESS` - Being executed
-- `COMPLETED` - Successfully finished
-- `FAILED` - Task failed or expired
-
-Energy transport is no longer a task: FILL_*/PICKUP_RESOURCE/WITHDRAW_* are not generated anymore (enum values kept so old tasks in Memory get purged). See Logistics below.
-
-### Logistics (`src/logistics/`)
-
-Room-level energy **offers** (dropped energy, tombstones, ruins, containers, storage) and **needs** (spawn, extensions, towers, controller container, storage), matched greedily with **reservations**.
-
-- `LogisticsNetwork.ts` (`logistics` singleton): requests are rebuilt in the heap at most once per tick and room, on first query. Reservations live in `creep.memory.logistics` (survive global resets): effective offer = stock - reserved withdrawals, effective need = free capacity - reserved deliveries. Expired after 100 ticks.
-- API: `claimOffer(creep, { forUpgrade })`, `claimNeed(creep, { maxPriority })`, `getTarget(creep)`, `release(creep)`, `uncoveredNeedAmount(room, maxPriority)`.
-- Priorities (`NEED_PRIORITY`, lower first): tower in defense 0, spawn/extension 1, tower 3, controller container 5, storage 9. Score = priority * 10 + range. Offers far away and smaller than half the creep's free capacity are skipped.
-- Controller container (range 3 of the controller, not next to a source): a need for everyone, an offer only for upgraders (`forUpgrade`). `STORAGE_FLOOR` (5000): non-haulers can't take storage below it when the room has haulers.
-- `haul.ts` `runHaul(creep, { maxPriority })`: fetch from an offer, deliver to a need. Run by `BodyType.TRANSPORT` creeps (out of the task dispatcher, no role) and by workers (`memory.hauling`) while spawn/extensions lack energy; a worker never drops a task in progress.
-- Workers fetch energy for their tasks through `claimOffer`; fallback: harvest at a source with a free tile.
-- Upgraders never switch to hauling (switching them stalled RCL 1 by ~800 ticks).
-- `DemandCalculator` has optional WORK limits (cap at 2x source harvest tiles without storage, brake while >= 2 workers starve), **off by default** (`Memory.config.demandLimits`): they cost points on the benchmark rooms.
-- Counters: `logistics:offerClaimed`, `needClaimed`, `delivered`, `offerSkippedSmall`, `reservationExpired`, `demand:workBraked`.
-
-### Traffic System (`src/modules/TrafficManager.ts`)
-
-Centralized movement control replacing all direct `moveTo()` calls, backed by `screeps-cartographer`
-(path caching, repath when stuck, priority-based swapping and shoving via `reconcileTraffic()`).
-
-- `trafficManager.preTick()` runs at the start of the loop, `TrafficManager` module runs last (after every creep-moving module)
-- Working creeps must call `requestMove` **every tick, even when in range**: it registers a "stay in range" intent so they are not shoved away (see `TaskExecutor.approach()`)
-- `getStuckTicks(creep)`: ticks a creep wanted to move but didn't (used for task failure)
-- Idle position finding for parked creeps
-
-**Usage:**
-```typescript
-trafficManager.requestMove(creep, targetPos, { range: 1, priority: 5 }); // priority: lower = more important
-```
-
-### Demand Calculator (`src/modules/DemandCalculator.ts`)
-
-Part-based spawning system that calculates deficits by body part type.
-
-**Tracked Parts:**
-- WORK parts for harvesting/building/upgrading
-- CARRY parts for transport capacity
-- ATTACK/RANGED_ATTACK for combat
-- HEAL for support
-- CLAIM for expansion
-
-### Phase System (`src/modules/RoomManager.ts`)
-
-Each room progresses through phases based on development level.
-
-| Phase | Name | Condition | Focus |
-|-------|------|-----------|-------|
-| 0 | EMERGENCY | creeps <= 2 | Survival spawning |
-| 1 | BOOTSTRAP | creeps >= 3 | Build containers |
-| 2 | FOUNDATION | containers done, RCL 2+ | Extensions |
-| 3 | EXPANSION | 80% extensions, RCL 3+ | Roads, upgrading |
-| 4 | ESTABLISHED | storage, RCL 4+ | Storage economy |
-| 5 | ADVANCED | RCL 6+, terminal | Market, remotes |
-| 6 | DOMINANT | RCL 8 | Full automation |
-
----
-
-## Advanced Systems
-
-### Defense (`src/modules/DefenderManager.ts`, `TowerManager.ts`)
-
-- **TowerManager**: Smart targeting (healers > ranged > melee > tough), energy reservation
-- **DefenderManager**: Rampart positioning, threat-based defender spawning
-- **Defense Mode**: Activates on hostiles, boosts tower/rampart priorities
-
-### Intel & Scouting (`src/modules/IntelManager.ts`, `ScoutManager.ts`)
-
-- **IntelManager**: Records room data (sources, minerals, hostiles, owner)
-- **ScoutManager**: Routes scouts to unexplored rooms, maintains sector coverage
-- **Memory**: `Memory.intel[roomName]` stores persistent room data
-
-### Remote Mining (`src/modules/RemoteMiningManager.ts`)
-
-- Evaluates nearby rooms for remote harvesting
-- Spawns remote miners and haulers
-- Manages container placement and reservation
-- Invader detection and defender dispatch
-
-### Expansion (`src/modules/ExpansionManager.ts`)
-
-- Room scoring (sources, mineral, distance, neighbors)
-- Automatic claiming when GCL allows
-- Bootstrap support for new rooms
-- Cross-room resource transfer
-
-### Combat (`src/modules/CombatManager.ts`)
-
-**Attack Types:**
-- `DRAIN` - Tower drain attacks
-- `DISMANTLE` - Wall/rampart destruction
-- `HARASS` - Remote mining disruption
-- `ASSAULT` - Full room attack
-
-**Combat Roles:** Attacker, Healer, Dismantler, Tank
-
-### Market (`src/modules/MarketManager.ts`)
-
-- Automated selling of excess resources
-- Automated buying when deficient
-- Price tracking and history
-- Transaction cost optimization
-- Inter-room resource transfer
-
-### Labs (`src/modules/LabManager.ts`)
-
-- Complete compound recipe tree (30+ compounds)
-- Boost effects mapping for all body parts
-- Production queue management
-- Boost request system for combat/economy creeps
-
-**Boost Tiers:**
-- T1: +100% effect (e.g., UH for attack)
-- T2: +200% effect (e.g., UH2O)
-- T3: +300% effect (e.g., XUH2O)
-
-### Highway Harvesting (`src/modules/HighwayManager.ts`)
-
-- Observer-based highway room scanning
-- Power bank profitability calculation
-- Attack team coordination (attackers + healers)
-- Deposit mining with cooldown management
-- Hauler timing for power pickup
-
-### Source Keeper Rooms (`src/modules/SKManager.ts`)
-
-- SK room evaluation and selection
-- Keeper spawn prediction and tracking
-- SK killer patrol routes
-- Safe mining window calculation
-- Invader raid detection and response
-
-### Strongholds (`src/modules/StrongholdManager.ts`)
-
-- Stronghold detection via scouting
-- Level assessment (1-5) and composition planning
-- Coordinated assault timing
-- Target prioritization (core > towers > ramparts)
-- Loot collection after victory
-
-### Power Creeps (`src/modules/PowerCreepManager.ts`)
-
-**Economy Powers (prioritized):**
-- `PWR_OPERATE_SPAWN` - Faster spawning
-- `PWR_OPERATE_EXTENSION` - Fill from storage
-- `PWR_REGEN_SOURCE` - Bonus energy
-- `PWR_OPERATE_FACTORY` - Factory boost
-- `PWR_REGEN_MINERAL` - Bonus minerals
-
-**Features:**
-- Automatic spawning based on GPL
-- Room assignment optimization
-- Renewal management
-- Power cooldown tracking
-
-### Factories (`src/modules/FactoryManager.ts`)
-
-- Factory level tracking per room
-- Mineral compression (bars)
-- Commodity production chains (L0 → L5)
-- Multi-room coordination
-- Market integration for sales
-
-**Production Chain:**
-```
-Base Minerals → Bars (L0) → Basic Commodities (L0)
-    → L1 Components → L2 → L3 → L4 → L5 Products
-```
-
-### Base Planning (`src/modules/BasePlanner.ts`)
-
-- Terrain analysis with distance transforms
-- Optimal anchor point finding
-- Stamp patterns (spawn cluster, storage core, lab cluster, towers)
-- Extension placement in spiral pattern
-- Road network generation
-- Rampart perimeter planning
-- Plan caching in Memory
-
----
-
-## File Structure
-
-```
-src/
-├── main.ts                 # Entry point
-├── gameLoop.ts             # Module registration (24 modules)
-├── ModuleManager.ts        # CPU-budgeted module runner
-├── config/
-│   ├── bodyTypes.ts        # Creep body configurations
-│   └── gameConfig.ts       # Global constants
-├── modules/
-│   ├── RoomManager.ts      # Phase system, memory init
-│   ├── SpawnManager.ts     # Part-deficit spawning
-│   ├── TaskGenerator.ts    # Task creation
-│   ├── TaskDispatcher.ts   # Task assignment
-│   ├── TaskExecutor.ts     # Task execution (17 task types)
-│   ├── DemandCalculator.ts # Part demand tracking
-│   ├── TrafficManager.ts   # Centralized movement
-│   ├── ConstructionManager.ts
-│   ├── TowerManager.ts
-│   ├── DefenderManager.ts
-│   ├── IntelManager.ts
-│   ├── ScoutManager.ts
-│   ├── RemoteMiningManager.ts
-│   ├── ExpansionManager.ts
-│   ├── CombatManager.ts
-│   ├── MarketManager.ts
-│   ├── LabManager.ts
-│   ├── HighwayManager.ts
-│   ├── SKManager.ts
-│   ├── StrongholdManager.ts
-│   ├── PowerCreepManager.ts
-│   ├── FactoryManager.ts
-│   ├── BasePlanner.ts
-│   └── visuals/
-│       └── Dashboard.ts
-├── types/
-│   └── TaskTypes.ts        # Task enums and interfaces
-├── utils/
-│   ├── MemHack.ts          # Memory optimization
-│   ├── profiler.ts         # CPU profiling
-│   ├── roomUtils.ts
-│   ├── creepUtils.ts
-│   ├── logger.ts
-│   └── logCPU.ts
-└── type.d.ts               # Global type augmentations
-```
-
----
-
-## Memory Structures
-
-### Global Memory
-```typescript
-interface Memory {
-    // Core
-    rooms: { [name: string]: RoomMemory };
-    creeps: { [name: string]: CreepMemory };
-
-    // Intel
-    intel: { [roomName: string]: RoomIntel };
-
-    // Traffic
-    pathCache?: { [key: string]: CachedPath };
-    traffic?: { lastCleanup: number };
-
-    // Operations
-    remoteRooms?: { [roomName: string]: RemoteRoomData };
-    combatOperations?: { [id: string]: CombatOperation };
-    highwayOperations?: { power: {...}, deposits: {...} };
-    strongholdOperations?: { [roomName: string]: StrongholdOp };
-    skOperations?: { [roomName: string]: SKOperation };
-
-    // Production
-    labQueue?: { [roomName: string]: LabQueue };
-    basePlans?: { [roomName: string]: BasePlan };
-}
-```
-
-### Room Memory
-```typescript
-interface RoomMemory {
-    phase: number;
-    defenseMode: boolean;
-    threatLevel: number;
-    taskQueue: Task[];
-    partDemand: Record<BodyPartConstant, number>;
-    spawnQueue: SpawnRequest[];
-    sources: SourceMemory[];
-    lastConstructionChange?: number;
-}
-```
-
-### Creep Memory
-```typescript
-interface CreepMemory {
-    role: string;
-    homeRoom: string;
-    task?: Task;
-    taskState?: "acquiring" | "executing";
-    _path?: string;
-    _pathTick?: number;
-    _pathTarget?: string;
-    squad?: string;
-}
-```
-
----
-
-## Key Dependencies
-
-- `screeps-cartographer` - Pathing/movement utilities
-- `screeps-cache` - Caching utilities
-- `screeps-viz` - Visualization tools
-
----
+Design: `docs/superpowers/specs/2026-10-17-hivemind-economy-rework-design.md`. Exact Hivemind rules with `file:line` sources: `docs/hivemind/hivemind-{spawning,roles,construction}.md`.
+
+### Game loop (`src/gameLoop.ts`, `src/ModuleManager.ts`)
+
+The ModuleManager runs modules in order with a CPU budget (80% of the limit): `mandatory` modules always run (errors logged in `Memory.moduleErrors`, never rerun in the same tick), others support `runEvery`, `runOnce`, `threshold` (bucket), `disabled`, `maxSkips` (forced after N CPU skips), `sleepModule(name, ticks)`. Per-module average CPU in `Memory.moduleState`.
+
+| Module | Frequency | Role |
+|---|---|---|
+| RoomIntel | mandatory | Hostiles in every visible room: `room.memory.enemies` (`expires` = expected death of the last hostile), `defenseMode` |
+| RoomPlanner | every 10 | Computes each owned room's plan once (`Memory.rooms[r].plan`) |
+| CreepRunner | mandatory | Runs every creep through the handler of its `memory.role` |
+| SpawnManager | mandatory | Best spawn option per room, one creep per room and tick |
+| RoomBuilder | every 20 | Construction sites from the plan, max 5 per room |
+| TowerManager, IntelManager | every tick | Towers; room intel |
+| RemoteMining | every tick (selection every 20) | Remote sources each owned room mines |
+| ScoutManager (10), ExpansionManager (50), MarketManager (20) | | Kept from the previous design (scout: from RCL 1, priority 4 before the storage) |
+| TrafficManager | mandatory, last | Resolves every move (cartographer `reconcileTraffic`) |
+
+### Economy core
+
+Convention everywhere (`src/core/options.ts` `getBestOption`): **higher priority wins**, then higher weight; negative priority is never chosen; ties go to the first option collected.
+
+- **Roles** (`src/roles/`, registered in `roles/registry.ts`): `harvester` (bound to a source, stationary on its planned harvest position = source container once a transporter exists, delivers like a transporter before), `transporter` (90%/10% hysteresis, orders revalidated every tick), `builder` (works from 90% full, builds/repairs, upgrades when nothing to do, never harvests), `upgrader`, `brawler` (RCL < 4 defense). `remoteHarvester`, `remoteHauler`, `reserver` (`src/roles/remote*.ts`, `reserver.ts`; flee hostiles that can fight, `roles/flee.ts`). Scout and claimer register their own handlers in their modules.
+- **Spawning** (`src/modules/SpawnManager.ts`, `src/spawning/spawnRoles.ts`): each spawn role returns options (priority, weight); if the best option can't be paid yet the room waits (no cheaper fallback). Bodies from `src/core/bodyBuilder.ts` (exact port of Hivemind's BodyBuilder, `MoveMode`). Modules ask for creeps with `spawnManager.requestSpawn({ id, roomName, body, priority, memory })` on the same scale (harvesters 4-6, builders 3-4, remote/claimer 3, scout 1).
+- **Dispatcher** (`src/dispatcher/`): `sourceDispatcher` / `destinationDispatcher` with providers (container, drop, grave, storage, overfullExtension / spawn, bay, tower, controller container, workerCreep, storage, drop at the base center). A creep's order lives in `creep.memory.order`; "reservation" = priority penalty per creep holding the same order, indexed per tick in `src/core/roomState.ts` (`creepsWithOrder`, `setOrder`, `clearOrder`).
+- **Room state** (`src/core/roomState.ts`): per-tick caches (creeps by role and home room, structures by type), source/controller containers, storage location (plan center before the storage), effective energy, bays.
+- **Planner** (`src/planner/`): one "weighted" Hivemind variation (center, harvest positions, upgrader spot + controller container, exit corridors, core, harvest bays, extension bays, towers), packed in `Memory.rooms[r].plan`; bump `PLAN_VERSION` (`RoomPlan.ts`) to replan every room. Offline check: `node tests/planner/run.mjs` (ASCII plans in `test-results/plan-<room>.txt`).
+- **Construction** (`src/construction/RoomBuilder.ts`): Hivemind order — RCL 1 spawns; RCL 2+ extensions bay by bay, source and controller containers, swamp roads to sources/controller; RCL 3 harvester-bay extensions, towers; RCL 4 storage, then every planned road once the storage is built.
+
+- **Remote mining** (`src/remote/`, rules in `docs/hivemind/hivemind-remote.md`): every 20 ticks each owned room with a plan keeps its 5 best remote rooms (4 from RCL 4) within 3 rooms, scored 3000 / shortest path from a source to the planned storage (`Memory.remoteMining`, paths cached 5000 ticks, failures 500). Spawn role `remote` (one option per tick, closest source first): hauler (once the container exists, CARRY = 2 x travel x energy/tick / 50), harvester (first one priority 1, then 3; places, builds and repairs the container), reserver (from 650 capacity, one per free tile around the controller). Haulers deliver at home through the destination dispatcher. A remote with a dangerous hostile (or on the way) gets no spawn until the hostile is expected dead. Not ported yet: remote builders/roads (need a storage), remote defense, dismantlers.
+
+Deliberate deviations from Hivemind, each measured on the 3 benchmark rooms (mockup, 8000 ticks):
+- Transporter count also covers the loaded round trip from each source to the storage location (Hivemind: fixed 3) — W1N3 12.9k -> 24.6k.
+- Builders/transporters get 1 MOVE per part while the haul paths are mostly swamp and the room has < 20 roads (Hivemind: road bodies) — W9N5 700 -> 4.2k with the early upgrader.
+- One upgrader from RCL 2 before the storage, spawned at priority 4 (Hivemind: 0, builders upgrade once construction is done; W9N5's swamp construction never ended). Two upgraders were worse on W9N5.
+- With at least one transporter, missing transporters weigh 0.6 instead of 0 so they beat builders (energy rotting by the sources inflated the builder quota and choked W9N5).
+- Spawn starvation: waiting 50 ticks for energy that doesn't rise sizes bodies on the energy available.
+- The plan's base center is the candidate closest to the existing spawn (Hivemind ignores it) — W9N5 3.4k -> 4.6k, W7N3 -2%.
+- Remote: a room without any source path is skipped (Hivemind scored it 6); a failed path is retried after 500 ticks, never cached before the plan exists (Hivemind: 5000); haulers' delivery orders count in `creepsWithOrder`.
+- W9N5 is noisy (single runs from ~2.8k to ~5.5k): compare means of 3 runs there.
+
+Counters in `Memory.stats.counters`: `spawned:<role>`, `work:{harvest,build,repair,upgrade,builderUpgrade,builderFetch,remoteHarvest,remoteBuild}`, `deliver:<order type>`, `idle:<role>`, `harvester:{walking,delivering}`, `spawn:starved`, `roleError:<role>`, `moveError:<code>:<role>`.
+
+### Traffic (`src/modules/TrafficManager.ts`)
+
+All movement goes through `trafficManager.requestMove(creep, pos, { range, priority })` (lower priority value = more important), backed by `screeps-cartographer`. `whenInRange(creep, range, target, action)` (`src/core/movement.ts`) registers the move — or the "stay in range" intent once there — every tick, then runs the action: working creeps must call it every tick so they are not shoved away.
 
 ## Development Notes
 
-### Adding a New Module
-1. Create `src/modules/NewManager.ts` with singleton pattern
-2. Export module function: `export const newManagerModule = () => { ... }`
-3. Register in `gameLoop.ts` with appropriate `runEvery` setting
-4. Add any new Memory interfaces to `type.d.ts`
-
-### Task System Extension
-1. Add new `TaskType` enum value in `TaskTypes.ts`
-2. Add task creation logic in `TaskGenerator.ts`
-3. Add execution handler in `TaskExecutor.ts`
-4. Update `DemandCalculator.ts` if new body parts needed
-
-### CPU Budget Guidelines
-- Mandatory modules: ~40% budget (task system, traffic)
-- Economy modules: ~30% budget (spawning, construction)
-- Advanced modules: ~30% budget (combat, market, labs)
-- Target: <20 CPU with 30 creeps
+- New role: `src/roles/<role>.ts` with `registerRole(...)`, imported by `modules/CreepRunner.ts`; a spawn role in `src/spawning/spawnRoles.ts` (`ECONOMY_SPAWN_ROLES`, alphabetical order breaks ties) or `requestSpawn` from a module.
+- New module: export `xModule = () => {...}`, register it in `gameLoop.ts`.
+- Validate with the mockup first (`scripts/mockup/compare.sh`, 3 rooms), confirm on the private server (`scripts/compare.sh`).
+- CPU target: < 20 CPU with 30 creeps.

@@ -105,3 +105,7 @@ applicationhost.config
 
 # Plan execution workspaces
 /.superpowers
+
+# Mockup runner deps (only with --native; normally inside the screepy-mockup image)
+/scripts/mockup/node_modules
+/scripts/mockup/package-lock.json

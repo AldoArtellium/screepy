@@ -17,13 +17,13 @@ import { registerRole } from "../roles/registry";
 
 const CLAIMER_ROLE = "claimer";
 
-/** After the base economy, before remotes */
-const CLAIMER_SPAWN_PRIORITY = 2.4;
+/** Spawn priority, economy scale (higher = sooner): after the base economy */
+const CLAIMER_SPAWN_PRIORITY = 3;
 
 /** Expansion configuration */
 const EXPANSION_CONFIG = {
-    /** Minimum phase to consider expansion */
-    MIN_PHASE: 4,
+    /** Minimum RCL (with a storage) to support an expansion */
+    MIN_RCL: 4,
     /** Minimum GCL to claim (GCL 2 = 2 rooms) */
     MIN_GCL_FOR_EXPANSION: 2,
     /** Maximum distance for expansion targets */
@@ -110,8 +110,7 @@ class ExpansionManager {
         // Get all owned rooms that can support expansion
         const parentRooms = Object.values(Game.rooms).filter(room => {
             if (!room.controller?.my) return false;
-            const phase = room.memory.phase ?? 0;
-            return phase >= EXPANSION_CONFIG.MIN_PHASE;
+            return room.controller.level >= EXPANSION_CONFIG.MIN_RCL && !!room.storage;
         });
 
         if (parentRooms.length === 0) return;
@@ -345,11 +344,6 @@ class ExpansionManager {
                 );
             }
             return;
-        }
-
-        // Ensure room is in emergency/bootstrap phase
-        if (room.memory.phase === undefined || room.memory.phase > 1) {
-            room.memory.phase = 0;
         }
 
         // Place spawn construction site if needed

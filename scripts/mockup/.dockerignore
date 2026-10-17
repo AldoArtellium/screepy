@@ -1,0 +1,5 @@
+fixtures
+node_modules
+*.mjs
+*.cjs
+*.sh

@@ -1,9 +1,6 @@
 /**
- * Role registry for module-driven creeps.
- *
- * Creeps spawned through spawnManager.requestSpawn() carry `memory.role`. TaskExecutor
- * runs the handler registered for that role every tick instead of the task system.
- * Modules register their handlers at load time:
+ * Role registry: every creep carries `memory.role`; the creep runner calls the handler registered
+ * for it each tick. Roles register their handler at load time:
  *
  *   registerRole("scout", creep => scoutManager.runScout(creep));
  *
@@ -20,9 +17,4 @@ export function registerRole(role: string, handler: RoleHandler): void {
 
 export function getRoleHandler(role: string): RoleHandler | undefined {
     return handlers.get(role);
-}
-
-/** Creeps that belong to the task system (no role) */
-export function isTaskCreep(creep: Creep): boolean {
-    return !creep.memory.role;
 }

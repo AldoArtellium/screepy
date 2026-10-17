@@ -16,8 +16,8 @@ import { registerRole } from "../roles/registry";
 
 const SCOUT_ROLE = "scout";
 
-/** After the economy (workers 1, transports 2) */
-const SCOUT_SPAWN_PRIORITY = 4;
+/** Economy scale (higher = sooner): after everything else */
+const SCOUT_SPAWN_PRIORITY = 1;
 
 /** Scout configuration */
 const SCOUT_CONFIG = {
@@ -25,8 +25,8 @@ const SCOUT_CONFIG = {
     MAX_SCOUTS_PER_ROOM: 1,
     /** Distance to scout from each owned room */
     SCOUT_RANGE: 3,
-    /** Minimum phase to start scouting */
-    MIN_PHASE: 2,
+    /** Minimum RCL to start scouting (remote mining starts at RCL 1, like Hivemind) */
+    MIN_RCL: 1,
     /** Ticks between scout spawns */
     SPAWN_COOLDOWN: 500
 };
@@ -40,8 +40,7 @@ class ScoutManager {
             const room = Game.rooms[roomName];
             if (!room.controller?.my) continue;
 
-            const phase = room.memory.phase ?? 0;
-            if (phase < SCOUT_CONFIG.MIN_PHASE) continue;
+            if (room.controller.level < SCOUT_CONFIG.MIN_RCL) continue;
 
             this.manageRoomScouts(room);
         }
@@ -69,7 +68,9 @@ class ScoutManager {
             id: `scout-${room.name}`,
             roomName: room.name,
             body: [MOVE],
-            priority: SCOUT_SPAWN_PRIORITY,
+            // Hivemind: priority 4 / weight 1 in the early game (one room, no storage), else 1
+            priority: room.storage ? SCOUT_SPAWN_PRIORITY : 4,
+            weight: room.storage ? 0 : 1,
             memory: { role: SCOUT_ROLE, room: room.name }
         });
     }

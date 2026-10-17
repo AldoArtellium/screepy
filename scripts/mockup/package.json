@@ -1,0 +1,9 @@
+{
+  "name": "screepy-mockup-runner",
+  "private": true,
+  "description": "In-process Screeps engine (screeps-server-mockup master, vendored) for fast bot tests. Installed inside the screepy-mockup Docker image only.",
+  "dependencies": {
+    "screeps-server-mockup": "file:vendor/screeps-server-mockup",
+    "screeps": "4.3.0"
+  }
+}
