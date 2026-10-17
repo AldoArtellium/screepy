@@ -2,6 +2,7 @@
 # Mockup equivalent of scripts/compare.sh: bundles x rooms x runs in the in-process engine.
 #   CODES="before=path/to/a.js after=dist/main.js"   name=bundle pairs (required)
 #   ROOMS="W7N3 W9N5 W1N3"   RUNS=2   TICKS=8000   JOBS=3 (parallel containers)
+#   EXTRA="--cpu-limit 13"   extra options for every run
 # One line per run in test-results/mockup-compare-summary.txt, then the mean per (room, bundle).
 cd "$(dirname "$0")/../.."
 mkdir -p test-results
@@ -14,7 +15,7 @@ OUT=test-results/mockup-compare-summary.txt
 : > "$OUT"
 
 summarize() { # room name run log
-  local log=$4 pts cpu errors ext speed stor rcl ocpu
+  local log=$4 pts cpu errors ext speed stor rcl ocpu bucket
   pts=$(grep -ao "total points [0-9]*" "$log" | tail -1 | grep -o "[0-9]*$")
   cpu=$(grep -ao "Avg CPU [0-9][0-9.]*" "$log" | tail -1 | awk '{print $NF}')
   errors=$(grep -ao "Module errors [0-9]*" "$log" | awk '{print $NF}')
@@ -22,8 +23,9 @@ summarize() { # room name run log
   speed=$(grep -ao "Speed [0-9.]*" "$log" | awk '{print $NF}')
   stor=$(grep -ao "storage [0-9]*" "$log" | tail -1 | awk '{print $NF}')
   rcl=$(grep -ao "RCL [0-9]* (" "$log" | tail -1 | awk '{print $2}')
+  bucket=$(grep -ao "| bucket -*[0-9]*" "$log" | tail -1 | awk '{print $NF}')
   ocpu=$(grep -ao "official CPU estimate [0-9.]*" "$log" | awk '{print $NF}')
-  echo "$1 $2 run=$3 points=${pts:-0} rcl=${rcl:-?} storage=${stor:-?} cpu=${cpu:-n/a} official=${ocpu:-n/a} ext=${ext:-?} errors=${errors:-?} ticks/s=${speed:-?}"
+  echo "$1 $2 run=$3 points=${pts:-0} rcl=${rcl:-?} storage=${stor:-?} cpu=${cpu:-n/a} official=${ocpu:-n/a} bucket=${bucket:-n/a} ext=${ext:-?} errors=${errors:-?} ticks/s=${speed:-?}"
 }
 
 # Build the image (if needed) once before the parallel runs, with a 1-tick run
@@ -38,7 +40,7 @@ for room in $ROOMS; do
       name=${pair%%=*}; code=${pair#*=}
       log="test-results/mockup-compare-$room-$name-$run.log"
       (
-        node scripts/mockup/run.mjs --ticks "$TICKS" --room "$room" --code "$code" --log-every 1000 > "$log" 2>&1
+        node scripts/mockup/run.mjs --ticks "$TICKS" --room "$room" --code "$code" --log-every 1000 $EXTRA > "$log" 2>&1
         summarize "$room" "$name" "$run" "$log" | tee -a "$OUT"
       ) &
       while [ "$(jobs -rp | wc -l)" -ge "$JOBS" ]; do sleep 1; done

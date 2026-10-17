@@ -12,6 +12,7 @@ import { intelManager } from "../modules/IntelManager";
 import { isRoomUnderAttack } from "../modules/RoomIntel";
 import { roomPlanner } from "../planner/RoomPlanner";
 import { log } from "../utils/logger";
+import { countStat } from "../utils/stats";
 
 export interface RemoteSource {
     /** `${room}:${x}:${y}` */
@@ -40,6 +41,10 @@ declare global {
             sources: { [key: string]: RemoteSource };
             paths: { [key: string]: PathCache };
             lastSelect: number;
+            /** CPU budget: slow average of the tick CPU, remote rooms allowed empire-wide (none = no cap yet) */
+            cpuAvg?: number;
+            maxRooms?: number;
+            budgetChanged?: number;
         };
     }
     interface RoomMemory {
@@ -169,8 +174,43 @@ function maxRemotes(home: Room): number {
     return Math.floor(spawns * 5 - needs);
 }
 
+/**
+ * Not in Hivemind: an empire-wide cap on remote rooms from the CPU actually used. Remotes are the
+ * bulk of the creeps (a room at RCL 2 with 5 remotes ran ~55 small creeps, 18 of 20 CPU on
+ * shard0); the official CPU includes the 0.2 per intent, so the tick CPU is the right signal.
+ * Above 95% of the limit (or bucket < 5000) the worst remote room goes, below 75% (bucket > 9000)
+ * one more is allowed; at most one change per 1000 ticks so the creeps of a dropped remote can die out.
+ * (85% / 70% cut W7N3 by 27% in the mockup: it oscillated while the bucket stayed full.)
+ */
+const BUDGET_HIGH = 0.95;
+const BUDGET_LOW = 0.75;
+const BUDGET_STEP_TICKS = 1000;
+
+function updateBudget(currentRooms: number, possibleRooms: number): void {
+    const mem = memory();
+    const cpu = Memory.stats?.cpu;
+    if (cpu === undefined) return;
+    // ~400 ticks average (updated every SELECT_INTERVAL ticks)
+    mem.cpuAvg = mem.cpuAvg === undefined ? cpu : mem.cpuAvg * 0.95 + cpu * 0.05;
+    mem.budgetChanged ??= Game.time;
+    if (Game.time - mem.budgetChanged < BUDGET_STEP_TICKS) return;
+    const limit = Game.cpu.limit;
+    const bucket = Game.cpu.bucket;
+    let next = mem.maxRooms;
+    if (mem.cpuAvg > limit * BUDGET_HIGH || bucket < 5000) next = Math.max(0, currentRooms - 1);
+    else if (mem.cpuAvg < limit * BUDGET_LOW && bucket > 9000 && mem.maxRooms !== undefined) {
+        next = mem.maxRooms >= possibleRooms ? undefined : mem.maxRooms + 1;
+    }
+    if (next === mem.maxRooms) return;
+    mem.maxRooms = next;
+    mem.budgetChanged = Game.time;
+    countStat("remote:budgetChange");
+    log.info("RemoteMining", `CPU ${mem.cpuAvg.toFixed(1)}/${limit}, bucket ${bucket}: remote rooms ${next === undefined ? "uncapped" : `capped at ${next}`}`);
+}
+
 function selectRemotes(): void {
     const selected: { [key: string]: RemoteSource } = {};
+    const picked: { score: number; sources: RemoteSource[] }[] = [];
     for (const name in Game.rooms) {
         const home = Game.rooms[name];
         if (!home.controller?.my || !roomPlanner.getPlan(home.name)) continue;
@@ -201,9 +241,14 @@ function selectRemotes(): void {
             scored.push({ room: roomName, score: 3000 / _.min(sources.map(s => s.travelTime)), sources });
         }
         scored.sort((a, b) => b.score - a.score);
-        for (const entry of scored.slice(0, maxRemotes(home))) {
-            for (const source of entry.sources) selected[source.key] = source;
-        }
+        picked.push(...scored.slice(0, maxRemotes(home)));
+    }
+    // CPU budget: the best scored rooms of the whole empire
+    updateBudget(new Set(Object.values(memory().sources).map(s => s.room)).size, picked.length);
+    picked.sort((a, b) => b.score - a.score);
+    const cap = memory().maxRooms ?? picked.length;
+    for (const entry of picked.slice(0, cap)) {
+        for (const source of entry.sources) selected[source.key] = source;
     }
     const before = Object.keys(memory().sources).sort().join();
     memory().sources = selected;

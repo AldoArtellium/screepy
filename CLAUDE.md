@@ -70,7 +70,7 @@ npm run test:mockup -- --code test-results/bundles/before-ac17616.js --room W1N3
 npm run test:mockup -- --memory '{"foo":1}' --verbose   # initial Memory, print the bot console
 npm run test:mockup -- --list-rooms                    # rooms with a fixture
 npm run test:mockup -- --profile                       # + wall ms/tick per main loop stage and CPU per engine process
-npm run test:mockup -- --cpu-limit 8                   # lower the bot's CPU limit to drain the bucket (throttling tests)
+npm run test:mockup -- --cpu-limit 13                  # lower the bot's CPU limit (13 code CPU ~ 20 official CPU with intents)
 npm run test:mockup -- --raid 9000:smallMelee+smallRanged,15000:bigMelee+bigRanged   # invader raids (backend bodies), outcome in the report
 npm run test:mockup -- --no-fast                       # unpatched engine (upstream main loop, 1 processor, TCP): A/B check of the speed-ups
 CODES="before=a.js after=dist/main.js" RUNS=1 JOBS=6 bash scripts/mockup/compare.sh   # like scripts/compare.sh, parallel
@@ -138,6 +138,7 @@ Deliberate deviations from Hivemind, each measured on the 3 benchmark rooms (moc
 - With at least one transporter, missing transporters weigh 0.6 instead of 0 so they beat builders (energy rotting by the sources inflated the builder quota and choked W9N5).
 - Spawn starvation: waiting 50 ticks for energy that doesn't rise sizes bodies on the energy available.
 - The plan's base center is the candidate closest to the existing spawn (Hivemind ignores it) — W9N5 3.4k -> 4.6k, W7N3 -2%.
+- Remote CPU budget (`RemoteMining.ts` `updateBudget`): an empire-wide cap on remote rooms from the tick CPU averaged over ~400 ticks (official CPU includes intents): above 95% of the limit or bucket < 5000 the worst scored remote room goes, below 75% with bucket > 9000 one comes back, at most one change per 1000 ticks (`Memory.remoteMining.maxRooms`, counter `remote:budgetChange`). Mockup, `--cpu-limit 13` (~20 official), 20000 ticks: W9N5 85k -> 110k (RCL 2 at 12.7/13 CPU with 34 creeps: capped to 3 remotes, RCL 3 sooner, then uncapped), W1N3 183k -> 192k, W7N3 381k -> 355k (single runs). 85% / 70% thresholds oscillated and cut W7N3 by 27%.
 - Remote: a room without any source path is skipped (Hivemind scored it 6); a failed path is retried after 500 ticks, never cached before the plan exists (Hivemind: 5000); haulers' delivery orders count in `creepsWithOrder`.
 - Planner: the base center is never built on (towers placed by coverage landed on it in W9N5, blocking every path to the energy drop point; the variation scored -68.9 instead of 2.4); no exit direction is ever considered safe (Hivemind: exits only enemies can't reach); without any rampart, towers go on the flood spots closest to the center; the first variation is used at once and replaced by the best one only while nothing is built.
 - W9N5 is noisy (single runs from ~2.8k to ~5.5k): compare means of 3 runs there.
