@@ -1,6 +1,6 @@
 # Feuille de route : refonte sur le modèle Hivemind
 
-Mise à jour : 2026-10-17 (J5 terminé). Le détail de chaque jalon terminé est dans `docs/superpowers/specs/2026-10-17-hivemind-economy-rework-design.md`. Les règles Hivemind extraites sont dans `docs/hivemind/*.md`. L'architecture et les écarts mesurés sont dans `CLAUDE.md`.
+Mise à jour : 2026-10-17 (J6 terminé). Le détail de chaque jalon terminé est dans `docs/superpowers/specs/2026-10-17-hivemind-economy-rework-design.md`. Les règles Hivemind extraites sont dans `docs/hivemind/*.md`. L'architecture et les écarts mesurés sont dans `CLAUDE.md`.
 
 ## Méthode (à garder pour chaque jalon)
 
@@ -19,13 +19,13 @@ Mise à jour : 2026-10-17 (J5 terminé). Le détail de chaque jalon terminé est
 | J3 | Ère du storage : builders distants (routes et container des remotes), routes d'opération dans la room d'origine, défense des remotes (invader cores, petits hostiles), force ennemie dans RoomIntel | Serveur, preset RCL 4, 6 000 ticks, W7N3 : 211,9k → 220,7k (+4 %). Mockup, 30 000 ticks, 3 runs : W7N3 902k → 918k, W1N3 344k → 338k (bruit), storage +10k sur les deux |
 | J4 | CPU, premier passage : comptage des intents et estimation du CPU officiel, CPU par rôle, ralentissement par bucket des creeps et des modules (Hivemind), cache des chemins distants ; hotfix du scout (rooms d'un autre statut, cibles sans chemin) | Mockup, 20 000 ticks, 3 runs : CPU de code W7N3 13,8 → 12,9, W1N3 10,4 → 9,2 ; points dans le bruit (-2 %). Limite de 8 CPU : bucket stable à ~3000 au lieu de 0, plus aucun tick coupé. Live shard0 : 32 → ~12 CPU après le hotfix du scout |
 | J5 | Planner complet et défense : ramparts par min-cut, zone sûre, tours placées selon leur couverture, routes vers les ramparts ; variantes (centre pondéré, grille 3x3, spawn dans les bays de source) notées par le scorer Hivemind ; force ennemie, tours (cible militaire, soin, réparation des ramparts), safe mode, guardians et builders d'urgence (RCL 4+) | Serveur, preset RCL 4, W7N3 : 229,6k → 244,9k. Mockup sans ennemi, 20 000 ticks : W7N3 -9 %, W1N3 -3 %, W9N5 +3 % (coût des ramparts). Raids d'invaders (mockup `--raid`) : repoussés, aucune perte. Planner : score +5 à +25 % selon la room |
+| J6 | Expansion à la Hivemind : décision (RCL 4+, GCL, CPU), score des rooms, squad (claimer, pioneers, défenseur contre les hostiles), pioneers (`builder.remote`), fin à RCL 4 + storage, échecs mémorisés, soutien d'une expansion par les autres rooms, reclaim des rooms sans spawn ; l'ancien ExpansionManager est supprimé | Mockup W7N3, GCL 2, 40 000 ticks : expansion lancée au tick 23 851 (RCL 5), W7N2 claimée, spawn construit ~2 200 ticks après le claim, RCL 4 au tick 40 000 ; la room mère perd ~14 % de points pendant l'expansion. Aucune erreur |
 | Outillage | Mockup en Node 24 dans Docker (~10 ms/tick, runs parallèles) ; projet passé sur Node 24 | — |
 
 ## Prochains jalons (ordre proposé)
 
-1. **J6, l'expansion.** Claim d'une 2e room à la Hivemind, puis aide entre rooms.
-2. **J7, l'attaque : notre propre stratégie.** Les bots open source (Hivemind compris) laissent volontairement la partie offensive hors de leurs dépôts : rien à porter. Objectif : des squads de creeps qui agissent à l'unisson (déplacement en formation, cible commune, mouvements synchronisés). À concevoir avec l'utilisateur.
-3. **Plus tard :** links, terminal et market, labs et boosts, factory, power.
+1. **J7, l'attaque : notre propre stratégie.** Les bots open source (Hivemind compris) laissent volontairement la partie offensive hors de leurs dépôts : rien à porter. Objectif : des squads de creeps qui agissent à l'unisson (déplacement en formation, cible commune, mouvements synchronisés). À concevoir avec l'utilisateur.
+2. **Plus tard :** links, terminal et market, labs et boosts, factory, power.
 
 ## Points ouverts
 
@@ -36,9 +36,10 @@ Mise à jour : 2026-10-17 (J5 terminé). Le détail de chaque jalon terminé est
   - 3 ou 4 processeurs ;
   - LokiJS à la place de Mongo.
 - **Upgraders et storage** : la règle d'Hivemind (un upgrader de plus par tranche de 50k d'énergie stockée, jusqu'à 6) laisse le storage se stabiliser vers 150k sur W7N3. Le baisser ferait monter les points mais réduirait la réserve de défense : c'est à décider, à mesurer avant de changer.
-- **ExpansionManager (ancien)** : sur le serveur privé, il spawne des claimers sans chemin (13 en 6 000 ticks, `moveError:-2:claimer`). Désactivé dans `gameLoop.ts` (`disabled: true`) en attendant J6.
 - **CPU officiel** : ~19 CPU estimés pour une room RCL 4 et ses 5 remotes (limite du compte : 20). Pistes non faites : moins de creeps plus gros (intents move), reserveController seulement quand la réservation baisse, planner/rooms multiples à mesurer avec J6.
 - **Coût des ramparts** : dans le mockup (aucun ennemi), J5 perd 3 à 9 % de points par rapport à J4 sur 20 000 ticks, car les ramparts sont construits dès RCL 3 et montés à 100 000 hits en RCL 4. Écart à envisager si l'économie en souffre : retarder les ramparts au storage, ou viser moins de hits avant RCL 5.
 - **Raid précoce (RCL 2)** : un smallMelee reste en vie jusqu'à sa mort naturelle (1 500 ticks) avec J4 comme avec J5 ; le brawler local n'est pas spawné. À investiguer.
+- **CPU à plusieurs rooms** : 2 rooms (RCL 5 + RCL 4 et leurs remotes) ≈ 20,5-21 CPU officiels estimés, au-dessus de la limite de 20 ; le ralentissement (J4) protège le bucket. Pistes : moins de remotes par room, creeps plus gros, coût de CreepRunner.
+- **Expansion** : écarts mesurés à envisager : room d'origine RCL 4 + storage au lieu de RCL 5 (expansion plus tôt), aide énergétique par haulers avant les terminaux.
 - **Bot live** : il tourne sur shard0 (W29N7, zone de respawn), pas sur shard3 ; les 20 CPU du compte sont sur shard0.
 - **Mesure de l'ère du storage** : les runs depuis zéro n'atteignent le storage que vers 11k ticks sur W7N3 et 20k sur W1N3. Utiliser `TICKS=30000` dans le mockup, ou `--preset rcl4` sur le serveur.

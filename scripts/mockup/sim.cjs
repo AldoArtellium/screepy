@@ -47,6 +47,8 @@ const RAID_BODIES = {
   smallRanged: ["tough", "tough", "move", "move", "move", "move", "ranged_attack", "ranged_attack", "ranged_attack", "move"],
   smallMelee: ["tough", "tough", "move", "move", "move", "move", "ranged_attack", "work", "attack", "move"]
 };
+/** Global control level of the bot (default 1), e.g. 2 to allow a second room (expansion tests) */
+const GCL = Number(opt("gcl", 1));
 /** CPU limit of the bot (default: the mockup's, 100), e.g. 8 to drain the bucket and test throttling */
 const CPU_LIMIT = opt("cpu-limit", null);
 const OUT = opt("out");
@@ -219,7 +221,11 @@ async function snapshot(server, userId) {
     storage: mine.filter((o) => o.type === "storage").reduce((sum, o) => sum + ((o.store && o.store.energy) || 0), 0),
     remoteRoads: (await db["rooms.objects"].find({ type: "road" })).filter((o) => o.room !== ROOM).length,
     // Creeps in every room by name prefix (role), to compare bots
-    creepsByRoom: await creepCensus(db, userId)
+    creepsByRoom: await creepCensus(db, userId),
+    // Every room we own and its level (expansion)
+    ownedRooms: Object.fromEntries(
+      (await db["rooms.objects"].find({ type: "controller", user: userId })).map((c) => [c.room, c.level])
+    )
   };
 }
 
@@ -266,7 +272,9 @@ async function main() {
 
   const spot = findSpawnSpot(fixture.rooms[ROOM].terrain, fixture.rooms[ROOM].objects);
   if (!spot) throw new Error(`No spawn spot found in ${ROOM}`);
-  const user = await server.world.addBot({ username: USERNAME, room: ROOM, x: spot.x, y: spot.y, modules: { main } });
+  // GCL level n needs GCL_MULTIPLY * (n - 1) ^ GCL_POW control points
+  const gcl = GCL > 1 ? Math.ceil(1000000 * Math.pow(GCL - 1, 2.4)) + 1 : 1;
+  const user = await server.world.addBot({ username: USERNAME, room: ROOM, x: spot.x, y: spot.y, gcl, modules: { main } });
   const { env, pubsub } = server.common.storage;
   await env.set(env.keys.MEMORY + user.id, MEMORY_INIT);
   if (CPU_LIMIT !== null) {
@@ -368,6 +376,7 @@ async function main() {
         `RCL ${w.rcl} (${w.progress}) | creeps ${w.creeps} | energy ${w.energy}/${w.energyCapacity}`,
         `| ext ${w.extensions} cont ${w.containers} roads ${w.roads}+${w.remoteRoads} sites ${w.sites} storage ${w.storage}`,
         `| cpu avg ${(cpuSum / Math.max(1, cpuSamples)).toFixed(2)}`,
+        Object.keys(w.ownedRooms).length > 1 ? `| rooms ${JSON.stringify(w.ownedRooms)}` : "",
         CPU_LIMIT !== null ? `| bucket ${(await server.common.storage.db.users.findOne({ _id: user.id })).cpuAvailable | 0}` : "",
         `| ${(tick / elapsed).toFixed(1)} ticks/s`,
         errorCount ? `| ${errorCount} console errors` : ""
