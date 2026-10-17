@@ -27,7 +27,17 @@ declare global {
     }
     interface RoomMemory {
         /** Hostile intel, refreshed by RoomIntel */
-        enemies?: { safe: boolean; lastSeen?: number; expires?: number; hasInvaderCore?: boolean };
+        enemies?: {
+            safe: boolean;
+            lastSeen?: number;
+            expires?: number;
+            hasInvaderCore?: boolean;
+            /** Damage and heal per tick of the dangerous hostiles at range 1 (Hivemind getTotalEnemyData) */
+            damage?: number;
+            heal?: number;
+            /** The dangerous hostiles have RANGED_ATTACK */
+            ranged?: boolean;
+        };
     }
 }
 

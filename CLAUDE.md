@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-Screepy is a TypeScript-based AI bot for the game [Screeps](https://screeps.com/). The code compiles to JavaScript and gets deployed to Screeps servers where it runs autonomously to control game entities (creeps, spawns, towers). Since October 2026 its economy core follows Hivemind's model (roles, spawn options, resource dispatcher, room planner), ported from Hivemind (MIT, see `THIRD_PARTY_NOTICES.md`). Remote mining follows Hivemind too (milestone 2); expansion, scouting and the market remain from the previous design.
+Screepy is a TypeScript-based AI bot for the game [Screeps](https://screeps.com/). The code compiles to JavaScript and gets deployed to Screeps servers where it runs autonomously to control game entities (creeps, spawns, towers). Since October 2026 its economy core follows Hivemind's model (roles, spawn options, resource dispatcher, room planner), ported from Hivemind (MIT, see `THIRD_PARTY_NOTICES.md`). Remote mining follows Hivemind too (milestones 2 and 3: remote builders, roads, defense); expansion, scouting and the market remain from the previous design.
 
 ## Build & Deploy Commands
 
@@ -76,7 +76,9 @@ node scripts/mockup/extract-fixtures.mjs W5N5          # add a room fixture from
 ```
 
 - Rooms are fixtures (`scripts/mockup/fixtures/<room>.json`): real terrain and natural objects of the room and its 8 neighbours; rooms beyond are walled. Spawn spot = same `findSpawnSpot` as the harness.
-- Reports in `test-results/mockup-*.json` (`world.points` = same definition as the harness), compare summary in `test-results/mockup-compare-summary.txt`.
+- Reports in `test-results/mockup-*.json` (`world.points` = same definition as the harness; `world.storage` energy, `world.remoteRoads`, `world.creepsByRoom` census), compare summary in `test-results/mockup-compare-summary.txt` (points, RCL, storage).
+- From-scratch runs reach the storage around tick 11k on W7N3 and 20k+ on W1N3 (W9N5: RCL 3 at 20k): measure storage-era changes with `TICKS=30000`.
+- Don't start `compare.sh` twice at once: both write the same logs and summary.
 - Not the full world: no other players, no backend/cron jobs. Use it to iterate, confirm on the private server before concluding.
 - Speed-ups (default, `--no-fast` disables them all; checked on 3 rooms x 8000 ticks: same points within noise):
   - `scripts/mockup/fast.cjs` (preload, inherited by the engine child processes): no room history (`roomHistory:<room>`, replay data for the web client: the LokiJS storage answers each `hmset` with the whole hash, which grows without bound for rooms not active on a multiple of 20 ticks, so ticks got slower over a run: 16 ms/tick over 3000 ticks, 30-46 ms/tick over 8000 with 3-4 runs in parallel, vs 17-31 now) and no `mapView` writes; the runner fetches `users.code` (the 400+ KB bundle) once instead of every tick; the processor caches room terrain.
@@ -121,7 +123,8 @@ Convention everywhere (`src/core/options.ts` `getBestOption`): **higher priority
 - **Planner** (`src/planner/`): one "weighted" Hivemind variation (center, harvest positions, upgrader spot + controller container, exit corridors, core, harvest bays, extension bays, towers), packed in `Memory.rooms[r].plan`; bump `PLAN_VERSION` (`RoomPlan.ts`) to replan every room. Offline check: `node tests/planner/run.mjs` (ASCII plans in `test-results/plan-<room>.txt`).
 - **Construction** (`src/construction/RoomBuilder.ts`): Hivemind order — RCL 1 spawns; RCL 2+ extensions bay by bay, source and controller containers, swamp roads to sources/controller; RCL 3 harvester-bay extensions, towers; RCL 4 storage, then every planned road once the storage is built.
 
-- **Remote mining** (`src/remote/`, rules in `docs/hivemind/hivemind-remote.md`): every 20 ticks each owned room with a plan keeps its 5 best remote rooms (4 from RCL 4) within 3 rooms, scored 3000 / shortest path from a source to the planned storage (`Memory.remoteMining`, paths cached 5000 ticks, failures 500). Spawn role `remote` (one option per tick, closest source first): hauler (once the container exists, CARRY = 2 x travel x energy/tick / 50), harvester (first one priority 1, then 3; places, builds and repairs the container), reserver (from 650 capacity, one per free tile around the controller). Haulers deliver at home through the destination dispatcher. A remote with a dangerous hostile (or on the way) gets no spawn until the hostile is expected dead. Not ported yet: remote builders/roads (need a storage), remote defense, dismantlers.
+- **Remote mining** (`src/remote/`, rules in `docs/hivemind/hivemind-remote.md`): every 20 ticks each owned room with a plan keeps its 5 best remote rooms (4 from RCL 4) within 3 rooms, scored 3000 / shortest path from a source to the planned storage (`Memory.remoteMining`, paths cached 5000 ticks, failures 500). Spawn role `remote` (one option per tick, closest source first): hauler (once the container exists, CARRY = 2 x travel x energy/tick / 50), harvester (first one priority 1, then 3; places, builds and repairs the container), reserver (from 650 capacity, one per free tile around the controller). Haulers deliver at home through the destination dispatcher. A remote with a dangerous hostile (or on the way) gets no spawn until the hostile is expected dead.
+- **Storage era (milestone 3)**: remote builders (`roles/remoteBuilder.ts`, Hivemind `builder.mines`; only with a storage and 5000 effective energy, priority 3, weight 0, WORK demand `ceil(0.7 + 0.03 x path tiles outside our rooms)` per mined source needing repairs) step along the remote path, repair/build the road tiles i-2..i+2 around them and the container, and refill at the home storage. In the home room, `RoomBuilder` places the roads of the remote paths at RCL 4 with a storage. Remote defense (`remote/remoteDefense.ts`, role `remoteDefender`, part of the `brawler` spawn role): priority 3 / weight 1, an ATTACKER against invader cores, a mini brawler or mini blinky against weak hostiles once the home has 5000 effective energy, one per remote every 300 ticks; stronger threats get none. `RoomIntel` keeps the hostiles' damage/heal/ranged and invader core collapse timers. Not ported: dismantlers, source keepers, trains.
 
 Deliberate deviations from Hivemind, each measured on the 3 benchmark rooms (mockup, 8000 ticks):
 - Transporter count also covers the loaded round trip from each source to the storage location (Hivemind: fixed 3) — W1N3 12.9k -> 24.6k.
@@ -133,7 +136,7 @@ Deliberate deviations from Hivemind, each measured on the 3 benchmark rooms (moc
 - Remote: a room without any source path is skipped (Hivemind scored it 6); a failed path is retried after 500 ticks, never cached before the plan exists (Hivemind: 5000); haulers' delivery orders count in `creepsWithOrder`.
 - W9N5 is noisy (single runs from ~2.8k to ~5.5k): compare means of 3 runs there.
 
-Counters in `Memory.stats.counters`: `spawned:<role>`, `work:{harvest,build,repair,upgrade,builderUpgrade,builderFetch,remoteHarvest,remoteBuild}`, `deliver:<order type>`, `idle:<role>`, `harvester:{walking,delivering}`, `spawn:starved`, `roleError:<role>`, `moveError:<code>:<role>`.
+Counters in `Memory.stats.counters`: `spawned:<role>`, `work:{harvest,build,repair,upgrade,builderUpgrade,builderFetch,remoteHarvest,remoteBuild,remoteRepair}`, `deliver:<order type>`, `idle:<role>`, `harvester:{walking,delivering}`, `spawn:starved`, `roleError:<role>`, `moveError:<code>:<role>`.
 
 ### Traffic (`src/modules/TrafficManager.ts`)
 

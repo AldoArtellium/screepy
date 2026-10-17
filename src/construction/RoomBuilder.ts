@@ -5,11 +5,12 @@
  *
  * RCL 1: spawns. RCL 2+: extensions bay by bay, source and controller containers, roads on swamps
  * towards sources and controller. RCL 3: extensions around sources, towers. RCL 4: storage, then every
- * planned road once the storage is built.
+ * planned road once the storage is built, and the roads of the remote mining paths in the room.
  */
 
 import { RoomPlan } from "../planner/RoomPlan";
 import { roomPlanner } from "../planner/RoomPlanner";
+import { operationRoadPositions } from "../remote/RemoteMining";
 
 /** Construction sites per room, existing ones included */
 const MAX_ROOM_SITES = 5;
@@ -117,7 +118,11 @@ function manageStructures(ctx: RoomContext): void {
     if (!ctx.canCreate()) return;
     if (ctx.rcl < 4) return;
 
-    if (room.storage) ctx.buildPlanned("road", STRUCTURE_ROAD);
+    if (room.storage) {
+        ctx.buildPlanned("road", STRUCTURE_ROAD);
+        // Roads of the remote mining paths in this room (Hivemind buildOperationRoads)
+        for (const pos of operationRoadPositions(room.name)) if (!ctx.tryBuild(pos, STRUCTURE_ROAD)) break;
+    }
     manageExtensions(ctx);
 }
 

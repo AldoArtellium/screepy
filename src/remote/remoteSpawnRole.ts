@@ -1,18 +1,20 @@
 /**
  * Spawn role for remote mining: at most one option per tick. Sources are taken closest first and a
  * source is only considered once every closer one has its haulers, harvesters and reservers.
- * Ported from Hivemind (MIT), src/spawn-role/remote-mining.ts (builders, source keepers and
- * dismantlers left out: they need a storage or RCL 7). See docs/hivemind/hivemind-remote.md §6.
+ * Ported from Hivemind (MIT), src/spawn-role/remote-mining.ts (source keepers and dismantlers left
+ * out: RCL 7, rare on a fresh server). See docs/hivemind/hivemind-remote.md §6.
  */
 
 import { bodyCost, buildBody, MoveMode } from "../core/bodyBuilder";
-import { activeParts, creepsByRole, hasEnemies } from "../core/roomState";
+import { activeParts, creepsByRole, effectiveEnergy, hasEnemies } from "../core/roomState";
 import { intelManager } from "../modules/IntelManager";
 import type { SpawnOption, SpawnRole } from "../spawning/spawnRoles";
 import {
     canReserveFrom,
     hasRemoteContainer,
     isRemoteUnderAttack,
+    maintenanceWork,
+    needsRepairs,
     remoteContainer,
     RemoteSource,
     remoteSources,
@@ -22,6 +24,7 @@ import {
 export const REMOTE_HARVESTER = "remoteHarvester";
 export const REMOTE_HAULER = "remoteHauler";
 export const RESERVER = "reserver";
+export const REMOTE_BUILDER = "remoteBuilder";
 
 declare global {
     interface CreepMemory {
@@ -32,7 +35,7 @@ declare global {
     }
 }
 
-type RemoteOption = SpawnOption & { unit: "hauler" | "harvester" | "reserver"; remote?: RemoteSource };
+type RemoteOption = SpawnOption & { unit: "hauler" | "builder" | "harvester" | "reserver"; remote?: RemoteSource };
 
 function energyLimit(room: Room): number {
     return Math.min(room.energyCapacityAvailable, Math.max(room.energyCapacityAvailable * 0.9, room.energyAvailable));
@@ -116,6 +119,43 @@ function haulerOption(home: Room, demand: number): RemoteOption | null {
     return { role: REMOTE_HAULER, unit: "hauler", priority: 3, weight: 0, size };
 }
 
+// ------------------------------------------------------------------ builder (storage era)
+
+function hasRemoteHarvesters(home: Room, source: RemoteSource): boolean {
+    return creepsByRole(home.name, REMOTE_HARVESTER).some(c => c.memory.source === source.key);
+}
+
+/** WORK a source's container and roads need, once it is mined and something needs repairs */
+function builderDemand(home: Room, source: RemoteSource): number {
+    return hasRemoteHarvesters(home, source) && needsRepairs(source) ? maintenanceWork(source) : 0;
+}
+
+function builderBody(home: Room, size: number, energy = energyLimit(home)): BodyPartConstant[] {
+    return buildBody({
+        weights: { [CARRY]: 5, [WORK]: 2 },
+        partLimits: { [WORK]: size },
+        moveMode: haulerMove(home),
+        energyLimit: energy
+    });
+}
+
+/** Builders of equal size covering the maintenance of every active source (Hivemind getMaximumBuilderSize) */
+function builderSize(home: Room): number {
+    const total = _.sum(remoteSources(home.name).filter(s => !isRemoteUnderAttack(s)), s => maintenanceWork(s));
+    const maxWork = builderBody(home, total, home.energyCapacityAvailable).filter(p => p === WORK).length;
+    if (maxWork === 0) return 0;
+    return Math.ceil(total / Math.ceil(total / maxWork));
+}
+
+function builderOption(home: Room, demand: number): RemoteOption | null {
+    if (!home.storage && !home.terminal) return null;
+    if (effectiveEnergy(home) < 5000) return null;
+    if (activeParts(creepsByRole(home.name, REMOTE_BUILDER), WORK) >= demand) return null;
+    const size = builderSize(home);
+    if (size === 0) return null;
+    return { role: REMOTE_BUILDER, unit: "builder", priority: 3, weight: 0, size };
+}
+
 function harvesterOption(home: Room, source: RemoteSource): RemoteOption | null {
     const intel = intelManager.getIntel(source.room);
     if (intel?.hasInvaderCore && !(intel.reserver === Memory.username && (intel.reservationTicks ?? 0) >= 500)) {
@@ -174,12 +214,16 @@ export const remoteSpawnRole: SpawnRole = {
     options(home) {
         if (hasEnemies(home)) return [];
         let haulerDemand = 0;
+        let buildDemand = 0;
         const reserved = new Set<string>();
         for (const source of remoteSources(home.name)) {
             if (isRemoteUnderAttack(source)) continue;
             if (hasRemoteContainer(source)) haulerDemand += requiredCarry(home, source);
             const hauler = haulerOption(home, haulerDemand);
             if (hauler) return [hauler];
+            buildDemand += builderDemand(home, source);
+            const builder = builderOption(home, buildDemand);
+            if (builder) return [builder];
             const harvester = harvesterOption(home, source);
             if (harvester) return [harvester];
             if (reserved.has(source.room) || !canReserveFrom(home, source.room)) continue;
@@ -193,6 +237,7 @@ export const remoteSpawnRole: SpawnRole = {
     body(home, option) {
         const remote = option as RemoteOption;
         if (remote.unit === "hauler") return haulerBody(home, option.size ?? 0);
+        if (remote.unit === "builder") return builderBody(home, option.size ?? 0);
         if (remote.unit === "harvester") return harvesterBody(home, remote);
         const body = reserverBody(home);
         return bodyCost(body) <= home.energyCapacityAvailable ? body : [];
@@ -201,6 +246,7 @@ export const remoteSpawnRole: SpawnRole = {
     memory(home, option) {
         const remote = option as RemoteOption;
         if (remote.unit === "hauler") return { role: REMOTE_HAULER, room: home.name, delivering: false };
+        if (remote.unit === "builder") return { role: REMOTE_BUILDER, room: home.name, returning: true };
         if (remote.unit === "harvester") return { role: REMOTE_HARVESTER, room: home.name, source: remote.remote!.key };
         return { role: RESERVER, room: home.name, reserveRoom: remote.remote!.room };
     }

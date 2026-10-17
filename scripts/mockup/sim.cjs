@@ -193,6 +193,8 @@ async function snapshot(server, userId) {
     containers: objects.filter((o) => o.type === "container").length,
     roads: objects.filter((o) => o.type === "road").length,
     sites: objects.filter((o) => o.type === "constructionSite" && o.user === userId).length,
+    storage: mine.filter((o) => o.type === "storage").reduce((sum, o) => sum + ((o.store && o.store.energy) || 0), 0),
+    remoteRoads: (await db["rooms.objects"].find({ type: "road" })).filter((o) => o.room !== ROOM).length,
     // Creeps in every room by name prefix (role), to compare bots
     creepsByRoom: await creepCensus(db, userId)
   };
@@ -306,7 +308,7 @@ async function main() {
       log(
         `tick ${tick}/${TICKS}`,
         `RCL ${w.rcl} (${w.progress}) | creeps ${w.creeps} | energy ${w.energy}/${w.energyCapacity}`,
-        `| ext ${w.extensions} cont ${w.containers} roads ${w.roads} sites ${w.sites}`,
+        `| ext ${w.extensions} cont ${w.containers} roads ${w.roads}+${w.remoteRoads} sites ${w.sites} storage ${w.storage}`,
         `| cpu avg ${(cpuSum / Math.max(1, cpuSamples)).toFixed(2)}`,
         `| ${(tick / elapsed).toFixed(1)} ticks/s`,
         errorCount ? `| ${errorCount} console errors` : ""

@@ -146,7 +146,7 @@ class TrafficManager {
     getCreepPriority(creep: Creep | PowerCreep): number {
         if (!("body" in creep)) return 20; // power creeps
         const role = creep.memory.role;
-        if (role === "brawler") return 0;
+        if (role === "brawler" || role === "remoteDefender") return 0;
         if (role === "harvester") return 5;
         const order = creep.memory.order;
         if (order?.type === "spawn" || order?.type === "bay") return 10;

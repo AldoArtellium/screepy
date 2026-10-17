@@ -14,13 +14,15 @@ OUT=test-results/mockup-compare-summary.txt
 : > "$OUT"
 
 summarize() { # room name run log
-  local log=$4 pts cpu errors ext speed
+  local log=$4 pts cpu errors ext speed stor rcl
   pts=$(grep -ao "total points [0-9]*" "$log" | tail -1 | grep -o "[0-9]*$")
   cpu=$(grep -ao "Avg CPU [0-9][0-9.]*" "$log" | tail -1 | awk '{print $NF}')
   errors=$(grep -ao "Module errors [0-9]*" "$log" | awk '{print $NF}')
   ext=$(grep -ao "| ext [0-9]*" "$log" | tail -1 | awk '{print $NF}')
   speed=$(grep -ao "Speed [0-9.]*" "$log" | awk '{print $NF}')
-  echo "$1 $2 run=$3 points=${pts:-0} cpu=${cpu:-n/a} ext=${ext:-?} errors=${errors:-?} ticks/s=${speed:-?}"
+  stor=$(grep -ao "storage [0-9]*" "$log" | tail -1 | awk '{print $NF}')
+  rcl=$(grep -ao "RCL [0-9]* (" "$log" | tail -1 | awk '{print $2}')
+  echo "$1 $2 run=$3 points=${pts:-0} rcl=${rcl:-?} storage=${stor:-?} cpu=${cpu:-n/a} ext=${ext:-?} errors=${errors:-?} ticks/s=${speed:-?}"
 }
 
 # Build the image (if needed) once before the parallel runs, with a 1-tick run
