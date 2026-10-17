@@ -7,6 +7,8 @@
 import "../roles/brawler";
 import "../roles/builder";
 import "../roles/harvester";
+import "../roles/remoteBuilder";
+import "../roles/remoteDefender";
 import "../roles/remoteHarvester";
 import "../roles/remoteHauler";
 import "../roles/reserver";

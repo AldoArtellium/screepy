@@ -236,6 +236,97 @@ export function isRemoteUnderAttack(source: RemoteSource): boolean {
     return false;
 }
 
+export function remoteHasInvaderCore(source: RemoteSource): boolean {
+    return !!Memory.rooms?.[source.room]?.enemies?.hasInvaderCore;
+}
+
+export interface EnemyData {
+    damage: number;
+    heal: number;
+    ranged: boolean;
+    hasInvaderCore: boolean;
+}
+
+/** Hostile strength in the remote and the rooms crossed on the way (Hivemind getTotalEnemyData) */
+export function remoteEnemyData(source: RemoteSource): EnemyData {
+    const total: EnemyData = { damage: 0, heal: 0, ranged: false, hasInvaderCore: false };
+    const rooms = new Set(unpackPath(source.path).map(p => p.roomName));
+    rooms.add(source.room);
+    for (const room of rooms) {
+        if (room === source.homeRoom) continue;
+        const enemies = Memory.rooms?.[room]?.enemies;
+        if (!enemies) continue;
+        if (enemies.hasInvaderCore) total.hasInvaderCore = true;
+        if (enemies.safe) continue;
+        total.damage += enemies.damage ?? 0;
+        total.heal += enemies.heal ?? 0;
+        total.ranged = total.ranged || !!enemies.ranged;
+    }
+    return total;
+}
+
+// ------------------------------------------------------------------ maintenance (builders)
+
+const heapCache: Map<string, { tick: number; value: unknown }> = new Map();
+function inHeap<T>(key: string, ttl: number, compute: () => T): T {
+    const cached = heapCache.get(key);
+    if (cached && Game.time - cached.tick < ttl) return cached.value as T;
+    const value = compute();
+    heapCache.set(key, { tick: Game.time, value });
+    return value;
+}
+
+function isOwnedRoom(roomName: string): boolean {
+    return !!Game.rooms[roomName]?.controller?.my;
+}
+
+/** Path tiles outside our rooms: the remote builders keep a road on them */
+export function remoteRoadPath(source: RemoteSource): RoomPosition[] {
+    return unpackPath(source.path).filter(p => !isOwnedRoom(p.roomName));
+}
+
+/** WORK parts to keep a source's container and roads up: ceil(0.7 + 0.03 per tile outside our rooms) */
+export function maintenanceWork(source: RemoteSource): number {
+    return inHeap(`maintWork:${source.key}`, 500, () => Math.ceil(0.7 + 0.03 * remoteRoadPath(source).length));
+}
+
+/** Hits missing on a tile (out of sight: nothing); missing structure: its build cost x 100 */
+function neededWorkAt(pos: RoomPosition, type: BuildableStructureConstant): number {
+    if (!Game.rooms[pos.roomName]) return 0;
+    const structure = pos.lookFor(LOOK_STRUCTURES).find(s => s.structureType === type);
+    if (structure) return structure.hitsMax - structure.hits;
+    return CONSTRUCTION_COST[type] * 100;
+}
+
+/** Container below half its hits, or a road of the path missing or below 2/3 of its hits */
+export function needsRepairs(source: RemoteSource): boolean {
+    return inHeap(`needsRepairs:${source.key}`, 50, () => {
+        if (neededWorkAt(containerPos(source), STRUCTURE_CONTAINER) > CONTAINER_HITS / 2) return true;
+        return remoteRoadPath(source).some(pos => neededWorkAt(pos, STRUCTURE_ROAD) > ROAD_HITS / 3);
+    });
+}
+
+/** Hits missing on the container and the roads of the path */
+export function neededWork(source: RemoteSource): number {
+    return inHeap(`neededWork:${source.key}`, 50, () =>
+        neededWorkAt(containerPos(source), STRUCTURE_CONTAINER) +
+        _.sum(remoteRoadPath(source), pos => neededWorkAt(pos, STRUCTURE_ROAD))
+    );
+}
+
+/** Path tiles of the remotes mined from a home room, in that room (Hivemind getOperationRoadPositions) */
+export function operationRoadPositions(homeRoom: string): RoomPosition[] {
+    return inHeap(`opRoads:${homeRoom}`, 100, () => {
+        const positions: { [xy: number]: RoomPosition } = {};
+        for (const source of remoteSources(homeRoom)) {
+            for (const pos of unpackPath(source.path)) {
+                if (pos.roomName === homeRoom) positions[pos.y * 50 + pos.x] = pos;
+            }
+        }
+        return Object.values(positions);
+    });
+}
+
 /** Hivemind canReserveFrom: a reserver can be spawned, so the source is assumed reserved (3000) */
 export function canReserveFrom(home: Room, remoteRoom: string): boolean {
     const positions = intelManager.getIntel(remoteRoom)?.reservePositions ?? 0;

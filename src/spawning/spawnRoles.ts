@@ -18,6 +18,13 @@ import {
     storageLocation
 } from "../core/roomState";
 import { roomPlanner } from "../planner/RoomPlanner";
+import {
+    DefenseOption,
+    REMOTE_DEFENDER,
+    remoteDefenderBody,
+    remoteDefenderMemory,
+    remoteDefenseOptions
+} from "../remote/remoteDefense";
 import { remoteSpawnRole } from "../remote/remoteSpawnRole";
 
 export interface SpawnOption extends Option {
@@ -432,14 +439,18 @@ const defense: SpawnRole = {
     emptyTimeout: 10,
 
     options(room) {
-        if ((room.controller?.level ?? 0) >= 4) return [];
-        if ((room.controller?.safeMode ?? 0) > 500) return [];
-        if (!hasEnemies(room)) return [];
-        if (creepsByRole(room.name, "brawler").length >= 2) return [];
-        return [{ role: this.id, priority: 5, weight: 1 }];
+        const options: SpawnOption[] = [];
+        const local =
+            (room.controller?.level ?? 0) < 4 &&
+            (room.controller?.safeMode ?? 0) <= 500 &&
+            hasEnemies(room) &&
+            creepsByRole(room.name, "brawler").length < 2;
+        if (local) options.push({ role: this.id, priority: 5, weight: 1 });
+        return options.concat(remoteDefenseOptions(room));
     },
 
-    body(room) {
+    body(room, option) {
+        if (option.role === REMOTE_DEFENDER) return remoteDefenderBody(room, option as DefenseOption);
         return buildBody({
             weights: { [ATTACK]: 1 },
             moveMode: MoveMode.ROAD,
@@ -448,7 +459,8 @@ const defense: SpawnRole = {
         });
     },
 
-    memory(room) {
+    memory(room, option) {
+        if (option.role === REMOTE_DEFENDER) return remoteDefenderMemory(room, option as DefenseOption);
         return { role: this.id, room: room.name };
     }
 };
