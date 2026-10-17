@@ -26,6 +26,27 @@ const CODE = opt("code");
 const ROOM = opt("room", "W7N3");
 const TICKS = Number(opt("ticks", 3000));
 const MEMORY_INIT = opt("memory", "{}");
+/**
+ * Invader raids: "tick:body+body,tick:body" with the backend's raid bodies (smallMelee, smallRanged,
+ * smallHealer, bigMelee, bigRanged, bigHealer), e.g. --raid 12000:bigMelee+bigRanged. The creeps
+ * appear on the first exit tiles of the room and run the engine's invader AI.
+ */
+const RAIDS = (opt("raid", "") || "")
+  .split(",")
+  .filter(Boolean)
+  .map((r) => {
+    const [t, bodies] = r.split(":");
+    return { tick: Number(t), bodies: bodies.split("+") };
+  });
+/** Bodies of backend/lib/cronjobs.js createCreep */
+const RAID_BODIES = {
+  bigHealer: [...Array(24).fill("move"), ...Array(25).fill("heal"), "move"],
+  bigRanged: [...Array(6).fill("tough"), ...Array(24).fill("move"), ...Array(18).fill("ranged_attack"), "work", "move"],
+  bigMelee: [...Array(16).fill("tough"), ...Array(24).fill("move"), ...Array(3).fill("ranged_attack"), ...Array(4).fill("work"), "attack", "attack", "move"],
+  smallHealer: ["move", "move", "move", "move", "heal", "heal", "heal", "heal", "heal", "move"],
+  smallRanged: ["tough", "tough", "move", "move", "move", "move", "ranged_attack", "ranged_attack", "ranged_attack", "move"],
+  smallMelee: ["tough", "tough", "move", "move", "move", "move", "ranged_attack", "work", "attack", "move"]
+};
 /** CPU limit of the bot (default: the mockup's, 100), e.g. 8 to drain the bucket and test throttling */
 const CPU_LIMIT = opt("cpu-limit", null);
 const OUT = opt("out");
@@ -300,7 +321,38 @@ async function main() {
   const startTime = await server.world.gameTime;
   const t0 = Date.now();
   const { db } = server.common.storage;
+  const raidLog = [];
+  const exitTiles = [];
+  for (let i = 1; i < 49; i++) {
+    for (const [x, y] of [[i, 0], [0, i], [49, i], [i, 49]]) {
+      if (!(Number(fixture.rooms[ROOM].terrain[y * 50 + x]) & 1)) exitTiles.push([x, y]);
+    }
+  }
   for (tick = 1; tick <= TICKS; tick++) {
+    for (const raid of RAIDS.filter((r) => r.tick === tick)) {
+      const names = [];
+      for (const [i, type] of raid.bodies.entries()) {
+        const [x, y] = exitTiles[(i * 3) % exitTiles.length];
+        const body = RAID_BODIES[type];
+        if (!body) throw new Error(`Unknown raid body ${type}`);
+        const name = `invader_${ROOM}_${tick}_${i}`;
+        await db["rooms.objects"].insert({
+          type: "creep", user: "2", body: body.map((t) => ({ type: t, hits: 100 })), hits: body.length * 100,
+          hitsMax: body.length * 100, ticksToLive: 1500, x, y, room: ROOM, fatigue: 0, store: {}, storeCapacity: 0, name
+        });
+        names.push(name);
+      }
+      raidLog.push({ tick, bodies: raid.bodies, names });
+      log(`Raid at tick ${tick}: ${raid.bodies.join(" + ")}`);
+    }
+    for (const raid of raidLog) {
+      if (raid.over) continue;
+      const alive = await db["rooms.objects"].count({ type: "creep", user: "2", name: { $in: raid.names } });
+      if (alive === 0) {
+        raid.over = tick;
+        log(`Raid of tick ${raid.tick} over after ${tick - raid.tick} ticks`);
+      }
+    }
     await runTick(server);
     if (!FAST) {
       stage("sim: users.findOne");
@@ -368,6 +420,13 @@ async function main() {
       "CPU by role (per tick / per creep): " +
         roleCpu.map((r) => `${r.role} ${r.perTick.toFixed(2)}/${r.perCreep.toFixed(3)}`).join(", ")
     );
+  for (const raid of raidLog) {
+    console.log(`Raid tick ${raid.tick} (${raid.bodies.join("+")}): ${raid.over ? `cleared after ${raid.over - raid.tick} ticks` : "still alive at the end"}`);
+  }
+  if (raidLog.length) {
+    const pick = (re) => Object.entries(counters).filter(([k]) => re.test(k)).map(([k, v]) => `${k}=${Math.round(v)}`).join(" ");
+    console.log(`Defense: ${pick(/^(tower:attack|safeMode|spawned:(guardian|brawler))$/)} | spawns ${await db["rooms.objects"].count({ room: ROOM, type: "spawn" })}`);
+  }
   console.log(`Tasks ${completed} completed / ${failed} failed`);
   console.log(`Module errors ${moduleErrors.length} | console errors ${errorCount}`);
   console.log(
@@ -404,6 +463,7 @@ async function main() {
     world,
     checks,
     cpu: { avg: cpuAvg, max: cpuMax, intentsPerTick, officialEstimate: officialCpu, byRole: roleCpu },
+    raids: raidLog,
     stats,
     errors: moduleErrors,
     consoleErrors,

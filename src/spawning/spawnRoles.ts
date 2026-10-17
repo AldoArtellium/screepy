@@ -26,6 +26,8 @@ import {
     remoteDefenseOptions
 } from "../remote/remoteDefense";
 import { remoteSpawnRole } from "../remote/remoteSpawnRole";
+import { ENEMY_STRENGTH_NORMAL, enemyStrength } from "../defense/RoomDefense";
+import { GUARDIAN } from "../roles/guardian";
 
 export interface SpawnOption extends Option {
     role: string;
@@ -434,36 +436,90 @@ const upgrader: SpawnRole = {
 
 // ------------------------------------------------------------------ defense
 
-const defense: SpawnRole = {
+/** Remote defense (Hivemind spawn role "brawler", remote part) */
+const remoteDefense: SpawnRole = {
     id: "brawler",
     emptyTimeout: 10,
 
     options(room) {
-        const options: SpawnOption[] = [];
-        const local =
-            (room.controller?.level ?? 0) < 4 &&
-            (room.controller?.safeMode ?? 0) <= 500 &&
-            hasEnemies(room) &&
-            creepsByRole(room.name, "brawler").length < 2;
-        if (local) options.push({ role: this.id, priority: 5, weight: 1 });
-        return options.concat(remoteDefenseOptions(room));
+        return remoteDefenseOptions(room);
     },
 
     body(room, option) {
-        if (option.role === REMOTE_DEFENDER) return remoteDefenderBody(room, option as DefenseOption);
+        return remoteDefenderBody(room, option as DefenseOption);
+    },
+
+    memory(room, option) {
+        return remoteDefenderMemory(room, option as DefenseOption);
+    }
+};
+
+/** Guardians: melee, one ranged for every 4 guardians */
+function guardianIsRanged(room: Room): boolean {
+    const guardians = creepsByRole(room.name, GUARDIAN);
+    const ranged = guardians.filter(c => c.getActiveBodyparts(RANGED_ATTACK) > 0).length;
+    return ranged < Math.floor(guardians.length / 4);
+}
+
+/**
+ * Owned room defense (Hivemind spawn role "room-defense"): a brawler below RCL 4; from RCL 4, while
+ * enemies are at least NORMAL, up to 5 guardians, and up to 5 builders to keep the ramparts up when
+ * 10000 energy is available.
+ */
+const roomDefense: SpawnRole = {
+    id: "roomDefense",
+    emptyTimeout: 10,
+
+    options(room) {
+        const options: SpawnOption[] = [];
+        const controller = room.controller!;
+        if (
+            controller.level < 4 &&
+            (controller.safeMode ?? 0) <= 500 &&
+            hasEnemies(room) &&
+            creepsByRole(room.name, "brawler").length < 2
+        ) {
+            options.push({ role: "brawler", priority: 5, weight: 1 });
+        }
+        if (controller.level < 4) return options;
+        // Weak enemies get no guardian: towers handle them (Hivemind: no defense response below NORMAL,
+        // which also cancels the "safe mode ends within 300 ticks" trigger)
+        if (enemyStrength(room) < ENEMY_STRENGTH_NORMAL) return options;
+        if (creepsByRole(room.name, GUARDIAN).length < 5) {
+            options.push({ role: GUARDIAN, priority: 5, weight: 1 });
+        }
+        if (hasEnemies(room) && effectiveEnergy(room) >= 10000 && creepsByRole(room.name, "builder").length < 5) {
+            options.push({ role: "builder", priority: 4, weight: 1 });
+        }
+        return options;
+    },
+
+    body(room, option) {
+        const energy = energyLimit(room, room.energyCapacityAvailable * 0.9);
+        if (option.role === "builder") {
+            return buildBody({ weights: { [WORK]: 1, [CARRY]: 1 }, moveMode: MoveMode.ROAD, energyLimit: energy });
+        }
+        const ranged = option.role === GUARDIAN && guardianIsRanged(room);
         return buildBody({
-            weights: { [ATTACK]: 1 },
+            weights: ranged ? { [RANGED_ATTACK]: 1 } : { [ATTACK]: 1 },
             moveMode: MoveMode.ROAD,
             moveBufferRatio: 0.8,
-            energyLimit: energyLimit(room, room.energyCapacityAvailable * 0.9)
+            energyLimit: energy
         });
     },
 
     memory(room, option) {
-        if (option.role === REMOTE_DEFENDER) return remoteDefenderMemory(room, option as DefenseOption);
-        return { role: this.id, room: room.name };
+        return { role: option.role, room: room.name };
     }
 };
 
 /** Hivemind registration order (alphabetical): it breaks priority/weight ties */
-export const ECONOMY_SPAWN_ROLES: SpawnRole[] = [defense, builder, harvester, remoteSpawnRole, transporter, upgrader];
+export const ECONOMY_SPAWN_ROLES: SpawnRole[] = [
+    remoteDefense,
+    builder,
+    harvester,
+    remoteSpawnRole,
+    roomDefense,
+    transporter,
+    upgrader
+];

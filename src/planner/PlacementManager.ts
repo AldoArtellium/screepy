@@ -123,6 +123,10 @@ export class PlacementManager {
         this.matrix.set(x, y, IMPASSABLE_POSITION);
     }
 
+    unblockPosition(x: number, y: number): void {
+        this.matrix.set(x, y, 0);
+    }
+
     isBlockedTile(x: number, y: number): boolean {
         return this.matrix.get(x, y) >= 100;
     }
@@ -142,17 +146,57 @@ export class PlacementManager {
         return true;
     }
 
-    /** Road from `from` (excluded) to the closest of `to` (included), swamps cost like plains */
-    findAccessRoad(from: RoomPosition, to: RoomPosition[]): RoomPosition[] {
+    /**
+     * Road from `from` (excluded) to the closest of `to` (included), swamps cost like plains.
+     * breakExtensions: planned extensions cost 25 instead of blocking (roads to ramparts).
+     */
+    findAccessRoad(from: RoomPosition, to: RoomPosition[], breakExtensions = false): RoomPosition[] {
         this.pathCalls++;
+        let matrix = this.matrix;
+        if (breakExtensions) {
+            matrix = this.matrix.clone();
+            for (const pos of this.plan.getLocations("extension")) matrix.set(pos.x, pos.y, 25);
+        }
         const result = PathFinder.search(from, to, {
-            roomCallback: () => this.matrix,
+            roomCallback: () => matrix,
             maxRooms: 1,
             plainCost: 2,
             swampCost: 2,
             heuristicWeight: 0.9,
         });
         return result.path ?? [];
+    }
+
+    /** A path to the base center entrances exists (noTunnels: not through unplanned natural walls) */
+    isPositionAccessible(pos: RoomPosition, noTunnels = false): boolean {
+        this.pathCalls++;
+        const result = PathFinder.search(pos, this.originEntrances, {
+            roomCallback: () => this.matrix,
+            maxRooms: 1,
+            plainCost: 1,
+            swampCost: 1
+        });
+        if (noTunnels) {
+            for (const step of result.path) {
+                if (this.isWallTile(step.x, step.y) && !this.plan.has(step, "road")) return false;
+            }
+        }
+        return !result.incomplete;
+    }
+
+    /** Tentative location ("<type>_placeholder", blocks the tile) */
+    planTemporaryLocation(pos: RoomPosition, type: string): void {
+        this.planLocation(pos, type + "_placeholder");
+    }
+
+    commitTemporaryLocation(pos: RoomPosition, type: string): void {
+        this.planLocation(pos, type, null);
+        this.plan.remove(type + "_placeholder", pos.x, pos.y);
+    }
+
+    /** Drops the remaining placeholders (Hivemind leaves their tiles blocked in the matrix) */
+    discardTemporaryLocations(type: string): void {
+        this.plan.removeType(type + "_placeholder");
     }
 
     /** Plans a road from `to` to the base center entrances */

@@ -6,6 +6,7 @@
 
 import "../roles/brawler";
 import "../roles/builder";
+import "../roles/guardian";
 import "../roles/harvester";
 import "../roles/remoteBuilder";
 import "../roles/remoteDefender";
@@ -30,6 +31,7 @@ const THROTTLE: { [role: string]: [stopAt: number, throttleAt: number] } = {
     transporter: [0, 5000],
     remoteHarvester: [2000, 5000],
     brawler: [0, 0],
+    guardian: [0, 0],
     remoteDefender: [0, 0],
     reserver: [0, 0],
     claimer: [0, 0]
@@ -53,7 +55,7 @@ function isThrottled(creep: Creep, role: string): boolean {
     return throttle(offset, stopAt, throttleAt);
 }
 
-const ROOM_BOUND_ROLES = new Set(["harvester", "transporter", "builder", "upgrader", "brawler"]);
+const ROOM_BOUND_ROLES = new Set(["harvester", "transporter", "builder", "upgrader", "brawler", "guardian"]);
 const INWARD: { [edge: string]: DirectionConstant } = { left: RIGHT, right: LEFT, top: BOTTOM, bottom: TOP };
 
 /** True when the creep was moved back into its room this tick */

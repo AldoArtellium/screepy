@@ -32,7 +32,7 @@ try {
 }
 
 const mocks = require("./mocks.cjs");
-const { generateRoomPlan } = require(join(OUT, "planner", "RoomPlanner.js"));
+const { buildVariation, listVariations } = require(join(OUT, "planner", "RoomPlanner.js"));
 const { RoomPlan } = require(join(OUT, "planner", "RoomPlan.js"));
 
 const dataDir = join(ROOT, "tests", "planner", "data");
@@ -42,7 +42,7 @@ const rooms = process.argv.length > 2 ? process.argv.slice(2) : readdirSync(data
 const SYMBOLS = [
     ["spawn", "S"], ["extension", "E"], ["tower", "T"], ["storage", "O"], ["terminal", "M"], ["factory", "F"],
     ["link", "L"], ["extractor", "X"], ["upgrader.0", "U"], ["harvester", "H"], ["container", "C"],
-    ["center", "@"], ["bay_center", "b"], ["road", "+"], ["exit", ">"],
+    ["center", "@"], ["bay_center", "b"], ["rampart.ramp", "r"], ["rampart", "R"], ["road", "+"], ["exit", ">"],
 ];
 
 let failures = 0;
@@ -53,9 +53,21 @@ for (const room of rooms) {
     const sources = objects.filter(o => o.type === "source");
     const minerals = objects.filter(o => o.type === "mineral");
 
+    // Every variation, like RoomPlanner over several ticks; the best score wins
+    const input = { roomName: room, terrain, controller, sources, minerals };
+    const variations = listVariations(input);
     mocks.resetCpu();
-    const { plan, pathCalls } = generateRoomPlan({ roomName: room, terrain, controller, sources, minerals });
+    let best = null;
+    let pathCalls = 0;
+    const scores = [];
+    for (const variation of variations) {
+        const result = buildVariation(input, variation);
+        pathCalls += result.pathCalls;
+        scores.push(`${variation.key}=${result.score.toFixed(3)}`);
+        if (result.plan && (!best || result.score > best.score)) best = { ...result, key: variation.key };
+    }
     const ms = Game.cpu.getUsed();
+    const plan = best?.plan ?? null;
 
     const errors = [];
     if (!plan) {
@@ -80,8 +92,13 @@ for (const room of rooms) {
             if (type !== "container" && plan.has(pos, "road")) errors.push(`${type} on road at ${pos.x},${pos.y}`);
         }
     }
-    const expect = { spawn: 3, extension: 60, tower: 6, storage: 1, "container.controller": 1, "upgrader.0": 1 };
+    const expect = { spawn: 3, tower: 6, storage: 1, "container.controller": 1, "upgrader.0": 1 };
     for (const [type, n] of Object.entries(expect)) if (plan.count(type) !== n) errors.push(`${type}: ${plan.count(type)} != ${n}`);
+    // Roads to the ramparts may go through a few extensions (Hivemind removes them from the plan)
+    if (plan.count("extension") < 55) errors.push(`extension: ${plan.count("extension")} < 55`);
+    const center = plan.getCenter();
+    for (const type of structureTypes) if (center && plan.has(center, type)) errors.push(`${type} on the center`);
+    if (best.score < -10) errors.push(`score ${best.score.toFixed(1)}: unreachable spots`);
     if (plan.count("container.source") !== sources.length) errors.push(`container.source: ${plan.count("container.source")}`);
     for (const s of sources) if (plan.count("harvester." + s.id) !== 1) errors.push(`harvester.${s.id} missing`);
 
@@ -90,7 +107,7 @@ for (const room of rooms) {
     for (const s of sources) special.set(s.x + 50 * s.y, "$");
     special.set(controller.x + 50 * controller.y, "K");
     const lines = [];
-    lines.push(`Room plan ${room} - center ${plan.getCenter()} - ${pathCalls} paths - ${ms.toFixed(0)} ms (node, mocked PathFinder)`);
+    lines.push(`Room plan ${room} - best ${best.key} (${best.score.toFixed(3)}) of ${variations.length} variations - center ${plan.getCenter()} - ${pathCalls} paths - ${ms.toFixed(0)} ms (node, mocked PathFinder)`);
     lines.push(SYMBOLS.map(([t, c]) => `${c}=${t}`).join(" ") + " $=source K=controller #=wall ~=swamp");
     lines.push("   " + Array.from({ length: 50 }, (_, x) => (x % 10).toString()).join(""));
     for (let y = 0; y < 50; y++) {
@@ -119,11 +136,13 @@ for (const room of rooms) {
     lines.push("Bays: " + Array.from({ length: 20 }, (_, i) => plan.count("extension.bay." + i)).filter(n => n).join(" "));
     lines.push("Towers in order: " + Array.from({ length: 6 }, (_, i) => plan.getLocations("tower." + i)[0]).map(p => p && `${p.x},${p.y}`).join(" "));
     lines.push("Spawns in order: " + Array.from({ length: 3 }, (_, i) => plan.getLocations("spawn." + i)[0]).map(p => p && `${p.x},${p.y}`).join(" "));
+    lines.push("Scores: " + scores.join(" "));
     if (errors.length) lines.push("ERRORS: " + errors.join("; "));
 
     mkdirSync(join(ROOT, "test-results"), { recursive: true });
     writeFileSync(join(ROOT, "test-results", `plan-${room}.txt`), lines.join("\n") + "\n");
-    console.log(`${room}: ${errors.length ? "FAIL " + errors.join("; ") : "PASS"} - ${ms.toFixed(0)} ms, ${pathCalls} paths, ` +
+    console.log(`${room}: ${errors.length ? "FAIL " + errors.join("; ") : "PASS"} - best ${best.key} ${best.score.toFixed(3)} ` +
+        `(first ${scores[0]}), ${variations.length} variations in ${ms.toFixed(0)} ms, ${pathCalls} paths, ` +
         `${plan.count("extension")} ext, ${plan.count("spawn")} spawns, ${plan.count("tower")} towers, ${plan.count("road")} roads`);
     if (errors.length) failures++;
 }

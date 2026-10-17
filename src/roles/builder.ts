@@ -6,7 +6,8 @@
 
 import { getBestOption } from "../core/options";
 import { whenInRange } from "../core/movement";
-import { clearOrder, creepsWithOrder, effectiveEnergy, hasEnemies, Order, setOrder, tickCache } from "../core/roomState";
+import { clearOrder, creepsWithOrder, effectiveEnergy, Order, setOrder, tickCache } from "../core/roomState";
+import { desiredWallStrength, ENEMY_STRENGTH_NONE, ENEMY_STRENGTH_NORMAL, enemyStrength } from "../defense/RoomDefense";
 import { roomPlanner } from "../planner/RoomPlanner";
 import { countStat } from "../utils/stats";
 import { performRecycle } from "./recycle";
@@ -24,10 +25,6 @@ declare global {
     }
 }
 
-/** Wall / rampart hits wanted per RCL (Hivemind settings maxWallHealth) */
-const MAX_WALL_HEALTH: { [rcl: number]: number } = {
-    0: 1, 1: 5000, 2: 10000, 3: 20000, 4: 100000, 5: 500000, 6: 2000000, 7: 3000000, 8: 20000000
-};
 
 type BuilderOption = Order & { object: Structure | ConstructionSite };
 
@@ -144,11 +141,13 @@ function calculateBuilderTarget(creep: Creep): void {
     setOrder(creep, { type: best.type, target: best.object.id, priority: best.priority, weight: best.weight, maxHealth: best.maxHealth });
 }
 
+/** Hits to repair up to: walls and ramparts get the room's wanted strength (on-ramps a tenth of it) */
 function maxHits(structure: Structure): number {
-    if (structure.structureType === STRUCTURE_WALL || structure.structureType === STRUCTURE_RAMPART) {
-        return MAX_WALL_HEALTH[structure.room.controller?.level ?? 0];
-    }
-    return structure.hitsMax;
+    if (structure.structureType !== STRUCTURE_WALL && structure.structureType !== STRUCTURE_RAMPART) return structure.hitsMax;
+    const wanted = desiredWallStrength(structure.room);
+    const plan = roomPlanner.getPlan(structure.room.name);
+    if (structure.structureType === STRUCTURE_RAMPART && plan?.has(structure.pos, "rampart.ramp")) return wanted / 10;
+    return wanted;
 }
 
 /** Damaged structures worth repairing: planned roads, planned defenses, everything else */
@@ -185,7 +184,7 @@ function repairOptions(creep: Creep): BuilderOption[] {
             target.structureType === STRUCTURE_RAMPART ||
             target.structureType === STRUCTURE_CONTAINER;
         if (decaying && target.hits / (option.maxHealth || target.hitsMax) > 0.9) continue;
-        if (!hasEnemies(room)) option.priority -= creepsWithOrder(room, "repair", target.id).length;
+        if (enemyStrength(room) === ENEMY_STRENGTH_NONE) option.priority -= creepsWithOrder(room, "repair", target.id).length;
         options.push(option);
     }
     return options;
@@ -206,7 +205,7 @@ function modifyDefenseOption(room: Room, target: Structure, option: BuilderOptio
         option.priority += 2;
         option.weight += 1;
     }
-    if (hasEnemies(room)) {
+    if (enemyStrength(room) >= ENEMY_STRENGTH_NORMAL) {
         option.priority += 2;
         option.weight += 1;
     } else if (effectiveEnergy(room) < 5000 && target.hits >= 10000) {
