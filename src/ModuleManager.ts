@@ -1,7 +1,8 @@
 import { logCpu, logCpuStart } from "utils/logCPU";
 import { log } from "utils/logger";
+import { throttleMultiplier } from "utils/throttle";
 
-interface Module {
+export interface Module {
   name: string;
   fn: () => void;
   mandatory?: boolean;
@@ -12,6 +13,31 @@ interface Module {
   /** Skips (CPU budget) tolerated before the module is forced to run. Defaults to DEFAULT_MAX_SKIPS. */
   maxSkips?: number;
   disabled?: boolean;
+  /**
+   * Bucket throttling (Hivemind process priorities): "always" never throttles; otherwise the
+   * module's interval (runEvery, 1 by default) is multiplied as the bucket drains, and the module
+   * stops below the priority's stopAt. Default "default"; mandatory modules are "always".
+   */
+  priority?: "always" | "high" | "default" | "low";
+}
+
+/** Hivemind priorityEffects: [stopAt, throttleAt] */
+const PRIORITY_EFFECTS = {
+  low: [5000, 9500],
+  default: [3000, 8000],
+  high: [500, 5000],
+  always: [0, 0]
+} as const;
+
+/** Throttled interval passed? (Hivemind isProcessAllowedToRun) */
+function isAllowedByBucket(module: Module, lastRun: number): boolean {
+  const priority = module.mandatory ? "always" : module.priority ?? "default";
+  if (priority === "always") return true;
+  const [stopAt, throttleAt] = PRIORITY_EFFECTS[priority];
+  if (Game.cpu.bucket <= stopAt) return false;
+  const interval = module.runEvery ?? 1;
+  if (Game.time - lastRun < interval) return false;
+  return Game.time - lastRun >= interval * throttleMultiplier(stopAt, throttleAt);
 }
 
 /** Non-mandatory modules are forced to run after this many CPU-budget skips (priority aging) */
@@ -73,6 +99,10 @@ export function runModuleManager(modules: Module[], cpuLimit: number, debug = fa
     if (state.sleepUntil && Game.time < state.sleepUntil) continue;
     if (module.runEvery && state.lastRun + module.runEvery > Game.time) continue;
     if (module.runOnce && state.lastRun >= Game.time) continue;
+    if (!module.runOnce && !isAllowedByBucket(module, state.lastRun)) {
+      state.throttled = (state.throttled ?? 0) + 1;
+      continue;
+    }
 
     const cpuUsed = Game.cpu.getUsed() - start;
     const isAuxiliary = module.tier === "auxiliary";

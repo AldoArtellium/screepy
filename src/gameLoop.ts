@@ -1,4 +1,4 @@
-import { runModuleManager } from "./ModuleManager";
+import { Module, runModuleManager } from "./ModuleManager";
 
 import { roomBuilderModule } from "construction/RoomBuilder";
 import { creepRunnerModule } from "modules/CreepRunner";
@@ -17,7 +17,7 @@ import { log } from "utils/logger";
 export const gameLoop = () => {
   const memLimit = 1000000;
   const cpuLimit = Game.cpu.limit;
-  const modules = [
+  const modules: Module[] = [
     // Hostile presence in owned rooms (read by everything below)
     { name: "RoomIntel", fn: roomIntelModule, mandatory: true },
 
@@ -33,14 +33,14 @@ export const gameLoop = () => {
     // Construction sites from the plan
     { name: "RoomBuilder", fn: roomBuilderModule, runEvery: 20 },
 
-    { name: "TowerManager", fn: towerManagerModule },
+    { name: "TowerManager", fn: towerManagerModule, priority: "always" },
     { name: "IntelManager", fn: intelManagerModule },
-    { name: "ScoutManager", fn: scoutManagerModule, runEvery: 10 },
+    { name: "ScoutManager", fn: scoutManagerModule, runEvery: 10, priority: "low" },
     // Remote sources each owned room mines (selection every 20 ticks)
-    { name: "RemoteMining", fn: remoteMiningModule },
+    { name: "RemoteMining", fn: remoteMiningModule, priority: "high" },
     // Disabled until milestone 6 (Hivemind-style expansion): it spawned claimers that found no path
     { name: "ExpansionManager", fn: expansionManagerModule, runEvery: 50, disabled: true },
-    { name: "MarketManager", fn: marketManagerModule, runEvery: 20 },
+    { name: "MarketManager", fn: marketManagerModule, runEvery: 20, priority: "low" },
 
     // Resolves all movement requests issued above (must run after every creep-moving module)
     { name: "TrafficManager", fn: trafficManagerModule, mandatory: true }

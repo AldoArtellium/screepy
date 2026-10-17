@@ -67,12 +67,35 @@ function packPath(path: RoomPosition[]): string {
     return path.map(p => `${p.roomName},${p.x},${p.y}`).join(";");
 }
 
+/** Unpacked paths, by packed string (heap): unpacking a remote path each call cost ~0.5 CPU/tick */
+const unpacked: Map<string, RoomPosition[]> = new Map();
+
+const pathRoomsCache: Map<string, string[]> = new Map();
+
+/** Rooms a remote path crosses, the remote room included */
+function pathRooms(source: RemoteSource): string[] {
+    let rooms = pathRoomsCache.get(source.path);
+    if (!rooms) {
+        rooms = [...new Set(unpackPath(source.path).map(p => p.roomName).concat(source.room))];
+        if (pathRoomsCache.size > 200) pathRoomsCache.clear();
+        pathRoomsCache.set(source.path, rooms);
+    }
+    return rooms;
+}
+
+/** Positions of a packed path; the array is shared, don't modify it */
 export function unpackPath(packed: string): RoomPosition[] {
     if (!packed) return [];
-    return packed.split(";").map(part => {
-        const [room, x, y] = part.split(",");
-        return new RoomPosition(Number(x), Number(y), room);
-    });
+    let path = unpacked.get(packed);
+    if (!path) {
+        path = packed.split(";").map(part => {
+            const [room, x, y] = part.split(",");
+            return new RoomPosition(Number(x), Number(y), room);
+        });
+        if (unpacked.size > 200) unpacked.clear();
+        unpacked.set(packed, path);
+    }
+    return path;
 }
 
 /** Rooms owned by someone else (or an active invader core) are never crossed */
@@ -231,8 +254,7 @@ export function hasRemoteContainer(source: RemoteSource): boolean {
 export function isRemoteUnderAttack(source: RemoteSource): boolean {
     if (isRoomUnderAttack(source.room)) return true;
     // Rooms crossed on the way
-    const rooms = new Set(unpackPath(source.path).map(p => p.roomName));
-    for (const room of rooms) if (room !== source.homeRoom && isRoomUnderAttack(room)) return true;
+    for (const room of pathRooms(source)) if (room !== source.homeRoom && isRoomUnderAttack(room)) return true;
     return false;
 }
 
@@ -250,9 +272,7 @@ export interface EnemyData {
 /** Hostile strength in the remote and the rooms crossed on the way (Hivemind getTotalEnemyData) */
 export function remoteEnemyData(source: RemoteSource): EnemyData {
     const total: EnemyData = { damage: 0, heal: 0, ranged: false, hasInvaderCore: false };
-    const rooms = new Set(unpackPath(source.path).map(p => p.roomName));
-    rooms.add(source.room);
-    for (const room of rooms) {
+    for (const room of pathRooms(source)) {
         if (room === source.homeRoom) continue;
         const enemies = Memory.rooms?.[room]?.enemies;
         if (!enemies) continue;
