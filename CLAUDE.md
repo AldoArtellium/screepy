@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-Screepy is a TypeScript-based AI bot for the game [Screeps](https://screeps.com/). The code compiles to JavaScript and gets deployed to Screeps servers where it runs autonomously to control game entities (creeps, spawns, towers). Since October 2026 its economy core follows Hivemind's model (roles, spawn options, resource dispatcher, room planner), ported from Hivemind (MIT, see `THIRD_PARTY_NOTICES.md`). Remote mining follows Hivemind too (milestones 2 and 3: remote builders, roads, defense); expansion, scouting and the market remain from the previous design.
+Screepy is a TypeScript-based AI bot for the game [Screeps](https://screeps.com/). The code compiles to JavaScript and gets deployed to Screeps servers where it runs autonomously to control game entities (creeps, spawns, towers). Since October 2026 its economy core follows Hivemind's model (roles, spawn options, resource dispatcher, room planner), ported from Hivemind (MIT, see `THIRD_PARTY_NOTICES.md`). Remote mining (milestones 2-3), CPU throttling (4), the full planner and base defense (5) and expansion (6) follow Hivemind too; scouting and the market remain from the previous design. Offense is ours to design (open-source bots keep it private).
 
 ## Build & Deploy Commands
 
@@ -113,14 +113,15 @@ The ModuleManager runs modules in order with a CPU budget (80% of the limit): `m
 | Defense | every tick (priority always) | Towers (military target, heal, rampart repair under attack) and safe mode (`src/defense/`) |
 | IntelManager | every tick | Room intel |
 | RemoteMining | every tick (selection every 20) | Remote sources each owned room mines |
-| ScoutManager (10), ExpansionManager (50, disabled until milestone 6: claimers without a path), MarketManager (20) | | Kept from the previous design (scout: from RCL 1, priority 4 before the storage) |
+| Expansion | every 5 (priority high) | Claims and bootstraps new rooms, reclaims rooms that lost their spawn (`src/expansion/`) |
+| ScoutManager (10), MarketManager (20) | | Kept from the previous design (scout: from RCL 1, priority 4 before the storage) |
 | TrafficManager | mandatory, last | Resolves every move (cartographer `reconcileTraffic`) |
 
 ### Economy core
 
 Convention everywhere (`src/core/options.ts` `getBestOption`): **higher priority wins**, then higher weight; negative priority is never chosen; ties go to the first option collected.
 
-- **Roles** (`src/roles/`, registered in `roles/registry.ts`): `harvester` (bound to a source, stationary on its planned harvest position = source container once a transporter exists, delivers like a transporter before), `transporter` (90%/10% hysteresis, orders revalidated every tick), `builder` (works from 90% full, builds/repairs, upgrades when nothing to do, never harvests), `upgrader`, `brawler` (RCL < 4 defense), `guardian` (RCL 4+, holds the rampart closest to the hostiles). `remoteHarvester`, `remoteHauler`, `reserver` (`src/roles/remote*.ts`, `reserver.ts`; flee hostiles that can fight, `roles/flee.ts`). Scout and claimer register their own handlers in their modules.
+- **Roles** (`src/roles/`, registered in `roles/registry.ts`): `harvester` (bound to a source, stationary on its planned harvest position = source container once a transporter exists, delivers like a transporter before), `transporter` (90%/10% hysteresis, orders revalidated every tick), `builder` (works from 90% full, builds/repairs, upgrades when nothing to do, never harvests), `upgrader`, `brawler` (RCL < 4 defense), `guardian` (RCL 4+, holds the rampart closest to the hostiles). `remoteHarvester`, `remoteHauler`, `reserver` (`src/roles/remote*.ts`, `reserver.ts`; flee hostiles that can fight, `roles/flee.ts`). `claimer`, `pioneer` (expansion, `roles/claimer.ts`, `roles/pioneer.ts`). The scout registers its handler in its module.
 - **Spawning** (`src/modules/SpawnManager.ts`, `src/spawning/spawnRoles.ts`): each spawn role returns options (priority, weight); if the best option can't be paid yet the room waits (no cheaper fallback). Bodies from `src/core/bodyBuilder.ts` (exact port of Hivemind's BodyBuilder, `MoveMode`). Modules ask for creeps with `spawnManager.requestSpawn({ id, roomName, body, priority, memory })` on the same scale (harvesters 4-6, builders 3-4, remote/claimer 3, scout 1).
 - **Dispatcher** (`src/dispatcher/`): `sourceDispatcher` / `destinationDispatcher` with providers (container, drop, grave, storage, overfullExtension / spawn, bay, tower, controller container, workerCreep, storage, drop at the base center). A creep's order lives in `creep.memory.order`; "reservation" = priority penalty per creep holding the same order, indexed per tick in `src/core/roomState.ts` (`creepsWithOrder`, `setOrder`, `clearOrder`).
 - **Room state** (`src/core/roomState.ts`): per-tick caches (creeps by role and home room, structures by type), source/controller containers, storage location (plan center before the storage), effective energy, bays.
@@ -150,6 +151,15 @@ Counters in `Memory.stats.counters`: `spawned:<role>`, `work:{harvest,build,repa
 - Safe mode: enemies present (any strength with a single room), ramparts not complete, a spawn exists and a dangerous hostile is within 2 (4 if ranged) of a spawn, the storage, the controller...
 - Spawn: remote defenders (spawn role `brawler`, see remote mining) and owned room defense (`roomDefense`): brawler below RCL 4; from RCL 4 and NORMAL enemies, up to 5 guardians (1 ranged per 4) at priority 5 and up to 5 emergency builders (priority 4) with 10000 energy. Remote spawning stops while enemies at home are NORMAL or stronger.
 - Not ported: allies / rampart opening, nukes, boosts for defenders, quad breaker and decorative walls.
+
+### Expansion (`src/expansion/`, Hivemind `process/strategy/expand.ts`, `builder.remote`, rules in `docs/hivemind/hivemind-expansion.md`)
+
+- When: a room at RCL 4+, fewer owned rooms than the GCL, `Memory.stats.cpuAvg` below the CPU limit (80% of it with several rooms). Target: best expansion score (`expansionScore.ts`: sources, new mineral, remote sources around, shared remotes, exit/wall/swamp tiles, distance > 3 rooms; cached 20000 ticks) among scouted rooms nobody owns, lowered near past failures, reachable in <= 10 rooms from an RCL 5+ room with a spawn.
+- Squad `expand` (`Memory.expand.squads`, spawn role `squad`, priority 4 above 10000 effective energy, 2 from 5000, weight 1.1): a claimer (1 CLAIM, swamp moves; attacks hostile reservations), 2 pioneers, a defender while the target has hostiles. Support squads: 1 pioneer from every other RCL 4+ room with 50000 energy. The spawn room mines one remote less meanwhile.
+- Pioneers (`builder.remote`): fill up at home (if >= 3000 energy), then live in the target: upgrade to RCL 2 first, fill spawn and towers, build towers > spawn > closest site, get energy from piles, storage, containers or by harvesting. The new room plans its variations and builds its spawn from the final plan; it mines no remote before its spawn.
+- Ends with RCL 4 + storage (success), or after 7500 ticks unclaimed / 30000 ticks after the claim (failure, remembered 1M ticks). Reclaim (spawn role `reclaim`, priority 3): an owned room without spawn (not the target, >= 2 rooms) gets up to 5 pioneers from rooms with 10000 energy and bucket >= 8000.
+- Deviations: units spawn claimer first (Hivemind: random), the defender only against hostiles (Hivemind: always one), the claim happens on arrival; no exit direction is safe in the score. Not ported: tunnels to the controller, evacuation, terminal help (RCL 6).
+- Mockup: `--gcl 2` allows a second room; the report lists `world.ownedRooms`.
 
 ### CPU throttling (`src/utils/throttle.ts`, Hivemind)
 

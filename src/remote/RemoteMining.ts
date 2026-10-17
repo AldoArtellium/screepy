@@ -7,6 +7,7 @@
  * 3 rooms, scored 3000 / shortest path from a source to the planned storage. No RCL or storage gate.
  */
 
+import { squadsOf } from "../expansion/Expansion";
 import { intelManager } from "../modules/IntelManager";
 import { isRoomUnderAttack } from "../modules/RoomIntel";
 import { roomPlanner } from "../planner/RoomPlanner";
@@ -162,7 +163,9 @@ function candidateRooms(home: Room): string[] {
 
 function maxRemotes(home: Room): number {
     const spawns = Math.max(1, home.find(FIND_MY_SPAWNS).length);
-    const needs = (home.controller!.level >= 4 ? 1 : 0) + (home.controller!.level >= 6 ? 1 : 0);
+    // An expansion squad spawned here takes a remote's place (Hivemind roomNeeds counts squads)
+    const squads = squadsOf(home.name).length;
+    const needs = (home.controller!.level >= 4 ? 1 : 0) + (home.controller!.level >= 6 ? 1 : 0) + squads;
     return Math.floor(spawns * 5 - needs);
 }
 
@@ -171,6 +174,8 @@ function selectRemotes(): void {
     for (const name in Game.rooms) {
         const home = Game.rooms[name];
         if (!home.controller?.my || !roomPlanner.getPlan(home.name)) continue;
+        // A room without spawn (new expansion) mines nothing yet
+        if (home.find(FIND_MY_SPAWNS).length === 0) continue;
         const scored: { room: string; score: number; sources: RemoteSource[] }[] = [];
         for (const roomName of candidateRooms(home)) {
             const intel = intelManager.getIntel(roomName)!;
