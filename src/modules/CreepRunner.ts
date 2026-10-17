@@ -17,7 +17,41 @@ import "../roles/upgrader";
 import { getRoleHandler } from "../roles/registry";
 import { log } from "../utils/logger";
 import { countStat } from "../utils/stats";
+import { throttle, throttleOffset } from "../utils/throttle";
 import { trafficManager } from "./TrafficManager";
+
+/**
+ * Bucket thresholds per role (Hivemind role stopAt / throttleAt): a creep's logic is skipped on more
+ * and more ticks below `throttleAt` bucket, on every tick below `stopAt`. Default 2000 / 8000.
+ */
+const THROTTLE: { [role: string]: [stopAt: number, throttleAt: number] } = {
+    harvester: [0, 2000],
+    upgrader: [0, 2000],
+    transporter: [0, 5000],
+    remoteHarvester: [2000, 5000],
+    brawler: [0, 0],
+    remoteDefender: [0, 0],
+    reserver: [0, 0],
+    claimer: [0, 0]
+};
+
+/** Heap only: throttle offset per creep, spreads the skipped ticks */
+const offsets: Map<string, number> = new Map();
+
+/** Skip this creep's logic this tick? (Hivemind creep-manager throttleCreep) */
+function isThrottled(creep: Creep, role: string): boolean {
+    // Creeps on an exit tile would bounce back to the previous room
+    const { x, y } = creep.pos;
+    if (x === 0 || x === 49 || y === 0 || y === 49) return false;
+    if (Game.cpu.getUsed() > Game.cpu.tickLimit * 0.85) return true;
+    let offset = offsets.get(creep.name);
+    if (offset === undefined) {
+        offset = throttleOffset();
+        offsets.set(creep.name, offset);
+    }
+    const [stopAt, throttleAt] = THROTTLE[role] ?? [2000, 8000];
+    return throttle(offset, stopAt, throttleAt);
+}
 
 const ROOM_BOUND_ROLES = new Set(["harvester", "transporter", "builder", "upgrader", "brawler"]);
 const INWARD: { [edge: string]: DirectionConstant } = { left: RIGHT, right: LEFT, top: BOTTOM, bottom: TOP };
@@ -38,6 +72,7 @@ function containInRoom(creep: Creep): boolean {
 }
 
 export const creepRunnerModule = () => {
+    if (Game.time % 1000 === 0) for (const name of offsets.keys()) if (!Game.creeps[name]) offsets.delete(name);
     for (const name in Game.creeps) {
         const creep = Game.creeps[name];
         if (creep.spawning) continue;
@@ -47,12 +82,20 @@ export const creepRunnerModule = () => {
             countStat("creep:noRole");
             continue;
         }
+        if (isThrottled(creep, role)) {
+            countStat(`throttled:${role}`);
+            continue;
+        }
         if (ROOM_BOUND_ROLES.has(role) && containInRoom(creep)) continue;
+        const start = Game.cpu.getUsed();
         try {
             handler(creep);
         } catch (error) {
             log.error("CreepRunner", `Role ${role} failed for ${creep.name}:`, (error as Error).stack);
             countStat(`roleError:${role}`);
         }
+        // Code CPU per role (intents excluded on the private server), and creep-ticks to average it
+        countStat(`cpu:${role}`, Game.cpu.getUsed() - start);
+        countStat(`creepTicks:${role}`);
     }
 };

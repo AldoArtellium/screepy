@@ -70,6 +70,7 @@ npm run test:mockup -- --code test-results/bundles/before-ac17616.js --room W1N3
 npm run test:mockup -- --memory '{"foo":1}' --verbose   # initial Memory, print the bot console
 npm run test:mockup -- --list-rooms                    # rooms with a fixture
 npm run test:mockup -- --profile                       # + wall ms/tick per main loop stage and CPU per engine process
+npm run test:mockup -- --cpu-limit 8                   # lower the bot's CPU limit to drain the bucket (throttling tests)
 npm run test:mockup -- --no-fast                       # unpatched engine (upstream main loop, 1 processor, TCP): A/B check of the speed-ups
 CODES="before=a.js after=dist/main.js" RUNS=1 JOBS=6 bash scripts/mockup/compare.sh   # like scripts/compare.sh, parallel
 node scripts/mockup/extract-fixtures.mjs W5N5          # add a room fixture from the private server (read-only)
@@ -78,6 +79,7 @@ node scripts/mockup/extract-fixtures.mjs W5N5          # add a room fixture from
 - Rooms are fixtures (`scripts/mockup/fixtures/<room>.json`): real terrain and natural objects of the room and its 8 neighbours; rooms beyond are walled. Spawn spot = same `findSpawnSpot` as the harness.
 - Reports in `test-results/mockup-*.json` (`world.points` = same definition as the harness; `world.storage` energy, `world.remoteRoads`, `world.creepsByRoom` census), compare summary in `test-results/mockup-compare-summary.txt` (points, RCL, storage).
 - From-scratch runs reach the storage around tick 11k on W7N3 and 20k+ on W1N3 (W9N5: RCL 3 at 20k): measure storage-era changes with `TICKS=30000`.
+- CPU: the mockup and the private server don't charge the official 0.2 CPU per intent. The bot counts successful intents (`src/utils/intents.ts`, counters `intents`, `intents:<method>`), and the reports print `Intents x/tick | official CPU estimate` (code CPU + 0.2 x intents) and `CPU by role (per tick / per creep)` (counters `cpu:<role>`, `creepTicks:<role>`).
 - Don't start `compare.sh` twice at once: both write the same logs and summary.
 - Not the full world: no other players, no backend/cron jobs. Use it to iterate, confirm on the private server before concluding.
 - Speed-ups (default, `--no-fast` disables them all; checked on 3 rooms x 8000 ticks: same points within noise):
@@ -137,6 +139,13 @@ Deliberate deviations from Hivemind, each measured on the 3 benchmark rooms (moc
 - W9N5 is noisy (single runs from ~2.8k to ~5.5k): compare means of 3 runs there.
 
 Counters in `Memory.stats.counters`: `spawned:<role>`, `work:{harvest,build,repair,upgrade,builderUpgrade,builderFetch,remoteHarvest,remoteBuild,remoteRepair}`, `deliver:<order type>`, `idle:<role>`, `harvester:{walking,delivering}`, `spawn:starved`, `roleError:<role>`, `moveError:<code>:<role>`.
+
+### CPU throttling (`src/utils/throttle.ts`, Hivemind)
+
+- Creeps (`CreepRunner`): below a role's `throttleAt` bucket its logic is skipped on a growing share of ticks (spread per creep by a Van der Corput sequence), on every tick below `stopAt`; every creep is skipped once the tick used 85% of `Game.cpu.tickLimit` (except on exit tiles). Thresholds: harvester/upgrader 0/2000, transporter 0/5000, remote harvester 2000/5000, defenders and reservers never, others 2000/8000. Counter `throttled:<role>`.
+- Modules (`ModuleManager`, `priority`): `always` (mandatory, towers), `high` 500/5000 (remote mining), `default` 3000/8000, `low` 5000/9500 (scout, market): the interval is multiplied by the recent CPU use, this tick's use above half the limit and the bucket below `throttleAt`; stopped below `stopAt`. `Memory.moduleState[m].throttled` counts held-back ticks.
+- Measured (W7N3, CPU limit 8, mockup): without throttling the bucket sits at 0 and the script is killed every tick; with it the bucket holds ~3000 and nothing is killed.
+- Official CPU (W7N3, RCL 4 + 5 remotes, ~30 creeps): ~13 code + ~30 intents x 0.2 = ~19. Intents by type per tick: move 12, harvest 7.6, upgrade 3.9, reserve 2.4.
 
 ### Traffic (`src/modules/TrafficManager.ts`)
 

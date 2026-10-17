@@ -26,6 +26,8 @@ const CODE = opt("code");
 const ROOM = opt("room", "W7N3");
 const TICKS = Number(opt("ticks", 3000));
 const MEMORY_INIT = opt("memory", "{}");
+/** CPU limit of the bot (default: the mockup's, 100), e.g. 8 to drain the bucket and test throttling */
+const CPU_LIMIT = opt("cpu-limit", null);
 const OUT = opt("out");
 const VERBOSE = flag("verbose");
 const LOG_EVERY = Number(opt("log-every", 500));
@@ -246,6 +248,10 @@ async function main() {
   const user = await server.world.addBot({ username: USERNAME, room: ROOM, x: spot.x, y: spot.y, modules: { main } });
   const { env, pubsub } = server.common.storage;
   await env.set(env.keys.MEMORY + user.id, MEMORY_INIT);
+  if (CPU_LIMIT !== null) {
+    await server.common.storage.db.users.update({ _id: user.id }, { $set: { cpu: Number(CPU_LIMIT), cpuAvailable: 10000 } });
+    log(`CPU limit ${CPU_LIMIT}, bucket 10000`);
+  }
   log(`Bundle ${CODE} (${(main.length / 1024).toFixed(0)} KB), spawn in ${ROOM} at ${spot.x},${spot.y}`);
 
   // Console output and uncaught errors of the bot
@@ -310,6 +316,7 @@ async function main() {
         `RCL ${w.rcl} (${w.progress}) | creeps ${w.creeps} | energy ${w.energy}/${w.energyCapacity}`,
         `| ext ${w.extensions} cont ${w.containers} roads ${w.roads}+${w.remoteRoads} sites ${w.sites} storage ${w.storage}`,
         `| cpu avg ${(cpuSum / Math.max(1, cpuSamples)).toFixed(2)}`,
+        CPU_LIMIT !== null ? `| bucket ${(await server.common.storage.db.users.findOne({ _id: user.id })).cpuAvailable | 0}` : "",
         `| ${(tick / elapsed).toFixed(1)} ticks/s`,
         errorCount ? `| ${errorCount} console errors` : ""
       );
@@ -343,6 +350,24 @@ async function main() {
     `Avg CPU ${cpuAvg === null ? "n/a" : cpuAvg.toFixed(2)} (max ${cpuMax.toFixed(1)})` +
       (stats && stats.cpuAvg !== undefined ? ` | Memory.stats.cpuAvg ${stats.cpuAvg.toFixed(2)}` : "")
   );
+  // The official server charges 0.2 CPU per intent, the mockup engine doesn't
+  const intentsPerTick = counters.intents !== undefined ? counters.intents / TICKS : null;
+  const officialCpu = cpuAvg !== null && intentsPerTick !== null ? cpuAvg + 0.2 * intentsPerTick : null;
+  if (officialCpu !== null)
+    console.log(`Intents ${intentsPerTick.toFixed(2)}/tick | official CPU estimate ${officialCpu.toFixed(2)}`);
+  const roleCpu = Object.keys(counters)
+    .filter((k) => k.startsWith("cpu:"))
+    .map((k) => {
+      const role = k.slice(4);
+      const creepTicks = counters[`creepTicks:${role}`] || 1;
+      return { role, perTick: counters[k] / TICKS, perCreep: counters[k] / creepTicks };
+    })
+    .sort((a, b) => b.perTick - a.perTick);
+  if (roleCpu.length)
+    console.log(
+      "CPU by role (per tick / per creep): " +
+        roleCpu.map((r) => `${r.role} ${r.perTick.toFixed(2)}/${r.perCreep.toFixed(3)}`).join(", ")
+    );
   console.log(`Tasks ${completed} completed / ${failed} failed`);
   console.log(`Module errors ${moduleErrors.length} | console errors ${errorCount}`);
   console.log(
@@ -378,7 +403,7 @@ async function main() {
     ticksPerSecond: TICKS / (elapsedMs / 1000),
     world,
     checks,
-    cpu: { avg: cpuAvg, max: cpuMax },
+    cpu: { avg: cpuAvg, max: cpuMax, intentsPerTick, officialEstimate: officialCpu, byRole: roleCpu },
     stats,
     errors: moduleErrors,
     consoleErrors,
