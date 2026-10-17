@@ -38,7 +38,8 @@ export const gameLoop = () => {
     { name: "ScoutManager", fn: scoutManagerModule, runEvery: 10 },
     // Remote sources each owned room mines (selection every 20 ticks)
     { name: "RemoteMining", fn: remoteMiningModule },
-    { name: "ExpansionManager", fn: expansionManagerModule, runEvery: 50 },
+    // Disabled until milestone 6 (Hivemind-style expansion): it spawned claimers that found no path
+    { name: "ExpansionManager", fn: expansionManagerModule, runEvery: 50, disabled: true },
     { name: "MarketManager", fn: marketManagerModule, runEvery: 20 },
 
     // Resolves all movement requests issued above (must run after every creep-moving module)

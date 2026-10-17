@@ -109,7 +109,7 @@ The ModuleManager runs modules in order with a CPU budget (80% of the limit): `m
 | RoomBuilder | every 20 | Construction sites from the plan, max 5 per room |
 | TowerManager, IntelManager | every tick | Towers; room intel |
 | RemoteMining | every tick (selection every 20) | Remote sources each owned room mines |
-| ScoutManager (10), ExpansionManager (50), MarketManager (20) | | Kept from the previous design (scout: from RCL 1, priority 4 before the storage) |
+| ScoutManager (10), ExpansionManager (50, disabled until milestone 6: claimers without a path), MarketManager (20) | | Kept from the previous design (scout: from RCL 1, priority 4 before the storage) |
 | TrafficManager | mandatory, last | Resolves every move (cartographer `reconcileTraffic`) |
 
 ### Economy core

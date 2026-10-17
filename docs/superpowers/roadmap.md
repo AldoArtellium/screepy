@@ -41,6 +41,6 @@ Mise à jour : 2026-10-17 (J3 terminé). Le détail de chaque jalon terminé est
   - 3 ou 4 processeurs ;
   - LokiJS à la place de Mongo.
 - **Upgraders et storage** : la règle d'Hivemind (un upgrader de plus par tranche de 50k d'énergie stockée, jusqu'à 6) laisse le storage se stabiliser vers 150k sur W7N3. Le baisser ferait monter les points mais réduirait la réserve de défense : c'est à décider, à mesurer avant de changer.
-- **ExpansionManager (ancien)** : sur le serveur privé, il spawne des claimers sans chemin (13 en 6 000 ticks, `moveError:-2:claimer`). À reprendre avec J6.
+- **ExpansionManager (ancien)** : sur le serveur privé, il spawne des claimers sans chemin (13 en 6 000 ticks, `moveError:-2:claimer`). Désactivé dans `gameLoop.ts` (`disabled: true`) en attendant J6.
 - **Mesure de l'ère du storage** : les runs depuis zéro n'atteignent le storage que vers 11k ticks sur W7N3 et 20k sur W1N3. Utiliser `TICKS=30000` dans le mockup, ou `--preset rcl4` sur le serveur.
 - **Scout dans le mockup** : il produit des erreurs, parce que le monde est limité à 9 rooms. C'est sans conséquence.
