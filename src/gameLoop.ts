@@ -2,13 +2,13 @@ import { Module, runModuleManager } from "./ModuleManager";
 
 import { roomBuilderModule } from "construction/RoomBuilder";
 import { creepRunnerModule } from "modules/CreepRunner";
+import { defenseModule } from "defense/defenseModule";
 import { expansionManagerModule } from "modules/ExpansionManager";
 import { intelManagerModule } from "modules/IntelManager";
 import { marketManagerModule } from "modules/MarketManager";
 import { roomIntelModule } from "modules/RoomIntel";
 import { scoutManagerModule } from "modules/ScoutManager";
 import { spawnManagerModule } from "modules/SpawnManager";
-import { towerManagerModule } from "modules/TowerManager";
 import { trafficManagerModule } from "modules/TrafficManager";
 import { roomPlannerModule } from "planner/RoomPlanner";
 import { remoteMiningModule } from "remote/RemoteMining";
@@ -33,7 +33,8 @@ export const gameLoop = () => {
     // Construction sites from the plan
     { name: "RoomBuilder", fn: roomBuilderModule, runEvery: 20 },
 
-    { name: "TowerManager", fn: towerManagerModule, priority: "always" },
+    // Towers and safe mode
+    { name: "Defense", fn: defenseModule, priority: "always" },
     { name: "IntelManager", fn: intelManagerModule },
     { name: "ScoutManager", fn: scoutManagerModule, runEvery: 10, priority: "low" },
     // Remote sources each owned room mines (selection every 20 ticks)

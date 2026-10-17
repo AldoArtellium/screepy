@@ -6,7 +6,8 @@
  */
 
 import { bodyCost, buildBody, MoveMode } from "../core/bodyBuilder";
-import { activeParts, creepsByRole, effectiveEnergy, hasEnemies } from "../core/roomState";
+import { activeParts, creepsByRole, effectiveEnergy } from "../core/roomState";
+import { ENEMY_STRENGTH_NORMAL, enemyStrength } from "../defense/RoomDefense";
 import { intelManager } from "../modules/IntelManager";
 import type { SpawnOption, SpawnRole } from "../spawning/spawnRoles";
 import {
@@ -212,7 +213,8 @@ export const remoteSpawnRole: SpawnRole = {
     emptyTimeout: 10,
 
     options(home) {
-        if (hasEnemies(home)) return [];
+        // Serious enemies at home: no remote spawn
+        if (enemyStrength(home) >= ENEMY_STRENGTH_NORMAL) return [];
         let haulerDemand = 0;
         let buildDemand = 0;
         const reserved = new Set<string>();

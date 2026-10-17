@@ -7,13 +7,18 @@
  */
 
 /** Bump to replan every room (format or algorithm change) */
-export const PLAN_VERSION = 2;
+export const PLAN_VERSION = 3;
 
 export interface PlanMemory {
     /** Plan version (PLAN_VERSION) */
     v: number;
     /** Packed positions by location type */
     t: { [type: string]: string };
+    /** Variation key and score (RoomPlanner) */
+    k?: string;
+    s?: number;
+    /** Every variation was tried */
+    done?: boolean;
 }
 
 declare global {

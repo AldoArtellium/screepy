@@ -4,7 +4,7 @@
  * See docs/hivemind/hivemind-construction.md §1.
  *
  * RCL 1: spawns. RCL 2+: extensions bay by bay, source and controller containers, roads on swamps
- * towards sources and controller. RCL 3: extensions around sources, towers. RCL 4: storage, then every
+ * towards sources and controller. RCL 3: extensions around sources, towers, ramparts. RCL 4: storage, then every
  * planned road once the storage is built, and the roads of the remote mining paths in the room.
  */
 
@@ -88,6 +88,14 @@ function manageSpawns(ctx: RoomContext): void {
     ctx.buildPlanned("spawn", STRUCTURE_SPAWN);
 }
 
+/** RCL 3+, unless a long safe mode runs: main ramparts first, then the on-ramps (Hivemind manageRamparts) */
+function manageRamparts(ctx: RoomContext): void {
+    const controller = ctx.room.controller!;
+    if (ctx.rcl < 3 || ((controller.safeMode ?? 0) >= 2000 && !controller.safeModeCooldown)) return;
+    ctx.buildPlanned("rampart", STRUCTURE_RAMPART, pos => !ctx.plan.has(pos, "rampart.ramp"));
+    ctx.buildPlanned("rampart", STRUCTURE_RAMPART);
+}
+
 function manageStructures(ctx: RoomContext): void {
     const room = ctx.room;
     const onlySpawn = _.size(Game.spawns) === 1 ? _.values<StructureSpawn>(Game.spawns)[0] : null;
@@ -106,6 +114,7 @@ function manageStructures(ctx: RoomContext): void {
 
     ctx.buildPlanned("container.source", STRUCTURE_CONTAINER);
     ctx.buildPlanned("container.controller", STRUCTURE_CONTAINER);
+    manageRamparts(ctx);
     if (!ctx.canCreate()) return;
 
     ctx.buildPlanned("storage", STRUCTURE_STORAGE);
@@ -138,6 +147,8 @@ export const roomBuilderModule = () => {
         if (!room.controller?.my) continue;
         const plan = roomPlanner.getPlan(room.name);
         if (!plan || underAttack(room)) continue;
+        // A room without spawn waits for the best variation: its first construction site fixes the plan
+        if (!roomPlanner.isFinal(room.name) && room.find(FIND_MY_SPAWNS).length === 0) continue;
         manageStructures(new RoomContext(room, plan));
     }
 };
