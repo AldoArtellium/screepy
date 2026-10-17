@@ -13,7 +13,6 @@
  */
 
 import { moveTo, preTick, reconcileTraffic } from "screeps-cartographer";
-import { TaskType } from "../types/TaskTypes";
 import { countStat, recordSample } from "../utils/stats";
 
 /** Move request options */
@@ -92,7 +91,7 @@ class TrafficManager {
             }
         );
         if (result !== OK && result !== ERR_TIRED) {
-            const what = "body" in creep ? creep.memory.role ?? creep.memory.currentTask?.type ?? "idle" : "powerCreep";
+            const what = "body" in creep ? creep.memory.role ?? "idle" : "powerCreep";
             countStat(`moveError:${result}:${what}`);
             recordSample("moveErrors", `${result} ${what} ${creep.pos} -> ${targetPos} r${range}`);
         }
@@ -142,30 +141,17 @@ class TrafficManager {
     }
 
     /**
-     * Get priority for a creep based on its current task (lower = higher priority)
+     * Movement priority from the creep's role and order (lower = higher priority)
      */
     getCreepPriority(creep: Creep | PowerCreep): number {
         if (!("body" in creep)) return 20; // power creeps
-
-        // Delivering to the spawn/extensions
-        const reservation = creep.memory.logistics;
-        if (reservation?.kind === "need") {
-            const target = Game.getObjectById(reservation.targetId as Id<Structure>);
-            if (target?.structureType === STRUCTURE_SPAWN || target?.structureType === STRUCTURE_EXTENSION) return 10;
-        }
-
-        const task = creep.memory.currentTask;
-        if (!task) return 100;
-
-        if (task.type === TaskType.ATTACK_HOSTILE || task.type === TaskType.DEFEND_RAMPART) {
-            return 0;
-        }
-
-        if (task.type === TaskType.HARVEST_SOURCE && task.state === "executing") {
-            return 5;
-        }
-
-        return 50;
+        const role = creep.memory.role;
+        if (role === "brawler") return 0;
+        if (role === "harvester") return 5;
+        const order = creep.memory.order;
+        if (order?.type === "spawn" || order?.type === "bay") return 10;
+        if (role === "transporter" || role === "upgrader" || role === "builder") return 50;
+        return order ? 50 : 100;
     }
 
     /**

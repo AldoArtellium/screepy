@@ -20,6 +20,23 @@ const INTEL_EXPIRY = {
     OWNERSHIP: 10000
 };
 
+/** Ticks between two intel records of a visible room */
+const INTEL_REFRESH = 100;
+
+function freeTilesAround(terrain: RoomTerrain, pos: RoomPosition): number {
+    let free = 0;
+    for (let dx = -1; dx <= 1; dx++) {
+        for (let dy = -1; dy <= 1; dy++) {
+            if (!dx && !dy) continue;
+            const x = pos.x + dx;
+            const y = pos.y + dy;
+            if (x < 0 || x > 49 || y < 0 || y > 49) continue;
+            if (terrain.get(x, y) !== TERRAIN_MASK_WALL) free++;
+        }
+    }
+    return free;
+}
+
 /** Room intel data structure */
 export interface RoomIntel {
     /** Room name */
@@ -30,6 +47,12 @@ export interface RoomIntel {
     sourceCount: number;
     /** Source positions for pathfinding */
     sourcePositions: { x: number; y: number }[];
+    /** Sources with their free adjacent tiles (remote harvesters per source) */
+    sources?: { id: Id<Source>; x: number; y: number; free: number }[];
+    /** Controller position, if any */
+    controllerPos?: { x: number; y: number };
+    /** Free tiles around the controller (reservers per room) */
+    reservePositions?: number;
     /** Controller level (0 = no controller, -1 = reserved) */
     controllerLevel: number;
     /** Controller owner username (if owned) */
@@ -78,6 +101,8 @@ class IntelManager {
         if (!Memory.intel) {
             Memory.intel = {};
         }
+        const previous = Memory.intel[room.name];
+        if (previous?.sources && Game.time - previous.lastScouted < INTEL_REFRESH) return;
 
         const sources = room.find(FIND_SOURCES);
         const controller = room.controller;
@@ -123,6 +148,9 @@ class IntelManager {
             lastScouted: Game.time,
             sourceCount: sources.length,
             sourcePositions: sources.map(s => ({ x: s.pos.x, y: s.pos.y })),
+            sources: sources.map(s => ({ id: s.id, x: s.pos.x, y: s.pos.y, free: freeTilesAround(terrain, s.pos) })),
+            controllerPos: controller ? { x: controller.pos.x, y: controller.pos.y } : undefined,
+            reservePositions: controller ? freeTilesAround(terrain, controller.pos) : undefined,
             controllerLevel: controller?.level ?? 0,
             owner: controller?.owner?.username,
             reserver: controller?.reservation?.username,

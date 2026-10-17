@@ -1,30 +1,22 @@
 /**
- * SpawnManager - Part-count based spawning
- * Spawns generic body types based on part deficits
+ * SpawnManager - asks every spawn role for options and spawns the best one, one creep per room and tick.
+ * If the best option can't be paid yet, the room waits for it (no fallback on a cheaper option).
+ * Ported from Hivemind (MIT), src/spawn-manager.ts.
+ *
+ * Modules (scout, remote mining, expansion) request creeps through requestSpawn(): their requests
+ * compete with the economy options on the same priority scale (higher = sooner).
  */
 
-import { BodyType, generateBody, generateOptimalBody, getBodyCost } from "../config/bodyTypes";
+import { bodyCost } from "../core/bodyBuilder";
+import { getBestOption } from "../core/options";
+import { mySpawns } from "../core/roomState";
+import { ECONOMY_SPAWN_ROLES, SpawnOption, SpawnRole, starvedRooms } from "../spawning/spawnRoles";
 import { log } from "../utils/logger";
 import { countStat } from "../utils/stats";
 
-interface SpawnRequest {
-    bodyType?: BodyType;
-    body: BodyPartConstant[];
-    priority: number;
-    roomName: string;
-    reason?: string;
-    /** Target room for cross-room creeps (bootstrap, remote mining) */
-    targetRoom?: string;
-    /** Extra creep memory (module-driven creeps set `role`) */
-    memory?: Partial<CreepMemory>;
-    /** Id of the external request this comes from */
-    externalId?: string;
-}
-
 /**
- * Spawn request from a module (scout, remote miner, claimer...).
- * Creeps spawned this way carry `memory.role`: they are driven by the role handler
- * registered in TaskExecutor (`registerRole`) and never take tasks from the task queue.
+ * Spawn request from a module. Creeps carry `memory.role` and are driven by the handler registered
+ * for it (roles/registry.ts).
  */
 export interface ExternalSpawnRequest {
     /** Unique id: re-requesting with the same id updates the request instead of duplicating it */
@@ -32,402 +24,188 @@ export interface ExternalSpawnRequest {
     /** Room whose spawns should build the creep */
     roomName: string;
     body: BodyPartConstant[];
-    /** Same scale as SPAWN_PRIORITIES (lower = sooner). Economy workers use 1-2. */
+    /** Same scale as the economy (higher = sooner): harvesters 4-6, builders 3-4, remote 3, scout 1 */
     priority: number;
+    weight?: number;
     memory: Partial<CreepMemory> & { role: string };
     /** Ticks the request stays queued without being renewed (default 20) */
     ttl?: number;
 }
 
 const DEFAULT_REQUEST_TTL = 20;
-
-/**
- * Spawn priorities (lower = higher priority)
- */
-const SPAWN_PRIORITIES: Record<BodyType, number> = {
-    [BodyType.COMBAT]: 0,
-    [BodyType.WORKER]: 1,
-    [BodyType.TRANSPORT]: 2,
-    [BodyType.CLAIM]: 3,
-    [BodyType.SCOUT]: 4,
-    [BodyType.RESERVER]: 3,
-    // Before workers, even "urgent" ones (0.5): a missing miner inflates the WORK deficit,
-    // so workers would otherwise always win and miners never spawn. Phase >= 1 (3+ creeps) only.
-    [BodyType.MINER]: 0.4
-};
-
-/** WORK parts that fully drain a source (10 energy/tick) */
-const SOURCE_WORK_TARGET = 5;
-
-/**
- * Energy thresholds for spawning decisions
- */
-const SPAWN_ENERGY = {
-    /** Minimum energy ratio to spawn non-emergency creeps */
-    MIN_RATIO: 0.5,
-    /** Energy ratio to prefer larger bodies */
-    PREFER_LARGE_RATIO: 0.8,
-    /** Wait for full capacity if above this ratio and no urgency */
-    WAIT_FULL_RATIO: 0.9
-};
+/** A room with no option at all is not asked again for this many ticks */
+const IDLE_ROOM_TICKS = 10;
+/** Waiting this long for energy that doesn't rise: size bodies on the energy available */
+const STARVED_TICKS = 50;
 
 class SpawnManager {
-    private spawnQueue: SpawnRequest[] = [];
+    private readonly external: Map<string, ExternalSpawnRequest & { expiresAt: number }> = new Map();
+    private readonly emptyUntil: Map<string, number> = new Map();
+    private readonly idleRoomUntil: Map<string, number> = new Map();
+    /** Rooms waiting for energy: highest energy seen and when it last rose */
+    private readonly waiting: Map<string, { energy: number; since: number }> = new Map();
+    private readonly roles: SpawnRole[];
 
-    /** Module requests, kept until spawned or expired (heap only: modules renew them) */
-    private externalRequests: Map<string, ExternalSpawnRequest & { expiresAt: number }> = new Map();
-
-    /**
-     * Ask for a creep. Call it each time the module runs while the creep is still needed;
-     * the request expires after `ttl` ticks without renewal and is removed once spawned.
-     * The caller must count its existing creeps (including spawning ones) to avoid over-requesting.
-     */
-    requestSpawn(request: ExternalSpawnRequest): void {
-        this.externalRequests.set(request.id, {
-            ...request,
-            expiresAt: Game.time + (request.ttl ?? DEFAULT_REQUEST_TTL)
-        });
+    constructor() {
+        const external: SpawnRole = {
+            id: "external",
+            emptyTimeout: 0,
+            options: room => this.externalOptions(room),
+            body: (_room, option) => option.body ?? [],
+            memory: (_room, option) => option.memory ?? {}
+        };
+        this.roles = [...ECONOMY_SPAWN_ROLES, external];
     }
 
-    /** Whether a request is still queued (not spawned, not expired) */
+    /**
+     * Ask for a creep. Call it each time the module runs while the creep is still needed; the request
+     * expires after `ttl` ticks without renewal and is removed once spawned. The caller counts its
+     * existing creeps (spawning ones included) to avoid over-requesting.
+     */
+    requestSpawn(request: ExternalSpawnRequest): void {
+        this.external.set(request.id, { ...request, expiresAt: Game.time + (request.ttl ?? DEFAULT_REQUEST_TTL) });
+        // A new request wakes the room up
+        this.idleRoomUntil.delete(request.roomName);
+    }
+
     hasPendingRequest(id: string): boolean {
-        const request = this.externalRequests.get(id);
+        const request = this.external.get(id);
         return !!request && request.expiresAt >= Game.time;
     }
 
-    private queueExternalRequests(): void {
-        for (const [id, request] of this.externalRequests) {
-            if (request.expiresAt < Game.time) {
-                this.externalRequests.delete(id);
-                continue;
-            }
-            const room = Game.rooms[request.roomName];
-            if (!room?.controller?.my) continue;
-            if (getBodyCost(request.body) > room.energyCapacityAvailable) {
-                log.warn("SpawnManager", `Request ${id} body costs more than ${room.name} capacity, dropped`);
-                this.externalRequests.delete(id);
-                continue;
-            }
-            this.spawnQueue.push({
-                body: request.body,
-                priority: request.priority,
-                roomName: request.roomName,
-                reason: `request ${id}`,
-                memory: request.memory,
-                externalId: id
-            });
-        }
-    }
-
-    /**
-     * Main spawn management function
-     */
-    manageSpawns(): void {
-        this.spawnQueue = [];
-
-        // Build spawn queue from all rooms
-        for (const roomName in Game.rooms) {
-            const room = Game.rooms[roomName];
+    run(): void {
+        for (const name in Game.rooms) {
+            const room = Game.rooms[name];
             if (!room.controller?.my) continue;
-
-            this.calculateSpawnNeeds(room);
+            const spawns = mySpawns(room);
+            if (spawns.length === 0) continue;
+            this.manageRoom(room, spawns);
         }
-
-        this.queueExternalRequests();
-
-        // Sort by priority
-        this.spawnQueue.sort((a, b) => a.priority - b.priority);
-
-        // Process spawn queue
-        this.processSpawnQueue();
     }
 
-    /**
-     * Calculate spawn needs based on part deficits
-     */
-    private calculateSpawnNeeds(room: Room): void {
-        const demand = room.memory.partDemand;
-        const phase = room.memory.phase ?? 0;
-        const totalCreeps = room.find(FIND_MY_CREEPS, { filter: c => !c.memory.role }).length;
-        const defenseMode = room.memory.defenseMode ?? false;
-        const energyRatio = room.energyAvailable / room.energyCapacityAvailable;
-
-        // Emergency mode: spawn basic worker if too few creeps
-        if (totalCreeps <= 2) {
-            const body = this.getEmergencyBody(room);
-            if (body.length === 0) {
-                return; // Not enough energy for functional creep
+    private externalOptions(room: Room): SpawnOption[] {
+        const options: SpawnOption[] = [];
+        for (const [id, request] of this.external) {
+            if (request.expiresAt < Game.time) {
+                this.external.delete(id);
+                continue;
             }
-            this.spawnQueue.push({
-                bodyType: BodyType.WORKER,
-                body,
-                priority: -10, // Highest priority
-                roomName: room.name,
-                reason: "emergency"
+            if (request.roomName !== room.name) continue;
+            if (bodyCost(request.body) > room.energyCapacityAvailable) {
+                log.warn("SpawnManager", `Request ${id} body costs more than ${room.name} capacity, dropped`);
+                this.external.delete(id);
+                continue;
+            }
+            options.push({
+                role: request.memory.role,
+                priority: request.priority,
+                weight: request.weight ?? 0,
+                body: request.body,
+                memory: request.memory,
+                requestId: id
             });
+        }
+        return options;
+    }
+
+    private collectOptions(room: Room): (SpawnOption & { spawnRole: SpawnRole })[] {
+        if ((this.idleRoomUntil.get(room.name) ?? -1) > Game.time) return [];
+        const options: (SpawnOption & { spawnRole: SpawnRole })[] = [];
+        for (const role of this.roles) {
+            const key = `${room.name}:${role.id}`;
+            if ((this.emptyUntil.get(key) ?? -1) > Game.time) continue;
+            const roleOptions = role.options(room);
+            if (roleOptions.length === 0 && role.emptyTimeout > 0) this.emptyUntil.set(key, Game.time + role.emptyTimeout);
+            for (const option of roleOptions) options.push({ ...option, spawnRole: role });
+        }
+        if (options.length === 0) this.idleRoomUntil.set(room.name, Game.time + IDLE_ROOM_TICKS);
+        return options;
+    }
+
+    private manageRoom(room: Room, spawns: StructureSpawn[]): void {
+        const available = spawns.filter(s => !s.spawning);
+        if (available.length === 0) return;
+
+        // An option bound to a busy nearby spawn waits for it
+        const options = this.collectOptions(room).filter(option => {
+            if (!option.preferClosestSpawn) return true;
+            const closest = _.min(spawns, s => s.pos.getRangeTo(option.preferClosestSpawn!)) as StructureSpawn;
+            return closest.pos.getRangeTo(option.preferClosestSpawn) >= 3 || available.includes(closest);
+        });
+        const option = getBestOption(options);
+        if (!option) return;
+
+        let spawn = _.sample(available);
+        if (option.preferClosestSpawn) {
+            const closest = _.min(spawns, s => s.pos.getRangeTo(option.preferClosestSpawn!)) as StructureSpawn;
+            if (closest.pos.getRangeTo(option.preferClosestSpawn) < 3) spawn = closest;
+        }
+        if (this.trySpawn(room, spawn, option)) {
+            this.waiting.delete(room.name);
+            starvedRooms.delete(room.name);
+        } else {
+            this.trackStarvation(room);
+        }
+    }
+
+    private trackStarvation(room: Room): void {
+        const state = this.waiting.get(room.name);
+        if (!state || room.energyAvailable > state.energy) {
+            this.waiting.set(room.name, { energy: room.energyAvailable, since: Game.time });
             return;
         }
+        if (Game.time - state.since >= STARVED_TICKS && !starvedRooms.has(room.name)) {
+            starvedRooms.add(room.name);
+            countStat("spawn:starved");
+        }
+    }
 
-        if (!demand) return;
+    private trySpawn(room: Room, spawn: StructureSpawn, option: SpawnOption & { spawnRole: SpawnRole }): boolean {
+        const body = option.spawnRole.body(room, option);
+        if (body.length === 0) return false;
+        const cost = bodyCost(body);
+        if (cost > room.energyAvailable) return false; // wait for energy
 
-        // Check combat needs first (defense mode)
-        if (defenseMode && demand[ATTACK] && demand[ATTACK].deficit > 0) {
-            const body = generateBody(BodyType.COMBAT, room.energyCapacityAvailable);
-            if (body.length > 0) {
-                this.spawnQueue.push({
-                    bodyType: BodyType.COMBAT,
-                    body,
-                    priority: SPAWN_PRIORITIES[BodyType.COMBAT],
-                    roomName: room.name,
-                    reason: "defense"
+        const memory = { room: room.name, ...option.spawnRole.memory(room, option), role: option.role } as CreepMemory;
+        const name = this.creepName(option.role);
+        const result = spawn.spawnCreep(body, name, { memory });
+        if (result !== OK) {
+            log.warn("SpawnManager", `Failed to spawn ${option.role} in ${room.name}: ${result}`);
+            // Energy is there but unusable (inactive extensions) and nobody can fix it: recovery transporter
+            if (result === ERR_NOT_ENOUGH_ENERGY && room.find(FIND_MY_CREEPS, { filter: c => c.memory.role === "transporter" }).length === 0) {
+                spawn.spawnCreep([CARRY, CARRY, MOVE, CARRY, CARRY, MOVE], this.creepName("transporter"), {
+                    memory: { role: "transporter", room: room.name }
                 });
             }
+            return false;
         }
-
-        // Determine spawn energy budget based on urgency
-        const hasUrgentDeficit = (demand[WORK]?.deficit ?? 0) > 5 || (demand[CARRY]?.deficit ?? 0) > 10;
-        let spawnEnergy = room.energyCapacityAvailable;
-
-        if (!hasUrgentDeficit && energyRatio < SPAWN_ENERGY.PREFER_LARGE_RATIO) {
-            // Wait for more energy if no urgency
-            if (energyRatio < SPAWN_ENERGY.MIN_RATIO) {
-                return; // Don't spawn yet
-            }
-            // Use available energy for smaller body
-            spawnEnergy = room.energyAvailable;
-        }
-
-        // Static miners first: they are the energy income
-        this.calculateMinerNeeds(room, phase);
-
-        // Check WORK deficit - spawn workers
-        if (demand[WORK] && demand[WORK].deficit > 0) {
-            // Calculate how many workers needed
-            const workPerWorker = Math.min(Math.floor(spawnEnergy / 250), 12); // Based on body config
-            const workersNeeded = Math.ceil(demand[WORK].deficit / Math.max(workPerWorker, 1));
-
-            for (let i = 0; i < Math.min(workersNeeded, 2); i++) {
-                const body = generateBody(BodyType.WORKER, spawnEnergy);
-                if (body.length > 0) {
-                    const priority = this.coveragePriority(demand[WORK]) + i * 0.1;
-
-                    this.spawnQueue.push({
-                        bodyType: BodyType.WORKER,
-                        body,
-                        priority,
-                        roomName: room.name,
-                        reason: `work deficit ${demand[WORK].deficit}`
-                    });
-                }
-            }
-        }
-
-        // Check CARRY deficit - spawn transports
-        if (demand[CARRY] && demand[CARRY].deficit > 0) {
-            // Calculate how many transports needed
-            const carryPerTransport = Math.min(Math.floor(spawnEnergy / 150) * 2, 32); // 2 CARRY per unit
-            const transportsNeeded = Math.ceil(demand[CARRY].deficit / Math.max(carryPerTransport, 2));
-
-            for (let i = 0; i < Math.min(transportsNeeded, 2); i++) {
-                const body = generateBody(BodyType.TRANSPORT, spawnEnergy);
-                if (body.length > 0) {
-                    const priority = this.coveragePriority(demand[CARRY]) + i * 0.1;
-
-                    this.spawnQueue.push({
-                        bodyType: BodyType.TRANSPORT,
-                        body,
-                        priority,
-                        roomName: room.name,
-                        reason: `carry deficit ${demand[CARRY].deficit}`
-                    });
-                }
-            }
-        }
-
-        // Ensure minimum creep population in higher phases
-        if (phase >= 2 && totalCreeps < 5) {
-            // Spawn a worker even without deficit to maintain economy
-            const body = generateBody(BodyType.WORKER, room.energyAvailable);
-            if (body.length > 0) {
-                this.spawnQueue.push({
-                    bodyType: BodyType.WORKER,
-                    body,
-                    priority: 0.5, // High priority
-                    roomName: room.name,
-                    reason: "population"
-                });
-            }
-        }
-
-        // Spawn workers for bootstrap targets (newly claimed rooms)
-        this.calculateBootstrapSpawnNeeds(room, spawnEnergy);
+        if (option.requestId) this.external.delete(option.requestId);
+        // Something was spawned: the room's needs changed
+        this.idleRoomUntil.delete(room.name);
+        log.info("SpawnManager", `Spawning ${name} in ${room.name} (${body.length} parts, ${cost} energy, priority ${option.priority})`);
+        countStat(`spawned:${option.role}`);
+        return true;
     }
 
-    /**
-     * Worker/transport priority from how well the part is covered (supplied/total): the least
-     * covered type spawns first. With fixed priorities the queue is strictly ordered, and since
-     * there is always some WORK deficit (upgrading, building), transports never spawned.
-     * Range 1-2: after miners (0.4) and population (0.5), before claimers and remotes (2.4+).
-     */
-    private coveragePriority(part: { total: number; supplied: number }): number {
-        const coverage = part.total > 0 ? Math.min(1, part.supplied / part.total) : 1;
-        return 1 + coverage;
-    }
-
-    /**
-     * Spawn static miners until every source has SOURCE_WORK_TARGET WORK (max 2 miners per source)
-     */
-    private calculateMinerNeeds(room: Room, phase: number): void {
-        if (phase < 1) return;
-        // Off by default: on 3 benchmark rooms (8000 ticks) static miners did 12-29% worse than
-        // self-harvesting workers. Memory.config.staticMiners = true turns them on (A/B tests).
-        if (Memory.config?.staticMiners !== true) return;
-
-        const sources = room.find(FIND_SOURCES).length;
-        const miners = _.filter(Game.creeps, c =>
-            c.memory.bodyType === BodyType.MINER && c.memory.room === room.name &&
-            (c.spawning || (c.ticksToLive ?? 0) > c.body.length * CREEP_SPAWN_TIME + 50)
-        );
-        const minerWork = _.sum(miners, c => c.getActiveBodyparts(WORK));
-        if (minerWork >= sources * SOURCE_WORK_TARGET || miners.length >= sources * 2) return;
-
-        // Full-size miner (waits for full energy): a small miner wastes a source slot for its whole life
-        const body = generateBody(BodyType.MINER, room.energyCapacityAvailable);
-        this.spawnQueue.push({
-            bodyType: BodyType.MINER,
-            body,
-            priority: SPAWN_PRIORITIES[BodyType.MINER],
-            roomName: room.name,
-            reason: `miner work ${minerWork}/${sources * SOURCE_WORK_TARGET}`
-        });
-    }
-
-    /**
-     * Calculate spawn needs for bootstrap targets
-     */
-    private calculateBootstrapSpawnNeeds(room: Room, spawnEnergy: number): void {
-        const bootstrapTargets = room.memory.bootstrapTargets ?? [];
-        if (bootstrapTargets.length === 0) return;
-
-        for (const targetRoom of bootstrapTargets) {
-            // Count existing bootstrap workers for this target
-            const existingWorkers = _.filter(Game.creeps, c =>
-                c.memory.room === room.name &&
-                c.memory.targetRoom === targetRoom &&
-                c.memory.bodyType === BodyType.WORKER
-            ).length;
-
-            // Need 3-4 workers per bootstrap target
-            const desiredWorkers = 4;
-            const workersNeeded = desiredWorkers - existingWorkers;
-
-            if (workersNeeded <= 0) continue;
-
-            // Spawn workers for bootstrap
-            for (let i = 0; i < Math.min(workersNeeded, 2); i++) {
-                const body = generateBody(BodyType.WORKER, spawnEnergy);
-                if (body.length > 0) {
-                    this.spawnQueue.push({
-                        bodyType: BodyType.WORKER,
-                        body,
-                        priority: SPAWN_PRIORITIES[BodyType.WORKER] + 0.3 + i * 0.1,
-                        roomName: room.name,
-                        targetRoom,
-                        reason: `bootstrap ${targetRoom}`
-                    });
-                }
-            }
-        }
-    }
-
-    /**
-     * Get emergency body using available energy
-     */
-    private getEmergencyBody(room: Room): BodyPartConstant[] {
-        const energy = room.energyAvailable;
-
-        // Minimum functional creep: WORK + CARRY + MOVE = 200 energy.
-        // A WORK+MOVE creep can't carry energy to the spawn, so it doesn't bootstrap anything:
-        // wait for 200 (the spawn regenerates energy on its own).
-        if (energy < 200) {
-            return [];
-        }
-
-        // Build largest worker possible with available energy
-        return generateOptimalBody(BodyType.WORKER, energy);
-    }
-
-    /**
-     * Process spawn queue and spawn creeps
-     */
-    private processSpawnQueue(): void {
-        if (this.spawnQueue.length === 0) return;
-
-        const availableSpawns = _.filter(Game.spawns, s => !s.spawning);
-
-        for (const spawn of availableSpawns) {
-            if (this.spawnQueue.length === 0) break;
-
-            // Find best match for this spawn's room
-            const spawnRoomName = spawn.room.name;
-            const bestIndex = this.spawnQueue.findIndex(r => r.roomName === spawnRoomName);
-            if (bestIndex === -1) continue;
-
-            const request = this.spawnQueue[bestIndex];
-            const { bodyType, body } = request;
-            const label = request.memory?.role ?? bodyType ?? "creep";
-
-            // Check if spawn can afford this body
-            const cost = getBodyCost(body);
-            if (spawn.room.energyAvailable < cost) {
-                continue;
-            }
-
-            const newName = `${label}-${Game.time}-${spawn.name}`;
-            const memory: CreepMemory = {
-                ...(bodyType && { bodyType }),
-                room: request.roomName,
-                ...(request.targetRoom && { targetRoom: request.targetRoom }),
-                ...request.memory
-            };
-
-            const result = spawn.spawnCreep(body, newName, { memory });
-
-            if (result === OK) {
-                Memory.creeps[newName] = memory;
-                const targetInfo = request.targetRoom ? ` → ${request.targetRoom}` : "";
-                log.info("SpawnManager", `Spawning ${label}: ${newName} (${body.length} parts, cost: ${cost})${targetInfo}`);
-                this.spawnQueue.splice(bestIndex, 1);
-                if (request.externalId) this.externalRequests.delete(request.externalId);
-                countStat(`spawned:${label}`);
-            } else if (result !== ERR_NOT_ENOUGH_ENERGY) {
-                log.warn("SpawnManager", `Failed to spawn ${label}: ${result}`);
-                this.spawnQueue.splice(bestIndex, 1);
-                if (request.externalId) this.externalRequests.delete(request.externalId);
-            }
-        }
-    }
-
-    /**
-     * Get spawn queue snapshot for dashboard
-     */
-    getSpawnQueueSnapshot(): { bodyType: string; priority: number; roomName: string; bodyCost: number }[] {
-        return this.spawnQueue.map(request => ({
-            bodyType: request.memory?.role ?? request.bodyType ?? "creep",
-            priority: request.priority,
-            roomName: request.roomName,
-            bodyCost: getBodyCost(request.body)
-        }));
+    private creepName(role: string): string {
+        if (!Memory.creepCounter) Memory.creepCounter = {};
+        let counter = Memory.creepCounter[role] ?? 0;
+        let name: string;
+        do {
+            name = `${role}_${counter.toString(36)}`;
+            counter = (counter + 1) % (36 * 36 * 36);
+        } while (Game.creeps[name]);
+        Memory.creepCounter[role] = counter;
+        return name;
     }
 }
 
-// Singleton instance
-const spawnManagerInstance = new SpawnManager();
+declare global {
+    interface Memory {
+        creepCounter?: { [role: string]: number };
+    }
+}
 
-export const spawnManagerModule = () => {
-    spawnManagerInstance.manageSpawns();
-};
+export const spawnManager = new SpawnManager();
 
-export const getSpawnQueueSnapshot = () => spawnManagerInstance.getSpawnQueueSnapshot();
-
-export const spawnManager = spawnManagerInstance;
+export const spawnManagerModule = () => spawnManager.run();

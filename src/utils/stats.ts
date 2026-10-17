@@ -51,19 +51,18 @@ export function recordTickStats(): void {
     for (const roomName in Game.rooms) {
         const room = Game.rooms[roomName];
         if (!room.controller?.my) continue;
-        const queue = room.memory.taskQueue ?? [];
+        const roles: { [role: string]: number } = {};
+        for (const creep of room.find(FIND_MY_CREEPS)) {
+            const role = creep.memory.role ?? "none";
+            roles[role] = (roles[role] ?? 0) + 1;
+        }
         stats.rooms[roomName] = {
             rcl: room.controller.level,
             progress: room.controller.progress,
-            phase: room.memory.phase ?? 0,
             energyAvailable: room.energyAvailable,
             energyCapacity: room.energyCapacityAvailable,
             creeps: creepsByRoom[roomName] ?? 0,
-            // Idle = no task and no logistics reservation (haulers have no task by design)
-            idleCreeps: room.find(FIND_MY_CREEPS, {
-                filter: c => !c.spawning && !c.memory.currentTask && !c.memory.logistics && !c.memory.role
-            }).length,
-            pendingTasks: queue.filter(t => t.status === "pending").length,
+            roles,
             structures: room.find(FIND_MY_STRUCTURES).length,
             constructionSites: room.find(FIND_MY_CONSTRUCTION_SITES).length
         };
