@@ -31,7 +31,19 @@ const SCOUT_CONFIG = {
     SPAWN_COOLDOWN: 500
 };
 
+/** Ticks a room whose path failed is left out of the scout targets */
+const UNREACHABLE_TTL = 5000;
+
 class ScoutManager {
+    /** Heap only: rooms whose path failed, until when they are skipped */
+    private unreachable: Map<string, number> = new Map();
+
+    private roomsToScout(homeRoom: string): string[] {
+        return intelManager
+            .getRoomsNeedingScouting(homeRoom, SCOUT_CONFIG.SCOUT_RANGE)
+            .filter(r => (this.unreachable.get(r) ?? 0) < Game.time);
+    }
+
     /**
      * Main scout management function
      */
@@ -61,7 +73,7 @@ class ScoutManager {
         const lastSpawn = room.memory.lastScoutSpawn ?? 0;
         if (Game.time - lastSpawn < SCOUT_CONFIG.SPAWN_COOLDOWN) return;
 
-        const roomsToScout = intelManager.getRoomsNeedingScouting(room.name, SCOUT_CONFIG.SCOUT_RANGE);
+        const roomsToScout = this.roomsToScout(room.name);
         if (roomsToScout.length === 0) return;
 
         spawnManager.requestSpawn({
@@ -82,7 +94,7 @@ class ScoutManager {
         // Get or assign target room
         if (!scout.memory.scoutTarget) {
             const homeRoom = scout.memory.room ?? scout.room.name;
-            const roomsToScout = intelManager.getRoomsNeedingScouting(homeRoom, SCOUT_CONFIG.SCOUT_RANGE);
+            const roomsToScout = this.roomsToScout(homeRoom);
 
             if (roomsToScout.length === 0) {
                 // No rooms to scout - idle near spawn
@@ -112,12 +124,15 @@ class ScoutManager {
         }
 
         // Move towards target room
-        if (Game.map.findRoute(scout.room.name, targetRoom) === ERR_NO_PATH) {
+        // No path (walled area, blocked exits): drop the target instead of searching again every tick
+        if (
+            Game.map.findRoute(scout.room.name, targetRoom) === ERR_NO_PATH ||
+            trafficManager.moveToRoom(scout, targetRoom, { priority: 80 }) === ERR_NO_PATH
+        ) {
             log.warn("ScoutManager", `Scout ${scout.name} cannot path to ${targetRoom}`);
+            this.unreachable.set(targetRoom, Game.time + UNREACHABLE_TTL);
             delete scout.memory.scoutTarget;
-            return;
         }
-        trafficManager.moveToRoom(scout, targetRoom, { priority: 80 });
     }
 
     /**

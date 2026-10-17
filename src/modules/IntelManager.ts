@@ -267,10 +267,32 @@ class IntelManager {
         return candidates.sort((a, b) => b.miningValue - a.miningValue);
     }
 
+    /** Room status (normal / novice / respawn / closed), heap cache: novice and respawn areas are walled off */
+    private statusCache: Map<string, { tick: number; status: string }> = new Map();
+
+    roomStatus(roomName: string): string {
+        const cached = this.statusCache.get(roomName);
+        if (cached && Game.time - cached.tick < 1000) return cached.status;
+        let status = "normal";
+        try {
+            status = Game.map.getRoomStatus(roomName)?.status ?? "normal";
+        } catch {
+            // unknown room: keep "normal"
+        }
+        this.statusCache.set(roomName, { tick: Game.time, status });
+        return status;
+    }
+
     /**
-     * Get room names within a certain distance
+     * Get room names within a certain distance, with the same status as the center room (rooms of
+     * another status are behind walls: paths there fail after exploring the whole search budget)
      */
     getRoomsInRange(centerRoom: string, range: number): string[] {
+        const status = this.roomStatus(centerRoom);
+        return this.getAllRoomsInRange(centerRoom, range).filter(r => this.roomStatus(r) === status);
+    }
+
+    private getAllRoomsInRange(centerRoom: string, range: number): string[] {
         const rooms: string[] = [];
         const parsed = this.parseRoomName(centerRoom);
         if (!parsed) return rooms;

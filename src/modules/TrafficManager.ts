@@ -65,8 +65,12 @@ class TrafficManager {
      * Request movement for a creep. Call this instead of creep.moveTo().
      * When already in range, registers an intent to stay in range.
      */
-    requestMove(creep: Creep | PowerCreep, target: RoomPosition | _HasRoomPosition, options: MoveOptions = {}): void {
-        if (!creep.pos) return; // unspawned power creep
+    requestMove(
+        creep: Creep | PowerCreep,
+        target: RoomPosition | _HasRoomPosition,
+        options: MoveOptions = {}
+    ): ScreepsReturnCode {
+        if (!creep.pos) return ERR_INVALID_TARGET; // unspawned power creep
         const targetPos = target instanceof RoomPosition ? target : target.pos;
         if (this.requestsTick !== Game.time) {
             this.requestsTick = Game.time;
@@ -95,6 +99,7 @@ class TrafficManager {
             countStat(`moveError:${result}:${what}`);
             recordSample("moveErrors", `${result} ${what} ${creep.pos} -> ${targetPos} r${range}`);
         }
+        return result;
     }
 
     /**
@@ -103,8 +108,8 @@ class TrafficManager {
     /**
      * Move a creep towards another room (cartographer paths across rooms; arrives when inside the room)
      */
-    moveToRoom(creep: Creep | PowerCreep, roomName: string, options: Omit<MoveOptions, "range"> = {}): void {
-        this.requestMove(creep, new RoomPosition(25, 25, roomName), { ...options, range: 20 });
+    moveToRoom(creep: Creep | PowerCreep, roomName: string, options: Omit<MoveOptions, "range"> = {}): ScreepsReturnCode {
+        return this.requestMove(creep, new RoomPosition(25, 25, roomName), { ...options, range: 20 });
     }
 
     getStuckTicks(creep: Creep): number {
