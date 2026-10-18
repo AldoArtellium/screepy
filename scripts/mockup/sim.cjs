@@ -367,6 +367,9 @@ async function snapshot(server, userId) {
         for (const [r, n] of Object.entries(o.store || {})) if (r !== "energy" && n) acc[`${o.type}:${r}`] = (acc[`${o.type}:${r}`] || 0) + n;
         return acc;
       }, {}),
+    siteTypes: objects
+      .filter((o) => o.type === "constructionSite" && o.user === userId)
+      .reduce((acc, o) => ({ ...acc, [o.structureType]: (acc[o.structureType] || 0) + 1 }), {}),
     terminalEnergy: mine.filter((o) => o.type === "terminal").reduce((sum, o) => sum + ((o.store && o.store.energy) || 0), 0),
     // Creeps in every room by name prefix (role), to compare bots
     creepsByRoom: await creepCensus(db, userId),
@@ -535,7 +538,7 @@ async function main() {
         `RCL ${w.rcl} (${w.progress}) | creeps ${w.creeps} | energy ${w.energy}/${w.energyCapacity}`,
         `| ext ${w.extensions} cont ${w.containers} roads ${w.roads}+${w.remoteRoads} sites ${w.sites} storage ${w.storage}`,
         `| cpu avg ${(cpuSum / Math.max(1, cpuSamples)).toFixed(2)}`,
-        PRESET ? `| endgame ${JSON.stringify(w.endgame)} terminal ${w.terminalEnergy} minerals ${JSON.stringify(w.minerals)}` : "",
+        PRESET ? `| endgame ${JSON.stringify(w.endgame)} sites ${JSON.stringify(w.siteTypes)} terminal ${w.terminalEnergy} minerals ${JSON.stringify(w.minerals)}` : "",
         Object.keys(w.ownedRooms).length > 1 ? `| rooms ${JSON.stringify(w.ownedRooms)}` : "",
         enemy ? `| enemy ${JSON.stringify(await enemyStatus(server, enemy))}` : "",
         CPU_LIMIT !== null ? `| bucket ${(await server.common.storage.db.users.findOne({ _id: user.id })).cpuAvailable | 0}` : "",
