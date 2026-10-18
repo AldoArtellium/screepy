@@ -31,6 +31,7 @@ import { militarySpawnRole } from "../military/military";
 import { remoteSpawnRole } from "../remote/remoteSpawnRole";
 import { ENEMY_STRENGTH_NORMAL, enemyStrength } from "../defense/RoomDefense";
 import { GUARDIAN } from "../roles/guardian";
+import { harvesterSizeFactor } from "../utils/throttle";
 
 export interface SpawnOption extends Option {
     role: string;
@@ -147,7 +148,7 @@ const harvester: SpawnRole = {
         const fewExtensions = room.energyCapacityAvailable < SPAWN_ENERGY_CAPACITY * 2;
         return buildBody({
             weights: { [WORK]: 4, [CARRY]: 1 },
-            partLimits: { [WORK]: option.size },
+            partLimits: { [WORK]: option.size === undefined ? undefined : option.size * harvesterSizeFactor(room) },
             moveMode: hasSpawnAtSource || fewExtensions ? MoveMode.MINIMAL : MoveMode.ROAD,
             carryContentLevel: 0,
             energyLimit: energyLimit(room, option.force ? 300 : room.energyCapacityAvailable)

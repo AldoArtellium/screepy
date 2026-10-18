@@ -10,6 +10,7 @@ import { activeParts, creepsByRole, effectiveEnergy } from "../core/roomState";
 import { ENEMY_STRENGTH_NORMAL, enemyStrength } from "../defense/RoomDefense";
 import { intelManager } from "../modules/IntelManager";
 import { hasInvaderCore } from "../modules/RoomIntel";
+import { harvesterSizeFactor } from "../utils/throttle";
 import type { SpawnOption, SpawnRole } from "../spawning/spawnRoles";
 import {
     canReserveFrom,
@@ -87,7 +88,7 @@ function harvesterBody(home: Room, option: RemoteOption): BodyPartConstant[] {
     const established = option.remote ? isEstablished(option.remote) : false;
     return buildBody({
         weights: { [WORK]: 20, [CARRY]: 1 },
-        partLimits: { [WORK]: option.size ? option.size + 1 : 0 },
+        partLimits: { [WORK]: option.size ? option.size * (established ? harvesterSizeFactor(home) : 1) + 1 : 0 },
         moveMode: established ? MoveMode.ROAD : MoveMode.PLAINS,
         carryContentLevel: 0,
         energyLimit: energyLimit(home)
