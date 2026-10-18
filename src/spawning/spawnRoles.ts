@@ -26,6 +26,7 @@ import {
     remoteDefenseOptions
 } from "../remote/remoteDefense";
 import { reclaimSpawnRole, squadSpawnRole } from "../expansion/squadSpawnRole";
+import { militarySpawnRole } from "../military/military";
 import { remoteSpawnRole } from "../remote/remoteSpawnRole";
 import { ENEMY_STRENGTH_NORMAL, enemyStrength } from "../defense/RoomDefense";
 import { GUARDIAN } from "../roles/guardian";
@@ -519,6 +520,7 @@ export const ECONOMY_SPAWN_ROLES: SpawnRole[] = [
     remoteDefense,
     builder,
     harvester,
+    militarySpawnRole,
     reclaimSpawnRole,
     remoteSpawnRole,
     roomDefense,

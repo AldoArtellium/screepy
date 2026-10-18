@@ -4,6 +4,7 @@ import { roomBuilderModule } from "construction/RoomBuilder";
 import { creepRunnerModule } from "modules/CreepRunner";
 import { defenseModule } from "defense/defenseModule";
 import { expansionModule } from "expansion/Expansion";
+import { militaryModule } from "military/military";
 import { intelManagerModule } from "modules/IntelManager";
 import { marketManagerModule } from "modules/MarketManager";
 import { roomIntelModule } from "modules/RoomIntel";
@@ -41,6 +42,8 @@ export const gameLoop = () => {
     { name: "RemoteMining", fn: remoteMiningModule, priority: "high" },
     // Claims and bootstraps new rooms, helps rooms without spawn
     { name: "Expansion", fn: expansionModule, runEvery: 5, priority: "high" },
+    // Attacks (Memory.military.attack): duos moving and fighting as one
+    { name: "Military", fn: militaryModule, priority: "always" },
     { name: "MarketManager", fn: marketManagerModule, runEvery: 20, priority: "low" },
 
     // Resolves all movement requests issued above (must run after every creep-moving module)

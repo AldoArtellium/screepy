@@ -47,6 +47,13 @@ const RAID_BODIES = {
   smallRanged: ["tough", "tough", "move", "move", "move", "move", "ranged_attack", "ranged_attack", "ranged_attack", "move"],
   smallMelee: ["tough", "tough", "move", "move", "move", "move", "ranged_attack", "work", "attack", "move"]
 };
+/**
+ * Enemy player (offense tests): "ROOM:RCL[:defenders[:ringHits]]", e.g. --enemy W8N3:3 or W8N3:5:2:100000.
+ * A base around a spawn (no safe mode: a new player starts with one, where attacks fail with
+ * ERR_NO_BODYPART): full towers for the RCL, ramparts on spawn and towers, a ring of ramparts at
+ * range 5 of the spawn (ringHits, default 30000), scripts/mockup/enemy-bot.js as its code.
+ */
+const ENEMY = opt("enemy", null);
 /** Global control level of the bot (default 1), e.g. 2 to allow a second room (expansion tests) */
 const GCL = Number(opt("gcl", 1));
 /** CPU limit of the bot (default: the mockup's, 100), e.g. 8 to drain the bucket and test throttling */
@@ -88,6 +95,64 @@ function findSpawnSpot(terrain, objects) {
     }
   }
   return best && { x: best.x, y: best.y };
+}
+
+/** Enemy base for offense tests (see ENEMY) */
+async function setupEnemy(server, fixture, spec) {
+  const [room, rclText, defendersText, ringText] = spec.split(":");
+  const rcl = Number(rclText);
+  const r = fixture.rooms[room];
+  if (!r) throw new Error(`Enemy room ${room} is not in the fixture`);
+  const spot = findSpawnSpot(r.terrain, r.objects);
+  const code = fs.readFileSync(path.join(__dirname, "enemy-bot.js"), "utf-8");
+  const enemy = await server.world.addBot({ username: "enemy", room, x: spot.x, y: spot.y, gcl: 10, modules: { main: code } });
+  const { db, env } = server.common.storage;
+  await env.set(env.keys.MEMORY + enemy.id, JSON.stringify({ defenders: Number(defendersText || 0) }));
+  const time = await server.world.gameTime;
+  await db["rooms.objects"].update({ room, type: "controller" }, { $set: { level: rcl, progress: 0, downgradeTime: time + 100000, safeModeAvailable: 0, safeMode: null } });
+  await db.rooms.update({ _id: room }, { $set: { active: true } });
+  const wall = (x, y) => (Number(r.terrain[y * 50 + x]) & 1) === 1;
+  const taken = new Set([spot.y * 50 + spot.x, ...r.objects.map((o) => o.y * 50 + o.x)]);
+  const towers = { 3: 1, 4: 1, 5: 2, 6: 2, 7: 3, 8: 6 }[rcl] || 0;
+  const rampartHits = { 2: 300000, 3: 1000000, 4: 3000000, 5: 10000000, 6: 30000000, 7: 100000000, 8: 300000000 }[rcl] || 300000;
+  const ringHits = Math.min(Number(ringText || 30000), rampartHits);
+  const insert = (doc) => db["rooms.objects"].insert({ room, user: enemy.id, ...doc });
+  const rampart = (x, y, hits) => insert({ type: "rampart", x, y, hits, hitsMax: rampartHits, nextDecayTime: time + 100000, isPublic: false });
+  const placed = [];
+  for (let radius = 2; radius <= 3 && placed.length < towers; radius++) {
+    for (let dx = -radius; dx <= radius && placed.length < towers; dx++) {
+      for (let dy = -radius; dy <= radius && placed.length < towers; dy++) {
+        if (Math.max(Math.abs(dx), Math.abs(dy)) !== radius || (dx + dy) % 2 !== 0) continue;
+        const x = spot.x + dx;
+        const y = spot.y + dy;
+        if (wall(x, y) || taken.has(y * 50 + x)) continue;
+        taken.add(y * 50 + x);
+        placed.push({ x, y });
+        await insert({ type: "tower", x, y, hits: 3000, hitsMax: 3000, store: { energy: 1000 }, storeCapacityResource: { energy: 1000 }, actionLog: { attack: null, heal: null, repair: null } });
+      }
+    }
+  }
+  for (const p of [spot, ...placed]) await rampart(p.x, p.y, Math.min(ringHits * 3, rampartHits));
+  let ring = 0;
+  for (let dx = -5; dx <= 5; dx++) {
+    for (let dy = -5; dy <= 5; dy++) {
+      if (Math.max(Math.abs(dx), Math.abs(dy)) !== 5) continue;
+      const x = spot.x + dx;
+      const y = spot.y + dy;
+      if (x < 2 || y < 2 || x > 47 || y > 47 || wall(x, y) || taken.has(y * 50 + x)) continue;
+      await rampart(x, y, ringHits);
+      ring++;
+    }
+  }
+  log(`Enemy in ${room} (RCL ${rcl}): spawn ${spot.x},${spot.y}, ${placed.length} towers, ${ring} ring ramparts of ${ringHits} hits`);
+  return { id: enemy.id, room };
+}
+
+async function enemyStatus(server, enemy) {
+  const objects = await server.common.storage.db["rooms.objects"].find({ room: enemy.room, user: enemy.id });
+  const count = (type) => objects.filter((o) => o.type === type).length;
+  const towerEnergy = objects.filter((o) => o.type === "tower").reduce((sum, o) => sum + ((o.store && o.store.energy) || 0), 0);
+  return { spawns: count("spawn"), towers: count("tower"), towerEnergy, ramparts: count("rampart"), creeps: count("creep") };
 }
 
 async function setupWorld(server, fixture) {
@@ -276,6 +341,8 @@ async function main() {
   const gcl = GCL > 1 ? Math.ceil(1000000 * Math.pow(GCL - 1, 2.4)) + 1 : 1;
   const user = await server.world.addBot({ username: USERNAME, room: ROOM, x: spot.x, y: spot.y, gcl, modules: { main } });
   const { env, pubsub } = server.common.storage;
+  // The enemy first: adding a second user resets the first one's Memory
+  const enemy = ENEMY ? await setupEnemy(server, fixture, ENEMY) : null;
   await env.set(env.keys.MEMORY + user.id, MEMORY_INIT);
   if (CPU_LIMIT !== null) {
     await server.common.storage.db.users.update({ _id: user.id }, { $set: { cpu: Number(CPU_LIMIT), cpuAvailable: 10000 } });
@@ -377,6 +444,7 @@ async function main() {
         `| ext ${w.extensions} cont ${w.containers} roads ${w.roads}+${w.remoteRoads} sites ${w.sites} storage ${w.storage}`,
         `| cpu avg ${(cpuSum / Math.max(1, cpuSamples)).toFixed(2)}`,
         Object.keys(w.ownedRooms).length > 1 ? `| rooms ${JSON.stringify(w.ownedRooms)}` : "",
+        enemy ? `| enemy ${JSON.stringify(await enemyStatus(server, enemy))}` : "",
         CPU_LIMIT !== null ? `| bucket ${(await server.common.storage.db.users.findOne({ _id: user.id })).cpuAvailable | 0}` : "",
         `| ${(tick / elapsed).toFixed(1)} ticks/s`,
         errorCount ? `| ${errorCount} console errors` : ""
@@ -429,6 +497,7 @@ async function main() {
       "CPU by role (per tick / per creep): " +
         roleCpu.map((r) => `${r.role} ${r.perTick.toFixed(2)}/${r.perCreep.toFixed(3)}`).join(", ")
     );
+  if (enemy) console.log(`Enemy ${enemy.room}: ${JSON.stringify(await enemyStatus(server, enemy))}`);
   for (const raid of raidLog) {
     console.log(`Raid tick ${raid.tick} (${raid.bodies.join("+")}): ${raid.over ? `cleared after ${raid.over - raid.tick} ticks` : "still alive at the end"}`);
   }
@@ -473,6 +542,7 @@ async function main() {
     checks,
     cpu: { avg: cpuAvg, max: cpuMax, intentsPerTick, officialEstimate: officialCpu, byRole: roleCpu },
     raids: raidLog,
+    enemy: enemy ? await enemyStatus(server, enemy) : null,
     stats,
     errors: moduleErrors,
     consoleErrors,
