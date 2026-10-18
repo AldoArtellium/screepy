@@ -31,7 +31,12 @@ export const roomIntelModule = () => {
         }) as StructureInvaderCore[];
         const owned = !!room.controller?.my;
         if (!owned && hostiles.length === 0 && cores.length === 0) {
-            delete room.memory.enemies;
+            // Through Memory.rooms: room.memory would create an entry for every room in sight
+            const memory = Memory.rooms?.[name];
+            if (memory?.enemies) {
+                delete memory.enemies;
+                if (Object.keys(memory).length === 0) delete Memory.rooms[name];
+            }
             continue;
         }
         // A deployed core (level > 0) about to spawn defenders makes the room unsafe

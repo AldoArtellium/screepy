@@ -543,8 +543,6 @@ class MarketManager {
 const marketManagerInstance = new MarketManager();
 
 export const marketManagerModule = () => {
-    // Only run every 20 ticks to save CPU
-    if (Game.time % 20 !== 0) return;
     marketManagerInstance.manage();
 };
 

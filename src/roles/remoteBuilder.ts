@@ -98,7 +98,11 @@ function determineTargetSource(creep: Creep): void {
 function followPath(creep: Creep, path: RoomPosition[], towardsSource: boolean): void {
     const index = currentIndex(creep, path);
     if (index === null) {
-        const inRoom = path.map((p, i) => ({ p, i })).filter(e => e.p.roomName === creep.room.name);
+        // Never the container tile (its harvester never moves) nor another occupied tile: cartographer's
+        // fallback path avoids creeps, so an occupied target means ERR_NO_PATH every tick
+        const inRoom = path
+            .map((p, i) => ({ p, i }))
+            .filter(e => e.i > 0 && e.p.roomName === creep.room.name && e.p.lookFor(LOOK_CREEPS).length === 0);
         const closest = _.min(inRoom, e => e.p.getRangeTo(creep.pos));
         const target = typeof closest === "number" ? path[towardsSource ? 0 : path.length - 1] : closest.p;
         trafficManager.requestMove(creep, target, { range: 0, priority: 40 });
