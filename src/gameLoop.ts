@@ -8,6 +8,7 @@ import { militaryModule } from "military/military";
 import { intelManagerModule } from "modules/IntelManager";
 import { marketManagerModule } from "modules/MarketManager";
 import { memoryCleanupModule } from "modules/MemoryCleanup";
+import { miningStatsModule } from "modules/MiningStats";
 import { roomIntelModule } from "modules/RoomIntel";
 import { scoutManagerModule } from "modules/ScoutManager";
 import { spawnManagerModule } from "modules/SpawnManager";
@@ -52,6 +53,8 @@ export const gameLoop = () => {
     { name: "MemoryCleanup", fn: memoryCleanupModule },
 
     // Plan overlay and economy panel on owned rooms (every tick: visuals last one tick; Memory.visuals = false)
+    // Share of the source energy harvested (read on each source's last regeneration tick)
+    { name: "MiningStats", fn: miningStatsModule },
     { name: "RoomVisuals", fn: roomVisualsModule, priority: "low" },
 
     // Resolves all movement requests issued above (must run after every creep-moving module)
