@@ -4,7 +4,8 @@
  * empire/remote-path-manager.ts, operation/remote-mining.ts. See docs/hivemind/hivemind-remote.md.
  *
  * Every 20 ticks each owned room with a plan keeps its 5 best remote rooms (4 from RCL 4) within
- * 3 rooms, scored 3000 / shortest path from a source to the planned storage. No RCL or storage gate.
+ * 3 rooms. Not Hivemind (3000 / shortest path): rooms are scored by net energy per tick once their
+ * creeps are paid (remoteIncome.ts, Harabi). No RCL or storage gate.
  */
 
 import { squadsOf } from "../expansion/Expansion";
@@ -17,6 +18,7 @@ import { roomsInRange } from "../utils/rooms";
 import { segmentStore } from "../utils/segments";
 import { countStat } from "../utils/stats";
 import { jitter, jitterFor } from "../utils/jitter";
+import { reserverCost, sourceNet } from "./remoteIncome";
 
 export interface RemoteSource {
     /** `${room}:${x}:${y}` */
@@ -128,16 +130,33 @@ const unpacked: Map<string, RoomPosition[]> = new Map();
 
 const pathRoomsCache: Map<string, string[]> = new Map();
 
-/** Rooms a remote path crosses, the remote room included */
-function pathRooms(source: RemoteSource): string[] {
-    const packed = packedPath(source);
+/** Rooms a packed path crosses */
+function roomsOf(packed: string): string[] {
     let rooms = pathRoomsCache.get(packed);
     if (!rooms) {
-        rooms = [...new Set(unpackPath(packed).map(p => p.roomName).concat(source.room))];
+        rooms = [...new Set(unpackPath(packed).map(p => p.roomName))];
         if (pathRoomsCache.size > 200) pathRoomsCache.clear();
         pathRoomsCache.set(packed, rooms);
     }
     return rooms;
+}
+
+/** Rooms a remote path crosses, the remote room included */
+function pathRooms(source: RemoteSource): string[] {
+    const rooms = roomsOf(packedPath(source));
+    return rooms.includes(source.room) ? rooms : rooms.concat(source.room);
+}
+
+/**
+ * Another player's room or remote (reserved by them): never crossed on the way to a remote, as
+ * The International's remotesManager (remoteTypeWeights: enemy and enemyRemote are Infinity).
+ * Invader reservations (invader cores) don't count: RoomIntel tracks their danger.
+ */
+function isForeignRoom(roomName: string): boolean {
+    const intel = intelManager.getIntel(roomName);
+    if (!intel) return false;
+    if (intel.owner && intel.owner !== Memory.username) return true;
+    return !!intel.reserver && intel.reserver !== Memory.username && intel.reserver !== "Invader";
 }
 
 /** Positions of a packed path; the array is shared, don't modify it */
@@ -195,7 +214,10 @@ function pathFor(home: Room, sourcePos: RoomPosition): RoomPosition[] | null {
     const cache = paths()[key];
     if (cache) {
         const ttl = cache.path ? PATH_TTL : FAILED_PATH_TTL;
-        if (Game.time - cache.generated < jitterFor(key, ttl)) return cache.path ? unpackPath(cache.path) : null;
+        // A cached path that now crosses someone else's room is searched again at once
+        const crossesForeign =
+            !!cache.path && roomsOf(cache.path).some(r => r !== sourcePos.roomName && isForeignRoom(r));
+        if (Game.time - cache.generated < jitterFor(key, ttl) && !crossesForeign) return cache.path ? unpackPath(cache.path) : null;
     }
     const storagePos = roomPlanner.getPlan(home.name)?.getLocations("storage")[0];
     // No plan yet: don't cache the failure (Hivemind cached null for 5000 ticks)
@@ -205,7 +227,8 @@ function pathFor(home: Room, sourcePos: RoomPosition): RoomPosition[] | null {
         swampCost: home.storage ? 3 : 10,
         maxOps: 10000,
         heuristicWeight: 1,
-        roomCallback: remoteCostMatrix
+        roomCallback: roomName =>
+            roomName !== sourcePos.roomName && isForeignRoom(roomName) ? false : remoteCostMatrix(roomName)
     });
     const path = result.incomplete || result.path.length >= MAX_PATH_LENGTH ? null : result.path;
     paths()[key] = { generated: Game.time, path: path ? encodePath(path) : null };
@@ -223,6 +246,11 @@ function candidateRooms(home: Room): string[] {
         return route !== ERR_NO_PATH && route.length <= MAX_ROOM_DISTANCE;
     });
 }
+
+/** Net energy per tick under which a remote source is not worth its creeps */
+const MIN_SOURCE_NET = 1;
+/** Rooms already mined keep their place unless another one scores 10% more */
+const KEEP_BONUS = 1.1;
 
 function maxRemotes(home: Room): number {
     const spawns = Math.max(1, home.find(FIND_MY_SPAWNS).length);
@@ -275,12 +303,27 @@ function selectRemotes(): void {
         // A room without spawn (new expansion) mines nothing yet
         if (home.find(FIND_MY_SPAWNS).length === 0) continue;
         const scored: { room: string; score: number; sources: RemoteSource[] }[] = [];
+        const reserved = (roomName: string) => canReserveFrom(home, roomName);
+        const roads = home.controller!.level > 3 && !!(home.storage || home.terminal);
         for (const roomName of candidateRooms(home)) {
             const intel = intelManager.getIntel(roomName)!;
             const sources: RemoteSource[] = [];
+            const capacity = reserved(roomName) ? SOURCE_ENERGY_CAPACITY : SOURCE_ENERGY_NEUTRAL_CAPACITY;
+            const generation = capacity / ENERGY_REGEN_TIME;
+            let net = 0;
             for (const source of intel.sources!) {
                 const path = pathFor(home, new RoomPosition(source.x, source.y, roomName));
                 if (!path || path.length === 0) continue;
+                const sourceIncome = sourceNet({
+                    generation,
+                    distance: path.length,
+                    roads,
+                    // maintenanceWork() for a path not selected yet
+                    maintenanceWork: roads ? Math.ceil(0.7 + 0.03 * path.filter(p => !isOwnedRoom(p.roomName)).length) : 0
+                });
+                // A source that barely pays for its creeps is left out
+                if (sourceIncome < MIN_SOURCE_NET) continue;
+                net += sourceIncome;
                 const key = sourceKey(roomName, source.x, source.y);
                 sources.push({
                     key,
@@ -295,14 +338,18 @@ function selectRemotes(): void {
             }
             // Hivemind scored a room without any path 3000/500: such a room is skipped here
             if (sources.length === 0) continue;
-            scored.push({ room: roomName, score: 3000 / _.min(sources.map(s => s.travelTime)), sources });
+            if (reserved(roomName)) net -= reserverCost(_.min(sources.map(s => s.travelTime)));
+            if (net <= 0) continue;
+            scored.push({ room: roomName, score: net, sources });
         }
-        scored.sort((a, b) => b.score - a.score);
-        picked.push(...scored.slice(0, maxRemotes(home)));
+        const current = new Set(Object.values(memory().sources).filter(s => s.homeRoom === home.name).map(s => s.room));
+        const ranked = _.sortBy(scored, entry => -entry.score * (current.has(entry.room) ? KEEP_BONUS : 1));
+        picked.push(...ranked.slice(0, maxRemotes(home)));
     }
-    // CPU budget: the best scored rooms of the whole empire
+    // CPU budget: the closest rooms of the whole empire (Hivemind's order). The net income order
+    // kept farther two-source rooms, more creeps per CPU: W9N5 at 13 CPU lost 15%
     updateBudget(new Set(Object.values(memory().sources).map(s => s.room)).size, picked.length);
-    picked.sort((a, b) => b.score - a.score);
+    picked.sort((a, b) => _.min(a.sources.map(s => s.travelTime)) - _.min(b.sources.map(s => s.travelTime)));
     const cap = memory().maxRooms ?? picked.length;
     for (const entry of picked.slice(0, cap)) {
         for (const source of entry.sources) selected[source.key] = source;
@@ -310,7 +357,10 @@ function selectRemotes(): void {
     const before = Object.keys(memory().sources).sort().join();
     memory().sources = selected;
     const after = Object.keys(selected).sort().join();
-    if (before !== after) log.info("RemoteMining", `Remote sources: ${Object.keys(selected).join(" ") || "none"}`);
+    if (before !== after) {
+        const income = _.sum(picked.slice(0, cap), entry => entry.score).toFixed(1);
+        log.info("RemoteMining", `Remote sources: ${Object.keys(selected).join(" ") || "none"} (net ${income} energy/tick)`);
+    }
 }
 
 // ------------------------------------------------------------------ queries
