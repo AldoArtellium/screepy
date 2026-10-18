@@ -321,9 +321,10 @@ function selectRemotes(): void {
         const ranked = _.sortBy(scored, entry => -entry.score * (current.has(entry.room) ? KEEP_BONUS : 1));
         picked.push(...ranked.slice(0, maxRemotes(home)));
     }
-    // CPU budget: the best scored rooms of the whole empire
+    // CPU budget: the closest rooms of the whole empire (Hivemind's order). The net income order
+    // kept farther two-source rooms, more creeps per CPU: W9N5 at 13 CPU lost 15%
     updateBudget(new Set(Object.values(memory().sources).map(s => s.room)).size, picked.length);
-    picked.sort((a, b) => b.score - a.score);
+    picked.sort((a, b) => _.min(a.sources.map(s => s.travelTime)) - _.min(b.sources.map(s => s.travelTime)));
     const cap = memory().maxRooms ?? picked.length;
     for (const entry of picked.slice(0, cap)) {
         for (const source of entry.sources) selected[source.key] = source;
