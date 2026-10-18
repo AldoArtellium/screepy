@@ -3,7 +3,7 @@
  * by run.mjs. Not meant to be started by hand on the host.
  *
  * Args: --code <bundle> --room <name> --ticks <n> --memory <json> --out <report.json> [--verbose]
- *       [--log-every <ticks>]
+ *       [--log-every <ticks>] [--dump-memory] (Memory + segments in <report>-memory.json)
  */
 /* eslint-disable no-console */
 
@@ -25,7 +25,13 @@ const flag = (name) => args.includes(`--${name}`);
 const CODE = opt("code");
 const ROOM = opt("room", "W7N3");
 const TICKS = Number(opt("ticks", 3000));
-const MEMORY_INIT = opt("memory", "{}");
+/** Initial Memory: JSON, or "@path" (relative to the repo, e.g. a -memory.json dump: its `memory` key is used) */
+const MEMORY_INIT = (() => {
+  const value = opt("memory", "{}");
+  if (!value.startsWith("@")) return value;
+  const data = JSON.parse(fs.readFileSync(value.slice(1), "utf-8"));
+  return JSON.stringify(data.memory && data.segments ? data.memory : data);
+})();
 /**
  * Invader raids: "tick:body+body,tick:body" with the backend's raid bodies (smallMelee, smallRanged,
  * smallHealer, bigMelee, bigRanged, bigHealer), e.g. --raid 12000:bigMelee+bigRanged. The creeps
@@ -517,6 +523,20 @@ async function main() {
   console.log(`Module errors ${moduleErrors.length} | console errors ${errorCount}`);
   const memorySize = Object.fromEntries(Object.entries(memory).map(([k, v]) => [k, JSON.stringify(v).length]));
   console.log(`Memory ${JSON.stringify(memory).length} chars | ${Object.entries(memorySize).sort((x, y) => y[1] - x[1]).slice(0, 6).map(([k, v]) => `${k} ${v}`).join(", ")}`);
+  // RawMemory segments (engine: env hash memorySegments:<user>)
+  const { env: envStorage } = server.common.storage;
+  const segmentIds = Array.from({ length: 100 }, (_, i) => i);
+  const segmentValues = (await envStorage.hmget(envStorage.keys.MEMORY_SEGMENTS + user.id, segmentIds)) || [];
+  const segments = Object.fromEntries(segmentIds.map((id, i) => [id, segmentValues[i]]).filter(([, v]) => v));
+  const segmentSize = Object.fromEntries(Object.entries(segments).map(([k, v]) => [k, String(v).length]));
+  if (Object.keys(segmentSize).length)
+    console.log(`Segments ${Object.entries(segmentSize).map(([k, v]) => `${k}:${v}`).join(", ")}`);
+  if (flag("dump-memory") && OUT) {
+    const dumpFile = OUT.replace(/\.json$/, "-memory.json");
+    fs.mkdirSync(path.dirname(dumpFile), { recursive: true });
+    fs.writeFileSync(dumpFile, JSON.stringify({ memory, segments }, null, 1));
+    console.log(`Memory dump: ${dumpFile}`);
+  }
   console.log(
     `Speed ${(TICKS / (elapsedMs / 1000)).toFixed(1)} ticks/s (${(elapsedMs / TICKS).toFixed(1)} ms/tick, ${(elapsedMs / 1000).toFixed(0)} s)`
   );
@@ -558,7 +578,8 @@ async function main() {
     consoleErrors,
     consoleErrorCount: errorCount,
     moduleState,
-    memorySize
+    memorySize,
+    segmentSize
   };
   if (OUT) {
     fs.mkdirSync(path.dirname(OUT), { recursive: true });
