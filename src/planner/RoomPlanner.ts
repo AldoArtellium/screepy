@@ -52,6 +52,8 @@ const MAX_BAYS = 20;
 const MAX_TOWERS = 6;
 /** Default range around a structure protected by the min cut (Hivemind minCutRampartDistance) */
 const RAMPART_DISTANCE = 4;
+/** Weight of the tower cover of the core (spawns, storage) against the rampart cover (0..1 each) */
+const TOWER_CORE_WEIGHT = 0.5;
 /** Planned structures the ramparts enclose with RAMPART_DISTANCE around them (Hivemind: every
  * CONTROLLER_STRUCTURES type but extension, road, container, extractor and link) */
 const PROTECTED_STRUCTURES = ["spawn", "storage", "terminal", "factory", "tower", "lab", "nuker", "powerSpawn", "observer"];
@@ -579,7 +581,9 @@ class PlanBuilder {
      * 6 towers in the safe area, greedily where they add the most cover to the ramparts least covered
      * so far (Hivemind place-towers step); each must be reachable without tunnels and gets a road.
      * Not in Hivemind: without ramparts (base enclosed by natural walls) towers go on the closest
-     * flood spots from the center instead of the top-left safe tiles.
+     * flood spots from the center instead of the top-left safe tiles; the cover of the core (spawns,
+     * storage) also counts, else far chokepoints pulled every tower away from the base (W29N7: towers
+     * 10-20 tiles from the center, core cover with 6 towers 2.4 -> 4.7 out of 6).
      */
     private placeTowers(): void {
         this.pm.startBuildingPlacement(this.center, this.entrances);
@@ -590,6 +594,7 @@ class PlanBuilder {
             });
             return;
         }
+        const core = [...this.plan.getLocations("spawn"), ...this.plan.getLocations("storage")];
         const positions: { pos: RoomPosition; score: number }[] = [];
         for (let x = 1; x < 49; x++) {
             for (let y = 1; y < 49; y++) {
@@ -605,12 +610,13 @@ class PlanBuilder {
             for (const info of positions) {
                 if (!this.pm.isBuildableTile(info.pos.x, info.pos.y)) info.score = -1;
                 if (info.score < 0) continue;
-                info.score = ramparts.reduce((s, r) => s + r.score * towerEffect(r.pos.x, r.pos.y, info.pos.x, info.pos.y), 0);
+                const rampartCover = ramparts.reduce((s, r) => s + r.score * towerEffect(r.pos.x, r.pos.y, info.pos.x, info.pos.y), 0);
+                const coreCover = core.reduce((s, c) => s + towerEffect(c.x, c.y, info.pos.x, info.pos.y), 0) / Math.max(1, core.length);
+                info.score = rampartCover / ramparts.length + TOWER_CORE_WEIGHT * coreCover;
             }
         };
         const remaining = (): number => MAX_TOWERS - this.plan.count("tower");
 
-        let towerCount = 0;
         while (this.pm.canPlaceMore("tower")) {
             const newTowers: RoomPosition[] = [];
             rescore();
@@ -630,10 +636,14 @@ class PlanBuilder {
                 if (!this.pm.isPositionAccessible(pos, true)) continue;
                 this.pm.commitTemporaryLocation(pos, "tower");
                 this.pm.placeAccessRoad(pos);
-                this.pm.planLocation(pos, "tower." + towerCount++, null);
             }
             this.pm.discardTemporaryLocations("tower");
         }
+        // Not in Hivemind: built closest to the center first (the first towers defend the core and
+        // are refilled quickly; the placement order favoured the far ramparts)
+        const center = this.center;
+        const byRange = this.plan.getLocations("tower").sort((a, b) => a.getRangeTo(center) - b.getRangeTo(center));
+        byRange.forEach((pos, i) => this.pm.planLocation(pos, "tower." + i, null));
     }
 
     /** A road from the center to each group of adjacent ramparts, through extensions if needed */
