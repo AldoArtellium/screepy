@@ -9,6 +9,7 @@ import { bodyCost, buildBody, MoveMode } from "../core/bodyBuilder";
 import { activeParts, creepsByRole, effectiveEnergy } from "../core/roomState";
 import { ENEMY_STRENGTH_NORMAL, enemyStrength } from "../defense/RoomDefense";
 import { intelManager } from "../modules/IntelManager";
+import { hasInvaderCore } from "../modules/RoomIntel";
 import type { SpawnOption, SpawnRole } from "../spawning/spawnRoles";
 import {
     canReserveFrom,
@@ -159,9 +160,8 @@ function builderOption(home: Room, demand: number): RemoteOption | null {
 
 function harvesterOption(home: Room, source: RemoteSource): RemoteOption | null {
     const intel = intelManager.getIntel(source.room);
-    if (intel?.hasInvaderCore && !(intel.reserver === Memory.username && (intel.reservationTicks ?? 0) >= 500)) {
-        return null;
-    }
+    const reservedByUs = intel?.reserver === Memory.username && (intel?.reservationTicks ?? 0) >= 500;
+    if (hasInvaderCore(source.room) && !reservedByUs) return null;
     if (intel?.reserver && intel.reserver !== Memory.username && (intel.reservationTicks ?? 0) > 500) return null;
 
     const all = creepsByRole(home.name, REMOTE_HARVESTER).filter(c => c.memory.source === source.key);

@@ -111,10 +111,10 @@ The ModuleManager runs modules in order with a CPU budget (80% of the limit): `m
 | SpawnManager | mandatory | Best spawn option per room, one creep per room and tick |
 | RoomBuilder | every 20 | Construction sites from the plan, max 5 per room |
 | Defense | every tick (priority always) | Towers (military target, heal, rampart repair under attack) and safe mode (`src/defense/`) |
-| IntelManager | every tick | Room intel |
+| IntelManager | every tick | Static intel of every seen room, owned ones included (`Memory.intel`: sources, controller, mineral, owner/reserver, source keepers; refreshed every 100 ticks while visible). Hostiles and invader cores only in RoomIntel (`hasInvaderCore()`). Room name helpers: `src/utils/rooms.ts` |
 | RemoteMining | every tick (selection every 20) | Remote sources each owned room mines |
 | Expansion | every 5 (priority high) | Claims and bootstraps new rooms, reclaims rooms that lost their spawn (`src/expansion/`) |
-| ScoutManager (10), MarketManager (20, disabled until the terminal milestone) | | Kept from the previous design (scout: from RCL 1, priority 4 before the storage) |
+| ScoutManager (10), MarketManager (20, disabled until the terminal milestone) | | Kept from the previous design (scout: from RCL 1, priority 4 before the storage; range 3 rooms, 5 from RCL 4; rescouts rooms never seen, older than 50000 ticks, or with a controller seen more than 10000 ticks ago) |
 | MemoryCleanup | every tick (work every 100 / 1000) | Drops the memory of dead creeps, and of rooms not owned, not mined, not targeted and without a living hostile |
 | TrafficManager | mandatory, last | Resolves every move (cartographer `reconcileTraffic`) |
 

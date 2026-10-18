@@ -17,7 +17,7 @@
 
 import { effectiveEnergy } from "../core/roomState";
 import { intelManager } from "../modules/IntelManager";
-import { isRoomUnderAttack } from "../modules/RoomIntel";
+import { hasInvaderCore, isRoomUnderAttack } from "../modules/RoomIntel";
 import { log } from "../utils/logger";
 import { expansionScore } from "./expansionScore";
 
@@ -187,7 +187,7 @@ function manageCurrent(): void {
     const room = Game.rooms[current.roomName];
     if (squad) {
         // A defender while the target or the way there has hostiles (Hivemind: always one)
-        squad.composition.defender = isRoomUnderAttack(current.roomName) || intelManager.getIntel(current.roomName)?.hasInvaderCore ? 1 : 0;
+        squad.composition.defender = isRoomUnderAttack(current.roomName) || hasInvaderCore(current.roomName) ? 1 : 0;
     }
     if (room?.controller?.my) {
         if (!current.claimed) current.claimed = Game.time;
