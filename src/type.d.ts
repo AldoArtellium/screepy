@@ -3,23 +3,6 @@ declare global {
         rooms: Record<string, RoomMemory>;
         creeps: Record<string, any>;
         logLevel?: number;
-        // Traffic system
-        pathCache?: {
-            [key: string]: {
-                /** Serialized path */
-                p: string;
-                /** Energy cost of path */
-                c: number;
-                /** Last used tick */
-                u: number;
-                /** Hit count for popularity */
-                h: number;
-            };
-        };
-        traffic?: {
-            lastCleanup: number;
-            invalidatedRooms: string[];
-        };
         // Player username
         username?: string;
         // Module state for CPU optimization (skip tracking, lastRun persistence)
@@ -56,7 +39,6 @@ declare global {
     interface ModuleState {
         lastRun: number;
         consecutiveSkips: number;
-        sleepUntil?: number;
         avgCpu?: number;
         /** Ticks the module was due but held back by bucket throttling */
         throttled?: number;
@@ -68,29 +50,6 @@ declare global {
         /** Home room */
         room?: string;
         targetRoom?: string;
-        targetId?: Id<any>;
-        // Traffic system
-        _path?: string;
-        _pathTick?: number;
-        _pathTarget?: string;
-    }
-
-    interface RoomMemory {
-        // Traffic system
-        idlePositions?: { x: number; y: number }[];
-        // Remote/expansion system
-        bootstrapTargets?: string[];
-        remoteRooms?: string[];
-        claimTarget?: string;
-    }
-
-    interface RemoteSummary {
-        roomName: string;
-        baseRoom: string;
-        sourceCount: number;
-        threat: boolean;
-        miners: number;
-        haulers: number;
     }
 }
 

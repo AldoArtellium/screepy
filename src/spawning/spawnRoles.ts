@@ -9,6 +9,7 @@ import { Option } from "../core/options";
 import {
     activeParts,
     controllerContainer,
+    controllerRefillPathLength,
     creepsByRole,
     effectiveEnergy,
     harvestSpots,
@@ -179,23 +180,11 @@ function transporterBaseAmount(room: Room): number {
 }
 
 /** Upgrader energy consumed while a delivery walks from the storage location */
-const refillPath: Map<string, { until: number; length: number }> = new Map();
 function extraUpgraderTransporters(room: Room, size: number): number {
     const work = activeParts(creepsByRole(room.name, "upgrader"), WORK);
     if (work === 0) return 0;
-    let cached = refillPath.get(room.name);
-    if (!cached || cached.until < Game.time) {
-        const container = controllerContainer(room);
-        const from = storageLocation(room);
-        let length = 1;
-        if (container && from) {
-            const result = PathFinder.search(from, { pos: container.pos, range: 1 }, { maxRooms: 1 });
-            if (!result.incomplete) length = result.path.length;
-        }
-        cached = { until: Game.time + 5000, length };
-        refillPath.set(room.name, cached);
-    }
-    return Math.floor((work * UPGRADE_CONTROLLER_POWER * cached.length * 1.8) / CARRY_CAPACITY / size);
+    const energy = work * UPGRADE_CONTROLLER_POWER * controllerRefillPathLength(room) * 1.8;
+    return Math.floor(energy / CARRY_CAPACITY / size);
 }
 
 /**

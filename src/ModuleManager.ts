@@ -1,4 +1,3 @@
-import { logCpu, logCpuStart } from "utils/logCPU";
 import { log } from "utils/logger";
 import { throttleMultiplier } from "utils/throttle";
 
@@ -7,9 +6,6 @@ export interface Module {
   fn: () => void;
   mandatory?: boolean;
   runEvery?: number;
-  runOnce?: boolean;
-  threshold?: number;
-  tier?: "core" | "standard" | "auxiliary";
   /** Skips (CPU budget) tolerated before the module is forced to run. Defaults to DEFAULT_MAX_SKIPS. */
   maxSkips?: number;
   disabled?: boolean;
@@ -54,14 +50,6 @@ function getModuleState(name: string): ModuleState {
   return Memory.moduleState[name];
 }
 
-/**
- * Put a module to sleep: it won't run before `ticks` ticks have passed.
- * Call from inside a module that has nothing to do (no labs, no target...).
- */
-export function sleepModule(name: string, ticks: number) {
-  getModuleState(name).sleepUntil = Game.time + ticks;
-}
-
 function recordError(name: string, error: unknown) {
   if (!Memory.moduleErrors) Memory.moduleErrors = [];
   const message = (error as Error)?.stack ?? String(error);
@@ -69,14 +57,8 @@ function recordError(name: string, error: unknown) {
   if (Memory.moduleErrors.length > MAX_ERRORS) Memory.moduleErrors.shift();
 }
 
-export function runModuleManager(modules: Module[], cpuLimit: number, debug = false) {
+export function runModuleManager(modules: Module[], cpuLimit: number) {
   const start = Game.cpu.getUsed();
-  if (debug) logCpuStart();
-
-  // Reserve 15% for auxiliary modules
-  const auxiliaryModules = modules.filter(m => m.tier === "auxiliary" && !m.disabled);
-  const auxiliaryReserve = auxiliaryModules.length > 0 ? cpuLimit * 0.15 : 0;
-  const standardBudget = cpuLimit - auxiliaryReserve;
 
   // Find ONE module to force-run (the most starved one past its maxSkips)
   let moduleToForce: string | null = null;
@@ -95,39 +77,26 @@ export function runModuleManager(modules: Module[], cpuLimit: number, debug = fa
     if (module.disabled) continue;
     const state = getModuleState(module.name);
 
-    // Sleeping or not due yet
-    if (state.sleepUntil && Game.time < state.sleepUntil) continue;
+    // Not due yet
     if (module.runEvery && state.lastRun + module.runEvery > Game.time) continue;
-    if (module.runOnce && state.lastRun >= Game.time) continue;
-    if (!module.runOnce && !isAllowedByBucket(module, state.lastRun)) {
+    if (!isAllowedByBucket(module, state.lastRun)) {
       state.throttled = (state.throttled ?? 0) + 1;
       continue;
     }
 
-    const cpuUsed = Game.cpu.getUsed() - start;
-    const isAuxiliary = module.tier === "auxiliary";
+    const remainingCpu = cpuLimit - (Game.cpu.getUsed() - start);
     const shouldForce = module.name === moduleToForce;
 
-    // Calculate remaining CPU based on tier
-    const remainingCpu = isAuxiliary
-      ? cpuLimit - cpuUsed // Auxiliary uses full budget including reserve
-      : standardBudget - cpuUsed; // Standard uses only standard budget
-
-    // Skip check (forced modules bypass CPU check but not bucket threshold)
+    // Skip check (forced modules bypass the CPU check, not the bucket throttling)
     if (!module.mandatory && !shouldForce && remainingCpu < 0) {
       state.consecutiveSkips++;
       log.warn("ModuleManager", `CPU limit reached, skipping: ${module.name} (skips: ${state.consecutiveSkips})`);
       continue;
     }
 
-    if (module.threshold && Game.cpu.bucket < module.threshold) {
-      continue;
-    }
-
     const before = Game.cpu.getUsed();
     try {
       module.fn();
-      if (debug) logCpu(module.name, cpuUsed);
     } catch (error) {
       // No rerun: a partial run already issued intents, rerunning would duplicate them
       log.error("ModuleManager", `Error in module ${module.name}:`, (error as Error).stack);
@@ -138,6 +107,4 @@ export function runModuleManager(modules: Module[], cpuLimit: number, debug = fa
     state.lastRun = Game.time;
     state.consecutiveSkips = 0;
   }
-
-  if (debug) logCpu("Total", Game.cpu.getUsed() - start);
 }

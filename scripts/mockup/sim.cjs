@@ -507,6 +507,8 @@ async function main() {
   }
   console.log(`Tasks ${completed} completed / ${failed} failed`);
   console.log(`Module errors ${moduleErrors.length} | console errors ${errorCount}`);
+  const memorySize = Object.fromEntries(Object.entries(memory).map(([k, v]) => [k, JSON.stringify(v).length]));
+  console.log(`Memory ${JSON.stringify(memory).length} chars | ${Object.entries(memorySize).sort((x, y) => y[1] - x[1]).slice(0, 6).map(([k, v]) => `${k} ${v}`).join(", ")}`);
   console.log(
     `Speed ${(TICKS / (elapsedMs / 1000)).toFixed(1)} ticks/s (${(elapsedMs / TICKS).toFixed(1)} ms/tick, ${(elapsedMs / 1000).toFixed(0)} s)`
   );
@@ -547,7 +549,8 @@ async function main() {
     errors: moduleErrors,
     consoleErrors,
     consoleErrorCount: errorCount,
-    moduleState
+    moduleState,
+    memorySize
   };
   if (OUT) {
     fs.mkdirSync(path.dirname(OUT), { recursive: true });

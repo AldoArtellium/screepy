@@ -50,10 +50,11 @@ export const gameLoop = () => {
     { name: "TrafficManager", fn: trafficManagerModule, mandatory: true }
   ];
 
-  runModuleManager(modules, cpuLimit * 0.8, false);
+  runModuleManager(modules, cpuLimit * 0.8);
 
   if (Game.time % 100 === 0) {
-    const memorySize = JSON.stringify(Memory).length;
+    // Size of the Memory saved last tick (already a string: no stringify); per-key detail only above the limit
+    const memorySize = RawMemory.get().length;
     if (memorySize > memLimit) {
       log.warn("GameLoop", "Memory approaching dangerous levels:", memorySize);
       log.warn(

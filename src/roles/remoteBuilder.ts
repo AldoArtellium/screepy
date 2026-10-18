@@ -17,10 +17,10 @@ import {
     isRemoteUnderAttack,
     neededWork,
     remoteContainer,
+    remotePath,
     RemoteSource,
     remoteSources,
-    sourcePos,
-    unpackPath
+    sourcePos
 } from "../remote/RemoteMining";
 import { REMOTE_BUILDER, REMOTE_HARVESTER } from "../remote/remoteSpawnRole";
 import { countStat } from "../utils/stats";
@@ -133,7 +133,7 @@ function goToSource(creep: Creep, source: RemoteSource): void {
     }
     if (pickupNearbyEnergy(creep)) return;
     if (buildRoad(creep, source)) return;
-    followPath(creep, unpackPath(source.path), true);
+    followPath(creep, remotePath(source), true);
 }
 
 function returnHome(creep: Creep, source: RemoteSource): void {
@@ -168,7 +168,7 @@ function returnHome(creep: Creep, source: RemoteSource): void {
         if (wait) whenInRange(creep, 5, wait);
         return;
     }
-    followPath(creep, unpackPath(source.path), false);
+    followPath(creep, remotePath(source), false);
 }
 
 /** Pick up an energy pile of at least 100 within 3 tiles */
@@ -204,7 +204,7 @@ function stay(creep: Creep): boolean {
 function buildRoadOnPath(creep: Creep, source: RemoteSource, work: number, state: { acted: boolean }): boolean {
     const controller = creep.room.controller;
     if (controller?.owner && !controller.my) return false;
-    const path = unpackPath(source.path);
+    const path = remotePath(source);
     const index = currentIndex(creep, path);
     if (index === null) return repairNearby(creep, work, state);
     for (let i = index - 2; i <= index + 2; i++) {

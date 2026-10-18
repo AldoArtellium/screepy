@@ -6,7 +6,7 @@
  */
 
 import { buildBody, MoveMode } from "../core/bodyBuilder";
-import { effectiveEnergy } from "../core/roomState";
+import { effectiveEnergy, squadCreeps } from "../core/roomState";
 import { remoteDefenderBody, DefenseResponse } from "../remote/remoteDefense";
 import type { SpawnOption, SpawnRole } from "../spawning/spawnRoles";
 import { roomsNeedingReclaim, SquadUnit, squadsOf } from "./Expansion";
@@ -29,7 +29,7 @@ function energyLimit(room: Room): number {
 
 /** Units alive (pioneers keep their squad once in the target room) */
 function unitCount(squad: string, unit: SquadUnit): number {
-    return _.filter(Game.creeps, c => c.memory.squad === squad && c.memory.unit === unit).length;
+    return squadCreeps(squad).filter(c => c.memory.unit === unit).length;
 }
 
 function pioneerBody(room: Room): BodyPartConstant[] {

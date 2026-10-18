@@ -1,7 +1,6 @@
 import { gameLoop } from "gameLoop";
 import { log } from "utils/logger";
 import MemHack from "utils/MemHack";
-import profiler from "utils/profiler";
 import { installIntentCounter } from "utils/intents";
 import { recordTickStats } from "utils/stats";
 import { trafficManager } from "modules/TrafficManager";
@@ -15,10 +14,9 @@ try {
 
 installIntentCounter();
 
-// profiler.enable();
 export const loop = () => {
   MemHack.pretick();
   trafficManager.preTick();
-  profiler.wrap(gameLoop);
+  gameLoop();
   recordTickStats();
 };

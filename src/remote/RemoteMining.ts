@@ -12,6 +12,7 @@ import { intelManager } from "../modules/IntelManager";
 import { isRoomUnderAttack } from "../modules/RoomIntel";
 import { roomPlanner } from "../planner/RoomPlanner";
 import { log } from "../utils/logger";
+import { decodePath, encodePath } from "../utils/pathCodec";
 import { countStat } from "../utils/stats";
 
 export interface RemoteSource {
@@ -21,8 +22,6 @@ export interface RemoteSource {
     x: number;
     y: number;
     homeRoom: string;
-    /** Path from the source (index 0 = container tile, next to the source) to the planned storage */
-    path: string;
     travelTime: number;
     free: number;
     containerId?: Id<StructureContainer>;
@@ -30,16 +29,24 @@ export interface RemoteSource {
 
 interface PathCache {
     generated: number;
-    /** Packed path, null when no path */
+    /**
+     * Path from the source (index 0 = container tile, next to the source) to the planned storage,
+     * packed by utils/pathCodec; null when no path
+     */
     path: string | null;
 }
+
+/** Packed path format (1: "W7N3,12,34;..." strings, migrated on load) */
+const PATHS_VERSION = 2;
 
 declare global {
     interface Memory {
         remoteMining?: {
             /** Selected sources, by key */
             sources: { [key: string]: RemoteSource };
+            /** Paths of the candidate sources, by source key (the only copy of a selected source's path) */
             paths: { [key: string]: PathCache };
+            pathsVersion?: number;
             lastSelect: number;
             /** CPU budget: slow average of the tick CPU, remote rooms allowed empire-wide (none = no cap yet) */
             cpuAvg?: number;
@@ -61,47 +68,72 @@ const PATH_TTL = 5000;
 const FAILED_PATH_TTL = 500;
 
 function memory(): NonNullable<Memory["remoteMining"]> {
-    if (!Memory.remoteMining) Memory.remoteMining = { sources: {}, paths: {}, lastSelect: 0 };
-    return Memory.remoteMining;
+    Memory.remoteMining ??= { sources: {}, paths: {}, lastSelect: 0, pathsVersion: PATHS_VERSION };
+    const mem = Memory.remoteMining;
+    if (mem.pathsVersion !== PATHS_VERSION) migratePaths(mem);
+    return mem;
+}
+
+/** Version 1 ("W7N3,12,34;..." in paths and again in sources[k].path): repack, drop the duplicates */
+function migratePaths(mem: NonNullable<Memory["remoteMining"]>): void {
+    for (const key in mem.paths) {
+        const old = mem.paths[key].path;
+        if (!old) continue;
+        const positions = old.split(";").map(part => {
+            const [roomName, x, y] = part.split(",");
+            return { x: Number(x), y: Number(y), roomName };
+        });
+        mem.paths[key].path = encodePath(positions);
+    }
+    for (const key in mem.sources) {
+        const source = mem.sources[key] as RemoteSource & { path?: string };
+        delete source.path;
+        // A selected source always has its path
+        if (!mem.paths[key]?.path) delete mem.sources[key];
+    }
+    mem.pathsVersion = PATHS_VERSION;
 }
 
 export function sourceKey(room: string, x: number, y: number): string {
     return `${room}:${x}:${y}`;
 }
 
-function packPath(path: RoomPosition[]): string {
-    return path.map(p => `${p.roomName},${p.x},${p.y}`).join(";");
-}
-
-/** Unpacked paths, by packed string (heap): unpacking a remote path each call cost ~0.5 CPU/tick */
+/** Decoded paths, by packed string (heap): decoding a remote path each call cost ~0.5 CPU/tick */
 const unpacked: Map<string, RoomPosition[]> = new Map();
 
 const pathRoomsCache: Map<string, string[]> = new Map();
 
 /** Rooms a remote path crosses, the remote room included */
 function pathRooms(source: RemoteSource): string[] {
-    let rooms = pathRoomsCache.get(source.path);
+    const packed = packedPath(source);
+    let rooms = pathRoomsCache.get(packed);
     if (!rooms) {
-        rooms = [...new Set(unpackPath(source.path).map(p => p.roomName).concat(source.room))];
+        rooms = [...new Set(unpackPath(packed).map(p => p.roomName).concat(source.room))];
         if (pathRoomsCache.size > 200) pathRoomsCache.clear();
-        pathRoomsCache.set(source.path, rooms);
+        pathRoomsCache.set(packed, rooms);
     }
     return rooms;
 }
 
 /** Positions of a packed path; the array is shared, don't modify it */
-export function unpackPath(packed: string): RoomPosition[] {
+function unpackPath(packed: string): RoomPosition[] {
     if (!packed) return [];
     let path = unpacked.get(packed);
     if (!path) {
-        path = packed.split(";").map(part => {
-            const [room, x, y] = part.split(",");
-            return new RoomPosition(Number(x), Number(y), room);
-        });
+        path = decodePath(packed);
         if (unpacked.size > 200) unpacked.clear();
         unpacked.set(packed, path);
     }
     return path;
+}
+
+function packedPath(source: RemoteSource): string {
+    return memory().paths[source.key]?.path ?? "";
+}
+
+/** Path of a selected source to the planned storage (index 0 = container tile); shared, don't modify it */
+export function remotePath(source: RemoteSource): RoomPosition[] {
+    return unpackPath(packedPath(source));
 }
 
 /** Rooms owned by someone else (or an active invader core) are never crossed */
@@ -151,7 +183,7 @@ function pathFor(home: Room, sourcePos: RoomPosition): RoomPosition[] | null {
         roomCallback: remoteCostMatrix
     });
     const path = result.incomplete || result.path.length >= MAX_PATH_LENGTH ? null : result.path;
-    memory().paths[key] = { generated: Game.time, path: path ? packPath(path) : null };
+    memory().paths[key] = { generated: Game.time, path: path ? encodePath(path) : null };
     return path;
 }
 
@@ -230,7 +262,6 @@ function selectRemotes(): void {
                     x: source.x,
                     y: source.y,
                     homeRoom: home.name,
-                    path: packPath(path),
                     travelTime: path.length,
                     free: source.free || 1,
                     containerId: memory().sources[key]?.containerId
@@ -276,7 +307,7 @@ export function sourcePos(source: RemoteSource): RoomPosition {
 
 /** Container tile: first tile of the path, next to the source */
 export function containerPos(source: RemoteSource): RoomPosition {
-    return unpackPath(source.path)[0];
+    return remotePath(source)[0];
 }
 
 /** The container of a remote source (remembered out of sight) */
@@ -352,7 +383,7 @@ function isOwnedRoom(roomName: string): boolean {
 
 /** Path tiles outside our rooms: the remote builders keep a road on them */
 export function remoteRoadPath(source: RemoteSource): RoomPosition[] {
-    return unpackPath(source.path).filter(p => !isOwnedRoom(p.roomName));
+    return remotePath(source).filter(p => !isOwnedRoom(p.roomName));
 }
 
 /** WORK parts to keep a source's container and roads up: ceil(0.7 + 0.03 per tile outside our rooms) */
@@ -389,7 +420,7 @@ export function operationRoadPositions(homeRoom: string): RoomPosition[] {
     return inHeap(`opRoads:${homeRoom}`, 100, () => {
         const positions: { [xy: number]: RoomPosition } = {};
         for (const source of remoteSources(homeRoom)) {
-            for (const pos of unpackPath(source.path)) {
+            for (const pos of remotePath(source)) {
                 if (pos.roomName === homeRoom) positions[pos.y * 50 + pos.x] = pos;
             }
         }
@@ -412,8 +443,8 @@ export const remoteMiningModule = () => {
     if (Game.time - mem.lastSelect < SELECT_INTERVAL) return;
     mem.lastSelect = Game.time;
     selectRemotes();
-    // Forget paths of sources no longer around
+    // Forget paths of sources no longer around (selected ones are refreshed within PATH_TTL)
     for (const key in mem.paths) {
-        if (Game.time - mem.paths[key].generated > 2 * PATH_TTL) delete mem.paths[key];
+        if (!mem.sources[key] && Game.time - mem.paths[key].generated > 2 * PATH_TTL) delete mem.paths[key];
     }
 };
