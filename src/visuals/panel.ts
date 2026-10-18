@@ -1,7 +1,8 @@
 /**
- * Economy panel (top left) and room info lines below it: RCL with ETA, energy, income, CPU, creeps,
- * spawning, remotes, construction, then enemies, safe mode, towers, plan, expansion and attack.
- * Rates come from heap samples taken every SAMPLE_INTERVAL ticks over a WINDOW-tick sliding window.
+ * Room panel (top left): a two-column table with thin bars - controller progress and ETA, energy,
+ * storage, income, CPU, bucket; creeps, spawning, construction; defense, remotes, expansion, attack.
+ * Bars turn orange then red only when something needs attention; empty rows are left out.
+ * Rates come from heap samples taken every SAMPLE_INTERVAL ticks over a 1000-tick sliding window.
  */
 
 import { hasEnemies } from "../core/roomState";
@@ -13,12 +14,39 @@ const SAMPLE_INTERVAL = 100;
 const MAX_SAMPLES = 11;
 const STRENGTH_NAMES = ["NONE", "WEAK", "NORMAL", "STRONG", "DEADLY"];
 
-const FONT = 0.6;
-const LINE_HEIGHT = 0.8;
-const PANEL_WIDTH = 15;
-const TEXT_COLOR = "#e8e8e8";
-const TITLE_COLOR = "#ffe56d";
-const WARN_COLOR = "#ff6060";
+const FONT = 0.5;
+const ROW = 0.7;
+const LEFT = 0.4;
+const TOP = 0.4;
+const WIDTH = 13;
+/** x of the value column, relative to LEFT */
+const VALUE_X = 3.2;
+const BAR_WIDTH = 4;
+const BAR_HEIGHT = 0.3;
+
+const TEXT = "#d8d8d8";
+const DIM = "#8a8a8a";
+const TITLE = "#ffffff";
+const OK = "#5fbf6f";
+const WARN = "#e8a23a";
+const BAD = "#e05555";
+const BAR_BACK = "#3a3a3a";
+
+/** Short role names for the creeps row */
+const ROLE_NAMES: { [role: string]: string } = {
+    harvester: "harv",
+    transporter: "tran",
+    builder: "buil",
+    upgrader: "upg",
+    remoteHarvester: "rHarv",
+    remoteHauler: "rHaul",
+    remoteBuilder: "rBuil",
+    remoteDefender: "rDef",
+    reserver: "res",
+    guardian: "guard",
+    claimer: "claim",
+    pioneer: "pion"
+};
 
 interface Sample {
     tick: number;
@@ -71,36 +99,59 @@ function rateText(value: number | undefined): string {
     return value === undefined ? "-" : value.toFixed(1);
 }
 
-type Line = [text: string, color?: string];
+/** A table row: label, optional bar (fill 0..1 and color), text after the bar */
+interface Row {
+    label: string;
+    bar?: { fill: number; color: string };
+    text: string;
+    color?: string;
+}
 
-function economyLines(room: Room): Line[] {
+/** "separator" draws a thin line between groups */
+type Entry = Row | "separator";
+
+/** Green below `warn`, orange below `bad`, red above (or the reverse with `lowIsBad`) */
+function level(value: number, warn: number, bad: number, lowIsBad = false): string {
+    if (lowIsBad) return value < bad ? BAD : value < warn ? WARN : OK;
+    return value > bad ? BAD : value > warn ? WARN : OK;
+}
+
+function economyRows(room: Room): Entry[] {
     const controller = room.controller!;
-    const lines: Line[] = [];
+    const rows: Entry[] = [];
 
-    // RCL, progress and ETA of the next level
     const progressRate = sampleProgress(controller);
-    if (controller.level >= 8) {
-        lines.push([`${room.name}  RCL 8`, TITLE_COLOR]);
-    } else {
-        const percent = ((100 * controller.progress) / controller.progressTotal).toFixed(1);
+    if (controller.level < 8) {
+        const fill = controller.progress / controller.progressTotal;
         const remaining = controller.progressTotal - controller.progress;
-        const eta = progressRate && progressRate > 0 ? `ETA ${short(remaining / progressRate)} t` : "ETA -";
-        lines.push([`${room.name}  RCL ${controller.level}  ${percent}%  ${eta}`, TITLE_COLOR]);
+        const eta = progressRate && progressRate > 0 ? `  ~${short(remaining / progressRate)} t` : "";
+        rows.push({ label: "Controller", bar: { fill, color: OK }, text: `${Math.floor(100 * fill)}%${eta}` });
     }
-
-    const storage = room.storage ? `  storage ${short(room.storage.store.getUsedCapacity(RESOURCE_ENERGY))}` : "";
-    lines.push([`Energy ${room.energyAvailable}/${room.energyCapacityAvailable}${storage}`]);
-
+    const energyFill = room.energyAvailable / Math.max(1, room.energyCapacityAvailable);
+    rows.push({
+        label: "Energy",
+        bar: { fill: energyFill, color: level(energyFill, 0.5, 0.25, true) },
+        text: `${room.energyAvailable}/${room.energyCapacityAvailable}`
+    });
+    if (room.storage) {
+        const stored = room.storage.store.getUsedCapacity(RESOURCE_ENERGY);
+        rows.push({ label: "Storage", bar: { fill: stored / STORAGE_CAPACITY, color: OK }, text: short(stored) });
+    }
     const local = rate(incomeSamples.local);
     const remote = rate(incomeSamples.remote);
-    const total = local === undefined || remote === undefined ? undefined : local + remote;
-    lines.push([`Income ${rateText(total)}/t (local ${rateText(local)}, remote ${rateText(remote)})`]);
+    if (local !== undefined && remote !== undefined) {
+        rows.push({ label: "Income", text: `${rateText(local + remote)}/t   local ${rateText(local)} · remote ${rateText(remote)}` });
+    }
+    const cpu = Memory.stats?.cpuAvg ?? 0;
+    const cpuFill = cpu / Game.cpu.limit;
+    rows.push({ label: "CPU", bar: { fill: cpuFill, color: level(cpuFill, 0.8, 0.95) }, text: `${cpu.toFixed(1)}/${Game.cpu.limit}` });
+    const bucketFill = Game.cpu.bucket / 10000;
+    rows.push({ label: "Bucket", bar: { fill: bucketFill, color: level(bucketFill, 0.5, 0.2, true) }, text: `${Game.cpu.bucket}` });
+    return rows;
+}
 
-    const stats = Memory.stats;
-    const cpu = `CPU ${(stats?.cpu ?? 0).toFixed(1)} avg ${(stats?.cpuAvg ?? 0).toFixed(1)} / ${Game.cpu.limit}`;
-    lines.push([`${cpu}  bucket ${Game.cpu.bucket}`, Game.cpu.bucket < 5000 ? WARN_COLOR : undefined]);
-
-    // Creeps of the room by role, three roles per line
+function creepRows(room: Room): Entry[] {
+    const rows: Entry[] = [];
     const roles: { [role: string]: number } = {};
     let creeps = 0;
     for (const name in Game.creeps) {
@@ -112,76 +163,92 @@ function economyLines(room: Room): Line[] {
     }
     const entries = Object.keys(roles)
         .sort()
-        .map(role => `${role} ${roles[role]}`);
-    lines.push([`Creeps ${creeps}`]);
-    for (let i = 0; i < entries.length; i += 3) lines.push([`  ${entries.slice(i, i + 3).join(", ")}`]);
+        .map(role => `${ROLE_NAMES[role] ?? role} ${roles[role]}`);
+    for (let i = 0; i < Math.max(1, entries.length); i += 4) {
+        rows.push({ label: i === 0 ? `Creeps ${creeps}` : "", text: entries.slice(i, i + 4).join(" · "), color: DIM });
+    }
 
-    // Spawning, then the role waiting for energy
+    const spawning: string[] = [];
     for (const spawn of room.find(FIND_MY_SPAWNS)) {
         if (!spawn.spawning) continue;
         const role = Memory.creeps[spawn.spawning.name]?.role ?? spawn.spawning.name;
-        lines.push([`Spawning ${role} (${spawn.spawning.remainingTime} t)`]);
+        spawning.push(`▶ ${ROLE_NAMES[role] ?? role} ${spawn.spawning.remainingTime}t`);
     }
     const next = spawnManager.nextRole(room.name);
-    if (next) lines.push([`Next ${next}`]);
-
-    const remotes = Object.values(Memory.remoteMining?.sources ?? {}).filter(s => s.homeRoom === room.name);
-    if (remotes.length > 0) {
-        lines.push([`Remotes ${remotes.length} sources in ${new Set(remotes.map(s => s.room)).size} rooms`]);
-    }
+    if (next) spawning.push(`next ${ROLE_NAMES[next] ?? next}`);
+    if (spawning.length > 0) rows.push({ label: "Spawn", text: spawning.join(" · ") });
 
     const sites = room.find(FIND_MY_CONSTRUCTION_SITES);
     if (sites.length > 0) {
         const done = sites.reduce((sum, s) => sum + s.progress, 0);
         const needed = sites.reduce((sum, s) => sum + s.progressTotal, 0);
-        lines.push([`Sites ${sites.length} (${Math.floor((100 * done) / needed)}%)`]);
+        rows.push({ label: "Sites", bar: { fill: done / needed, color: OK }, text: `${sites.length} · ${Math.floor((100 * done) / needed)}%` });
     }
-    return lines;
+    return rows;
 }
 
-function infoLines(room: Room): Line[] {
-    const lines: Line[] = [];
+function infoRows(room: Room): Entry[] {
+    const rows: Entry[] = [];
     const strength = hasEnemies(room) ? enemyStrength(room) : 0;
-    lines.push([`Enemies ${STRENGTH_NAMES[strength]}`, strength > 0 ? WARN_COLOR : undefined]);
-
-    const safeMode = room.controller?.safeMode;
-    if (safeMode) lines.push([`Safe mode ${safeMode} t`, WARN_COLOR]);
-
     const towers = room.find(FIND_MY_STRUCTURES, {
         filter: s => s.structureType === STRUCTURE_TOWER
     }) as StructureTower[];
-    if (towers.length > 0) {
-        const energy = towers.reduce((sum, t) => sum + t.store.getUsedCapacity(RESOURCE_ENERGY), 0);
-        lines.push([`Towers ${towers.length}: ${energy}/${towers.length * TOWER_CAPACITY}`]);
-    }
+    const towerEnergy = towers.reduce((sum, t) => sum + t.store.getUsedCapacity(RESOURCE_ENERGY), 0);
+    const towerText =
+        towers.length > 0 ? `   towers ${towers.length} · ${Math.floor((100 * towerEnergy) / (towers.length * TOWER_CAPACITY))}%` : "";
+    rows.push({
+        label: "Defense",
+        text: `● ${STRENGTH_NAMES[strength]}${towerText}`,
+        color: strength >= 2 ? BAD : strength === 1 ? WARN : OK
+    });
+    const safeMode = room.controller?.safeMode;
+    if (safeMode) rows.push({ label: "Safe mode", text: `${short(safeMode)} t`, color: WARN });
 
+    const remotes = Object.values(Memory.remoteMining?.sources ?? {}).filter(s => s.homeRoom === room.name);
+    if (remotes.length > 0) {
+        rows.push({ label: "Remotes", text: `${remotes.length} sources · ${new Set(remotes.map(s => s.room)).size} rooms` });
+    }
     const plan = room.memory.plan;
-    if (plan) lines.push([`Plan ${plan.k ?? "?"}  score ${plan.s?.toFixed(2) ?? "-"}${plan.done ? "" : " (searching)"}`]);
+    if (plan && !plan.done) rows.push({ label: "Plan", text: `searching (${plan.k ?? "?"})`, color: DIM });
 
     const expansion = Memory.expand?.current;
     if (expansion?.spawnRoom === room.name) {
-        lines.push([`Expanding ${expansion.roomName}${expansion.claimed ? " (claimed)" : ""}`, TITLE_COLOR]);
+        rows.push({ label: "Expansion", text: `${expansion.roomName}${expansion.claimed ? " · claimed" : ""}` });
     }
     const attack = Memory.military?.attack;
-    if (attack) lines.push([`Attacking ${attack}`, WARN_COLOR]);
-    return lines;
+    if (attack) rows.push({ label: "Attack", text: attack, color: BAD });
+    return rows;
 }
 
 /** Draws the panel of an owned room */
 export function drawPanel(visual: RoomVisual, room: Room): void {
-    const lines = [...economyLines(room), ["", undefined] as Line, ...infoLines(room)];
-    visual.rect(0.2, 0.2, PANEL_WIDTH, lines.length * LINE_HEIGHT + 0.4, {
-        fill: "#000000",
-        opacity: 0.55,
-        stroke: "#555555",
-        strokeWidth: 0.05
-    });
-    lines.forEach(([text, color], i) => {
-        if (!text) return;
-        visual.text(text, 0.6, 0.2 + (i + 1) * LINE_HEIGHT, {
-            align: "left",
-            font: FONT,
-            color: color ?? TEXT_COLOR
-        });
-    });
+    const controller = room.controller!;
+    const entries: Entry[] = [...economyRows(room), "separator", ...creepRows(room), "separator", ...infoRows(room)];
+    const height = 1.1 + entries.reduce((h, e) => h + (e === "separator" ? 0.3 : ROW), 0);
+
+    visual.rect(LEFT, TOP, WIDTH, height, { fill: "#101010", opacity: 0.7, stroke: "#444444", strokeWidth: 0.04 });
+    const rcl = controller.level < 8 ? `RCL ${controller.level} → ${controller.level + 1}` : "RCL 8";
+    visual.text(room.name, LEFT + 0.3, TOP + 0.7, { align: "left", font: `bold ${FONT + 0.1}`, color: TITLE });
+    visual.text(rcl, LEFT + WIDTH - 0.3, TOP + 0.7, { align: "right", font: FONT, color: DIM });
+
+    let y = TOP + 1.1;
+    for (const entry of entries) {
+        if (entry === "separator") {
+            visual.line(LEFT + 0.2, y + 0.1, LEFT + WIDTH - 0.2, y + 0.1, { color: "#444444", width: 0.03 });
+            y += 0.3;
+            continue;
+        }
+        const baseline = y + ROW * 0.65;
+        visual.text(entry.label, LEFT + 0.3, baseline, { align: "left", font: FONT, color: DIM });
+        let x = LEFT + VALUE_X;
+        if (entry.bar) {
+            const fill = Math.max(0, Math.min(1, entry.bar.fill));
+            const top = baseline - 0.3;
+            visual.rect(x, top, BAR_WIDTH, BAR_HEIGHT, { fill: BAR_BACK, opacity: 0.9 });
+            if (fill > 0) visual.rect(x, top, BAR_WIDTH * fill, BAR_HEIGHT, { fill: entry.bar.color, opacity: 0.9 });
+            x += BAR_WIDTH + 0.3;
+        }
+        visual.text(entry.text, x, baseline, { align: "left", font: FONT, color: entry.color ?? TEXT });
+        y += ROW;
+    }
 }
