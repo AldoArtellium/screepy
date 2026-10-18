@@ -55,7 +55,8 @@ export const gameLoop = () => {
     // Plan overlay and economy panel on owned rooms (every tick: visuals last one tick; Memory.visuals = false)
     // Share of the source energy harvested (read on each source's last regeneration tick)
     { name: "MiningStats", fn: miningStatsModule },
-    { name: "RoomVisuals", fn: roomVisualsModule, priority: "low" },
+    // Every tick (a skipped tick blanks the visuals); the module throttles its own redraws
+    { name: "RoomVisuals", fn: roomVisualsModule, priority: "always" },
 
     // Resolves all movement requests issued above (must run after every creep-moving module)
     { name: "TrafficManager", fn: trafficManagerModule, mandatory: true }

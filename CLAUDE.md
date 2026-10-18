@@ -118,7 +118,7 @@ The ModuleManager runs modules in order with a CPU budget (80% of the limit): `m
 | ScoutManager (10), MarketManager (20, disabled until the terminal milestone) | | Kept from the previous design (scout: from RCL 1, priority 4 before the storage; range 3 rooms, 5 from RCL 4; rescouts rooms never seen, older than 50000 ticks, or with a controller seen more than 10000 ticks ago) |
 | MemoryCleanup | every tick (work every 100 / 1000) | Drops the memory of dead creeps, and of rooms not owned, not mined, not targeted and without a living hostile |
 | MiningStats | every tick | Share of the source energy harvested: each source's energy left on its last regeneration tick is lost, a full untouched source loses its capacity (our rooms' sources and selected remotes, while visible; last 5 cycles in heap, counters `mining:{available,wasted}:{local,remote}`). Mockup 20000 ticks: W7N3 local 96% / remote 84%, W1N3 94 / 77, W9N5 80 / 76; ~0.01 CPU |
-| RoomVisuals | every tick (priority low) | Plan overlay and economy panel on owned rooms (`src/visuals/`) |
+| RoomVisuals | every tick (priority always, redraws throttled inside) | Plan overlay and economy panel on owned rooms (`src/visuals/`) |
 | TrafficManager | mandatory, last | Resolves every move (cartographer `reconcileTraffic`) |
 
 ### Economy core
@@ -185,7 +185,7 @@ Counters in `Memory.stats.counters`: `spawned:<role>`, `work:{harvest,build,repa
 ### Visuals (`src/visuals/`)
 
 - Every owned room: the planned structures not built yet (opacity 0.2, a shape and color per structure type) and the outline of the planner's `safe` area (`planVisual.ts`, redrawn every 100 ticks or when the plan changes); a minimalist two-column table top left (`panel.ts`, every 5 ticks; thin bars green, orange then red only when something needs attention, empty rows left out): controller % and ETA (progress rate over 1000 ticks, heap), energy, storage, empire income from the `work:harvest` / `work:remoteHarvest` counters, CPU and bucket, mining efficiency (`MiningStats`, also a % above each source of the room and per remote room); creeps by role (short names), spawning and the role waiting for energy (`spawnManager.nextRole`), construction sites; defense (enemy strength, towers energy), safe mode, remotes, plan while searching, expansion, attack.
-- Each layer is cached as a `RoomVisual` export in the heap and imported on the other ticks. `Memory.visuals = false` turns it off. Priority `low`: skipped as the bucket drops below 9500, so the visuals flicker or vanish then.
+- Each layer is cached as a `RoomVisual` export in the heap and imported on the other ticks. `Memory.visuals = false` turns it off. Priority `always` (a module skipped for a tick blanks the visuals: with `low`, the throttle skipped it every other tick as soon as the tick had used half the CPU limit, even with a full bucket); the layers are only redrawn above 5000 bucket (cached ones still imported) and nothing is drawn below 2000.
 - Cost (mockup, W7N3, 3000 ticks): ~0.06 CPU/tick, ~300 elements (34 KB) per room; the module logs both every 1000 ticks.
 
 ### Traffic (`src/modules/TrafficManager.ts`)
