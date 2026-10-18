@@ -3,6 +3,8 @@
  * PLAN_INTERVAL ticks or when the plan changes) and the economy / room info panel (every
  * PANEL_INTERVAL ticks). Both are cached in the heap as RoomVisual exports and imported on the
  * other ticks, so a tick costs one import per layer. `Memory.visuals = false` turns it off.
+ * Runs every tick (visuals last one tick): only the redraws wait while the bucket is low, the cached
+ * layers are still imported; below STOP_BUCKET nothing is drawn.
  */
 
 import { roomPlanner } from "../planner/RoomPlanner";
@@ -21,6 +23,9 @@ declare global {
 const PLAN_INTERVAL = 100;
 const PANEL_INTERVAL = 5;
 const LOG_INTERVAL = 1000;
+/** Below this bucket the layers are no longer redrawn (kept as they are) */
+const REDRAW_BUCKET = 5000;
+const STOP_BUCKET = 2000;
 
 interface Layer {
     tick: number;
@@ -61,15 +66,16 @@ function drawRoom(room: Room): void {
         cache.set(room.name, state);
     }
 
+    const redraw = Game.cpu.bucket >= REDRAW_BUCKET;
     const plan = roomPlanner.getPlan(room.name);
-    if (!state.plan || state.plan.source !== plan || Game.time - state.plan.tick >= PLAN_INTERVAL) {
+    if (!state.plan || (redraw && (state.plan.source !== plan || Game.time - state.plan.tick >= PLAN_INTERVAL))) {
         const data = plan ? capture(room.name, visual => drawPlan(visual, room, plan)) : "";
         state.plan = { tick: Game.time, data, source: plan };
     } else if (state.plan.data) {
         room.visual.import(state.plan.data);
     }
 
-    if (!state.panel || Game.time - state.panel.tick >= PANEL_INTERVAL) {
+    if (!state.panel || (redraw && Game.time - state.panel.tick >= PANEL_INTERVAL)) {
         state.panel = { tick: Game.time, data: capture(room.name, visual => drawPanel(visual, room)) };
     } else {
         room.visual.import(state.panel.data);
@@ -86,7 +92,7 @@ function drawRoom(room: Room): void {
 }
 
 export const roomVisualsModule = (): void => {
-    if (Memory.visuals === false) return;
+    if (Memory.visuals === false || Game.cpu.bucket < STOP_BUCKET) return;
     const start = Game.cpu.getUsed();
     sampleIncome();
     for (const name in Game.rooms) {
