@@ -14,7 +14,9 @@ import { roomPlanner } from "../planner/RoomPlanner";
 import { log } from "../utils/logger";
 import { decodePath, encodePath } from "../utils/pathCodec";
 import { roomsInRange } from "../utils/rooms";
+import { segmentStore } from "../utils/segments";
 import { countStat } from "../utils/stats";
+import { jitter, jitterFor } from "../utils/jitter";
 
 export interface RemoteSource {
     /** `${room}:${x}:${y}` */
@@ -45,8 +47,8 @@ declare global {
         remoteMining?: {
             /** Selected sources, by key */
             sources: { [key: string]: RemoteSource };
-            /** Paths of the candidate sources, by source key (the only copy of a selected source's path) */
-            paths: { [key: string]: PathCache };
+            /** Legacy: the paths live in segment 5 now (`paths` store below), migrated then deleted */
+            paths?: { [key: string]: PathCache };
             pathsVersion?: number;
             lastSelect: number;
             /** CPU budget: slow average of the tick CPU, remote rooms allowed empire-wide (none = no cap yet) */
@@ -68,8 +70,29 @@ const PATH_TTL = 5000;
 /** A failed path (no plan yet, blocked) is retried sooner than a found one */
 const FAILED_PATH_TTL = 500;
 
+/**
+ * Paths of the candidate sources, by source key (the only copy of a selected source's path), in
+ * RawMemory segment 5 (utils/segments.ts, heap copy). A global reset loses at most 20 ticks of new
+ * paths (recomputed).
+ */
+const pathStore = segmentStore<{ [key: string]: PathCache }>("remotePaths", [5], 20, {
+    read: () => {
+        const mem = Memory.remoteMining;
+        if (!mem?.paths) return undefined;
+        if (mem.pathsVersion !== PATHS_VERSION) migratePaths(mem);
+        return mem.paths;
+    },
+    clear: () => {
+        if (Memory.remoteMining) delete Memory.remoteMining.paths;
+    }
+});
+
+function paths(): { [key: string]: PathCache } {
+    return pathStore.get();
+}
+
 function memory(): NonNullable<Memory["remoteMining"]> {
-    Memory.remoteMining ??= { sources: {}, paths: {}, lastSelect: 0, pathsVersion: PATHS_VERSION };
+    Memory.remoteMining ??= { sources: {}, lastSelect: 0, pathsVersion: PATHS_VERSION };
     const mem = Memory.remoteMining;
     if (mem.pathsVersion !== PATHS_VERSION) migratePaths(mem);
     return mem;
@@ -77,20 +100,21 @@ function memory(): NonNullable<Memory["remoteMining"]> {
 
 /** Version 1 ("W7N3,12,34;..." in paths and again in sources[k].path): repack, drop the duplicates */
 function migratePaths(mem: NonNullable<Memory["remoteMining"]>): void {
-    for (const key in mem.paths) {
-        const old = mem.paths[key].path;
+    const legacy = mem.paths ?? {};
+    for (const key in legacy) {
+        const old = legacy[key].path;
         if (!old) continue;
         const positions = old.split(";").map(part => {
             const [roomName, x, y] = part.split(",");
             return { x: Number(x), y: Number(y), roomName };
         });
-        mem.paths[key].path = encodePath(positions);
+        legacy[key].path = encodePath(positions);
     }
     for (const key in mem.sources) {
         const source = mem.sources[key] as RemoteSource & { path?: string };
         delete source.path;
         // A selected source always has its path
-        if (!mem.paths[key]?.path) delete mem.sources[key];
+        if (!legacy[key]?.path) delete mem.sources[key];
     }
     mem.pathsVersion = PATHS_VERSION;
 }
@@ -129,7 +153,7 @@ function unpackPath(packed: string): RoomPosition[] {
 }
 
 function packedPath(source: RemoteSource): string {
-    return memory().paths[source.key]?.path ?? "";
+    return paths()[source.key]?.path ?? "";
 }
 
 /** Path of a selected source to the planned storage (index 0 = container tile); shared, don't modify it */
@@ -138,10 +162,10 @@ export function remotePath(source: RemoteSource): RoomPosition[] {
 }
 
 /** Rooms owned by someone else (or an active invader core) are never crossed */
-const matrixCache: Map<string, { tick: number; matrix: CostMatrix | false }> = new Map();
+const matrixCache: Map<string, { until: number; matrix: CostMatrix | false }> = new Map();
 function remoteCostMatrix(roomName: string): CostMatrix | false {
     const cached = matrixCache.get(roomName);
-    if (cached && Game.time - cached.tick < 1000) return cached.matrix;
+    if (cached && cached.until > Game.time) return cached.matrix;
     const intel = intelManager.getIntel(roomName);
     let matrix: CostMatrix | false = new PathFinder.CostMatrix();
     if (intel?.owner && intel.owner !== Memory.username) matrix = false;
@@ -161,17 +185,17 @@ function remoteCostMatrix(roomName: string): CostMatrix | false {
             }
         }
     }
-    matrixCache.set(roomName, { tick: Game.time, matrix });
+    matrixCache.set(roomName, { until: Game.time + jitter(1000), matrix });
     return matrix;
 }
 
 /** Path from a remote source to its home's planned storage, cached (Hivemind getPathFor) */
 function pathFor(home: Room, sourcePos: RoomPosition): RoomPosition[] | null {
     const key = sourceKey(sourcePos.roomName, sourcePos.x, sourcePos.y);
-    const cache = memory().paths[key];
+    const cache = paths()[key];
     if (cache) {
         const ttl = cache.path ? PATH_TTL : FAILED_PATH_TTL;
-        if (Game.time - cache.generated < ttl) return cache.path ? unpackPath(cache.path) : null;
+        if (Game.time - cache.generated < jitterFor(key, ttl)) return cache.path ? unpackPath(cache.path) : null;
     }
     const storagePos = roomPlanner.getPlan(home.name)?.getLocations("storage")[0];
     // No plan yet: don't cache the failure (Hivemind cached null for 5000 ticks)
@@ -184,7 +208,8 @@ function pathFor(home: Room, sourcePos: RoomPosition): RoomPosition[] | null {
         roomCallback: remoteCostMatrix
     });
     const path = result.incomplete || result.path.length >= MAX_PATH_LENGTH ? null : result.path;
-    memory().paths[key] = { generated: Game.time, path: path ? encodePath(path) : null };
+    paths()[key] = { generated: Game.time, path: path ? encodePath(path) : null };
+    pathStore.touch();
     return path;
 }
 
@@ -369,12 +394,12 @@ export function remoteEnemyData(source: RemoteSource): EnemyData {
 
 // ------------------------------------------------------------------ maintenance (builders)
 
-const heapCache: Map<string, { tick: number; value: unknown }> = new Map();
+const heapCache: Map<string, { until: number; value: unknown }> = new Map();
 function inHeap<T>(key: string, ttl: number, compute: () => T): T {
     const cached = heapCache.get(key);
-    if (cached && Game.time - cached.tick < ttl) return cached.value as T;
+    if (cached && cached.until > Game.time) return cached.value as T;
     const value = compute();
-    heapCache.set(key, { tick: Game.time, value });
+    heapCache.set(key, { until: Game.time + jitter(ttl), value });
     return value;
 }
 
@@ -440,12 +465,17 @@ export function sourceEnergyCapacity(home: Room, source: RemoteSource): number {
 }
 
 export const remoteMiningModule = () => {
+    // Paths not loaded yet (first tick after requesting the segment): don't recompute them all
+    if (!pathStore.ready) return;
     const mem = memory();
     if (Game.time - mem.lastSelect < SELECT_INTERVAL) return;
     mem.lastSelect = Game.time;
     selectRemotes();
     // Forget paths of sources no longer around (selected ones are refreshed within PATH_TTL)
-    for (const key in mem.paths) {
-        if (!mem.sources[key] && Game.time - mem.paths[key].generated > 2 * PATH_TTL) delete mem.paths[key];
+    const all = paths();
+    for (const key in all) {
+        if (mem.sources[key] || Game.time - all[key].generated <= 2 * PATH_TTL) continue;
+        delete all[key];
+        pathStore.touch();
     }
 };

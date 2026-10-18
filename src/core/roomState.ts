@@ -6,6 +6,7 @@
  */
 
 import { roomPlanner } from "../planner/RoomPlanner";
+import { jitter } from "../utils/jitter";
 
 /** A creep's current resource / work order, kept in memory */
 export interface Order {
@@ -129,6 +130,8 @@ export function setOrder(creep: Creep, order: Order | null | undefined): void {
     refresh();
     unindexOrder(creep, creep.memory.order);
     if (order) {
+        // Weights like 1.0233333333333334 cost ~15 chars of Memory per creep: 3 decimals are plenty
+        if (order.weight % 1) order.weight = Math.round(order.weight * 1000) / 1000;
         creep.memory.order = order;
         indexOrder(creep, order);
     } else {
@@ -207,7 +210,7 @@ export function controllerRefillPathLength(room: Room): number {
     if (cached && cached.key === key && cached.until > Game.time) return cached.length;
     const result = PathFinder.search(from, { pos: container.pos, range: 1 }, { maxRooms: 1 });
     const length = result.incomplete ? 1 : result.path.length;
-    refillPaths.set(room.name, { until: Game.time + 5000, key, length });
+    refillPaths.set(room.name, { until: Game.time + jitter(5000), key, length });
     return length;
 }
 

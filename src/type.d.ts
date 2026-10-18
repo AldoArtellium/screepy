@@ -19,6 +19,10 @@ declare global {
         cpuAvg: number;
         cpuMax: number;
         bucket: number;
+        /** Heap (Game.cpu.getHeapStatistics, every 10 ticks): used + external bytes, limit, used / limit */
+        heap?: { used: number; limit: number; ratio: number };
+        /** CPU of the last Memory parse (once per global reset, MemHack) */
+        memoryParse?: number;
         counters: { [name: string]: number };
         samples?: { [name: string]: string[] };
         rooms: {

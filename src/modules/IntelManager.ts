@@ -1,11 +1,13 @@
 /**
- * IntelManager - static intel of every room we have seen (`Memory.intel`): sources, controller,
- * mineral, owner/reserver, source keepers. Hostiles and invader cores live in RoomIntel
+ * IntelManager - static intel of every room we have seen: sources, controller, mineral,
+ * owner/reserver, source keepers. Kept in RawMemory segments 1-2 (utils/segments.ts, heap copy;
+ * was `Memory.intel`, migrated on load). Hostiles and invader cores live in RoomIntel
  * (`Memory.rooms[r].enemies`, refreshed every tick), never here.
  */
 
 import { log } from "../utils/logger";
 import { roomsInRange } from "../utils/rooms";
+import { segmentStore } from "../utils/segments";
 
 /** How long intel remains valid (ticks) */
 const INTEL_EXPIRY = {
@@ -60,9 +62,22 @@ export interface RoomIntel {
     mineralType?: MineralConstant;
 }
 
+type IntelData = { [roomName: string]: RoomIntel };
+
+/** Written at most every 100 ticks: a global reset loses at most that much of refreshed intel */
+const store = segmentStore<IntelData>("intel", [1, 2], 100, {
+    read: () => Memory.intel,
+    clear: () => delete Memory.intel
+});
+
 class IntelManager {
     getIntel(roomName: string): RoomIntel | undefined {
-        return Memory.intel?.[roomName];
+        return store.get()[roomName];
+    }
+
+    /** Every room with intel (read only) */
+    allIntel(): Readonly<IntelData> {
+        return store.get();
     }
 
     /** Number of sources (0 for an unknown room or an entry older than the source list) */
@@ -72,8 +87,8 @@ class IntelManager {
 
     /** Record intel for a visible room (owned rooms too: their owner and mineral count) */
     recordRoomIntel(room: Room): void {
-        if (!Memory.intel) Memory.intel = {};
-        const previous = Memory.intel[room.name];
+        const intel = store.get();
+        const previous = intel[room.name];
         if (previous?.sources && Game.time - previous.lastScouted < INTEL_REFRESH) return;
 
         const sources = room.find(FIND_SOURCES);
@@ -85,7 +100,8 @@ class IntelManager {
                 .length > 0
         );
 
-        Memory.intel[room.name] = {
+        store.touch();
+        intel[room.name] = {
             lastScouted: Game.time,
             sources: sources.map(s => ({ id: s.id, x: s.pos.x, y: s.pos.y, free: freeTilesAround(terrain, s.pos) })),
             controllerPos: controller ? { x: controller.pos.x, y: controller.pos.y } : undefined,
@@ -100,17 +116,18 @@ class IntelManager {
 
     /** Drop intel not refreshed for a long time, and fields of older versions */
     cleanupIntel(): void {
-        if (!Memory.intel) return;
+        const all = store.get();
         let cleaned = 0;
-        for (const roomName in Memory.intel) {
-            const intel = Memory.intel[roomName] as RoomIntel & Record<string, unknown>;
+        for (const roomName in all) {
+            const intel = all[roomName] as RoomIntel & Record<string, unknown>;
             if (Game.time - intel.lastScouted > INTEL_EXPIRY.STRUCTURE * 2) {
-                delete Memory.intel[roomName];
+                delete all[roomName];
                 cleaned++;
                 continue;
             }
             for (const field of LEGACY_FIELDS) delete intel[field];
         }
+        store.touch();
         if (cleaned > 0) log.debug("IntelManager", `Cleaned up ${cleaned} stale intel entries`);
     }
 
@@ -130,12 +147,14 @@ class IntelManager {
 
 declare global {
     interface Memory {
+        /** Legacy: intel now lives in segments, this copy is migrated then deleted */
         intel?: { [roomName: string]: RoomIntel };
         username?: string;
     }
 }
 
 const intelManagerInstance = new IntelManager();
+let lastIntelCleanup = 0;
 
 export const intelManagerModule = () => {
     // Store our username for reservation checks
@@ -144,7 +163,11 @@ export const intelManagerModule = () => {
         if (spawn) Memory.username = spawn.owner.username;
     }
 
-    if (Game.time % 1000 === 0) intelManagerInstance.cleanupIntel();
+    // Elapsed time, not Game.time % 1000: the module is bucket-throttled and could miss the multiple
+    if (Game.time - lastIntelCleanup >= 1000) {
+        lastIntelCleanup = Game.time;
+        intelManagerInstance.cleanupIntel();
+    }
 
     for (const roomName in Game.rooms) intelManagerInstance.recordRoomIntel(Game.rooms[roomName]);
 };

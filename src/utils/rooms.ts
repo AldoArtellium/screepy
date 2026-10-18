@@ -2,6 +2,8 @@
  * Room name helpers: world coordinates, rooms in range, highways, room status (heap cache).
  */
 
+import { jitter } from "./jitter";
+
 /** World coordinates of a room (W0 = -1, E0 = 0; N0 = -1, S0 = 0), null for an invalid name */
 export function parseRoomName(roomName: string): { wx: number; wy: number } | null {
     const match = /^([WE])(\d+)([NS])(\d+)$/.exec(roomName);
@@ -23,18 +25,18 @@ export function isHighway(roomName: string): boolean {
 }
 
 /** Room status (normal / novice / respawn / closed), heap cache: novice and respawn areas are walled off */
-const statusCache: Map<string, { tick: number; status: string }> = new Map();
+const statusCache: Map<string, { until: number; status: string }> = new Map();
 
 export function roomStatus(roomName: string): string {
     const cached = statusCache.get(roomName);
-    if (cached && Game.time - cached.tick < 1000) return cached.status;
+    if (cached && cached.until > Game.time) return cached.status;
     let status = "normal";
     try {
         status = Game.map.getRoomStatus(roomName)?.status ?? "normal";
     } catch {
         // unknown room: keep "normal"
     }
-    statusCache.set(roomName, { tick: Game.time, status });
+    statusCache.set(roomName, { until: Game.time + jitter(1000), status });
     return status;
 }
 

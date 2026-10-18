@@ -31,6 +31,7 @@ import { militarySpawnRole } from "../military/military";
 import { remoteSpawnRole } from "../remote/remoteSpawnRole";
 import { ENEMY_STRENGTH_NORMAL, enemyStrength } from "../defense/RoomDefense";
 import { GUARDIAN } from "../roles/guardian";
+import { jitter } from "../utils/jitter";
 
 export interface SpawnOption extends Option {
     role: string;
@@ -215,7 +216,7 @@ function haulPaths(room: Room): { roundTrip: number; swampShare: number } {
                 swamps += result.path.filter(p => terrain.get(p.x, p.y) === TERRAIN_MASK_SWAMP).length;
             }
         }
-        cached = { until: Game.time + CREEP_LIFE_TIME, roundTrip, swampShare: tiles ? swamps / tiles : 0 };
+        cached = { until: Game.time + jitter(CREEP_LIFE_TIME), roundTrip, swampShare: tiles ? swamps / tiles : 0 };
         haulTrips.set(room.name, cached);
     }
     return cached;
