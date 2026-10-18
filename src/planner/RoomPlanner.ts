@@ -4,8 +4,9 @@
  * Ported from Hivemind (MIT), src/room/planner/room-planner.ts, variation-generator.ts,
  * variation-builder.ts and variation-builder-base.ts.
  *
- * Steps follow Hivemind's variation builder (helper parking, labs, bays, high level structures,
- * ramparts on the min cut, safe area, towers, roads to the ramparts, on-ramps). Skipped: quad
+ * Steps follow Hivemind's variation builder (bays, helper parking, labs, high level structures,
+ * ramparts on the min cut, safe area, towers, roads to the ramparts, on-ramps; Hivemind places the
+ * parking and the labs before the bays). Skipped: quad
  * breaker, decorative walls. No exit direction is considered safe (Hivemind: exits towards rooms
  * enemies can't reach). Plans of PLAN_VERSION 3 (before labs and high level structures) are
  * extended in place inside their safe area (extendRoomPlan) instead of replanned: nothing built moves.
@@ -120,12 +121,13 @@ class PlanBuilder {
         this.placeRoadNetwork();
         this.placeRoomCore();
         this.placeHarvestBayStructures();
+        this.placeBays();
+        // Not in Hivemind (labs and helper parking before the bays): extensions stay closest to the center
         if (!this.input.legacy) {
             this.placeHelperParkingLot();
             this.placeLabs();
+            this.placeHighLevelStructures();
         }
-        this.placeBays();
-        if (!this.input.legacy) this.placeHighLevelStructures();
         this.placeRamparts();
         this.sealRoom();
         this.placeTowers();
