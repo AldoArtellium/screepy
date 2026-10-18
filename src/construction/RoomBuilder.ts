@@ -6,16 +6,23 @@
  * RCL 1: spawns. RCL 2+: extensions bay by bay, source and controller containers, roads on swamps
  * towards sources and controller. RCL 3: extensions around sources, towers, ramparts. RCL 4: storage, then every
  * planned road once the storage is built, and the roads of the remote mining paths in the room.
+ * RCL 6+: terminal, extractor and mineral container; once the ramparts hold, labs, nuker, power spawn,
+ * observer and factory (Hivemind buildEndgameStructures, see docs/hivemind/hivemind-endgame.md).
  */
 
 import { RoomPlan } from "../planner/RoomPlan";
 import { roomPlanner } from "../planner/RoomPlanner";
 import { operationRoadPositions } from "../remote/RemoteMining";
+import { lowestWallStrength, MAX_WALL_HEALTH } from "../defense/RoomDefense";
 
 /** Construction sites per room, existing ones included */
 const MAX_ROOM_SITES = 5;
 /** Leave room under the global limit (100) */
 const MAX_GLOBAL_SITES = MAX_CONSTRUCTION_SITES * 0.9;
+/** Main ramparts must hold this share of MAX_WALL_HEALTH[8], scaled to the RCL, before endgame structures
+ * (Hivemind checkWallIntegrity with minWallIntegrity 500k: 12.5k hits at RCL 5, 50k at RCL 6, 75k at RCL 7) */
+const MIN_WALL_INTEGRITY = 500000;
+
 /** Below this capacity extensions come before everything else (MAX_CREEP_SIZE * (WORK + MOVE) / 2) */
 const EXTENSIONS_FIRST_CAPACITY = (MAX_CREEP_SIZE * (BODYPART_COST[WORK] + BODYPART_COST[MOVE])) / 2;
 
@@ -96,6 +103,36 @@ function manageRamparts(ctx: RoomContext): void {
     ctx.buildPlanned("rampart", STRUCTURE_RAMPART);
 }
 
+/** Every planned main rampart holds MIN_WALL_INTEGRITY scaled to the RCL (Hivemind checkWallIntegrity) */
+function checkWallIntegrity(ctx: RoomContext): boolean {
+    if (ctx.plan.count("rampart") === 0) return true;
+    return lowestWallStrength(ctx.room) >= (MIN_WALL_INTEGRITY * MAX_WALL_HEALTH[ctx.rcl]) / MAX_WALL_HEALTH[8];
+}
+
+/** Planned structures of a type the RCL allows */
+function buildAllowed(ctx: RoomContext, locationType: string, type: BuildableStructureConstant): boolean {
+    if (CONTROLLER_STRUCTURES[type][ctx.rcl] === 0) return true;
+    return ctx.buildPlanned(locationType, type);
+}
+
+/** Labs (reaction labs first while only 3 are allowed), nuker, power spawn, observer, factory */
+function buildEndgameStructures(ctx: RoomContext): void {
+    if (CONTROLLER_STRUCTURES[STRUCTURE_LAB][ctx.rcl] === 3) {
+        buildAllowed(ctx, "lab.reaction", STRUCTURE_LAB);
+    } else {
+        buildAllowed(ctx, "lab.boost", STRUCTURE_LAB);
+        buildAllowed(ctx, "lab", STRUCTURE_LAB);
+    }
+    if (!ctx.canCreate()) return;
+    buildAllowed(ctx, "nuker", STRUCTURE_NUKER);
+    if (!ctx.canCreate()) return;
+    buildAllowed(ctx, "powerSpawn", STRUCTURE_POWER_SPAWN);
+    if (!ctx.canCreate()) return;
+    buildAllowed(ctx, "observer", STRUCTURE_OBSERVER);
+    if (!ctx.canCreate()) return;
+    buildAllowed(ctx, "factory", STRUCTURE_FACTORY);
+}
+
 function manageStructures(ctx: RoomContext): void {
     const room = ctx.room;
     const onlySpawn = _.size(Game.spawns) === 1 ? _.values<StructureSpawn>(Game.spawns)[0] : null;
@@ -118,6 +155,7 @@ function manageStructures(ctx: RoomContext): void {
     if (!ctx.canCreate()) return;
 
     ctx.buildPlanned("storage", STRUCTURE_STORAGE);
+    buildAllowed(ctx, "terminal", STRUCTURE_TERMINAL);
 
     // Swamp roads towards sources and controller while no storage can exist yet, or once it is built
     if (room.storage || CONTROLLER_STRUCTURES[STRUCTURE_STORAGE][ctx.rcl] === 0) {
@@ -125,7 +163,13 @@ function manageStructures(ctx: RoomContext): void {
         ctx.buildPlanned("road.controller", STRUCTURE_ROAD, pos => ctx.isSwamp(pos));
     }
     if (!ctx.canCreate()) return;
+
+    if (CONTROLLER_STRUCTURES[STRUCTURE_EXTRACTOR][ctx.rcl] > 0) {
+        ctx.buildPlanned("extractor", STRUCTURE_EXTRACTOR);
+        ctx.buildPlanned("container.mineral", STRUCTURE_CONTAINER);
+    }
     if (ctx.rcl < 4) return;
+    if (!ctx.canCreate()) return;
 
     if (room.storage) {
         ctx.buildPlanned("road", STRUCTURE_ROAD);
@@ -133,6 +177,10 @@ function manageStructures(ctx: RoomContext): void {
         for (const pos of operationRoadPositions(room.name)) if (!ctx.tryBuild(pos, STRUCTURE_ROAD)) break;
     }
     manageExtensions(ctx);
+
+    // Further constructions only once the ramparts hold
+    if (!ctx.canCreate() || !checkWallIntegrity(ctx)) return;
+    buildEndgameStructures(ctx);
 }
 
 /** Hostile players (not NPC invaders) in the room without safe mode: build nothing */

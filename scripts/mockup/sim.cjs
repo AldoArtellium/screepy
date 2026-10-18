@@ -77,6 +77,14 @@ const PRESET = opt("preset", null);
 const STRONGHOLD = opt("stronghold", null);
 /** CPU limit of the bot (default: the mockup's, 100), e.g. 8 to drain the bucket and test throttling */
 const CPU_LIMIT = opt("cpu-limit", null);
+/**
+ * Plan-based fast-forward (--preset rcl6, rcl8, or planN for any level 5-8): once the bot stored its room
+ * plan, the controller jumps to that level and the plan's storage (300k energy), extensions, towers,
+ * source/controller containers, roads and main ramparts (600k hits) are built for it, like the private
+ * server preset. rcl4/rcl5/rcl7 are the quick presets above (PRESETS).
+ */
+const QUICK_PRESET = PRESET && PRESETS[PRESET] ? PRESET : null;
+const PLAN_PRESET = PRESET && !QUICK_PRESET ? PRESET : null;
 const OUT = opt("out");
 const VERBOSE = flag("verbose");
 const LOG_EVERY = Number(opt("log-every", 500));
@@ -168,7 +176,7 @@ async function setupEnemy(server, fixture, spec) {
 }
 
 /** Fast-forwarded room (see PRESETS) */
-async function applyPreset(server, fixture, spot, userId) {
+async function applyQuickPreset(server, fixture, spot, userId) {
   const preset = PRESETS[PRESET];
   if (!preset) throw new Error(`Unknown preset ${PRESET} (available: ${Object.keys(PRESETS).join(", ")})`);
   const { db } = server.common.storage;
@@ -238,6 +246,70 @@ async function strongholdStatus(server, stronghold) {
   const count = (type) => objects.filter((o) => o.type === type).length;
   return { cores: count("invaderCore"), towers: count("tower"), ramparts: count("rampart"), creeps: count("creep") };
 }
+
+/** Positions of a plan type in Memory.rooms[room].plan (RoomPlan.ts packing: ((x << 6) | y) + 65) */
+function planPositions(plan, type) {
+  const packed = (plan.t && plan.t[type]) || "";
+  const out = [];
+  for (let i = 0; i < packed.length; i++) {
+    const code = packed.charCodeAt(i) - 65;
+    out.push({ x: code >> 6, y: code & 63 });
+  }
+  return out;
+}
+
+/** Applies PLAN_PRESET to the bot's room from its stored plan; false while there is no plan yet */
+async function applyPlanPreset(server, user, memory) {
+  const plan = memory.rooms && memory.rooms[ROOM] && memory.rooms[ROOM].plan;
+  if (!plan || !plan.t) return false;
+  const match = /^(?:rcl|plan)([5-8])$/.exec(PLAN_PRESET);
+  if (!match) throw new Error(`Unknown preset ${PLAN_PRESET} (quick: ${Object.keys(PRESETS).join(", ")}; plan-based: rcl6, rcl8, plan5..plan8)`);
+  const rcl = Number(match[1]);
+  const { db } = server.common.storage;
+  const time = await server.world.gameTime;
+  await db["rooms.objects"].update({ room: ROOM, type: "controller" }, { $set: { level: rcl, progress: 0, downgradeTime: time + 200000 } });
+  const taken = new Set((await db["rooms.objects"].find({ room: ROOM })).filter((o) => o.type !== "road").map((o) => o.y * 50 + o.x));
+  const insert = async (pos, doc) => {
+    if (taken.has(pos.y * 50 + pos.x)) return false;
+    taken.add(pos.y * 50 + pos.x);
+    await db["rooms.objects"].insert({ room: ROOM, x: pos.x, y: pos.y, user: user.id, ...doc });
+    return true;
+  };
+  const extEnergy = { 7: 100, 8: 200 }[rcl] || 50;
+  const counts = { extension: { 5: 30, 6: 40, 7: 50, 8: 60 }[rcl], tower: { 5: 2, 6: 3, 7: 4, 8: 6 }[rcl] };
+  await insert(planPositions(plan, "storage")[0], { type: "storage", hits: 10000, hitsMax: 10000, store: { energy: 300000 }, storeCapacity: 1000000 });
+  let ext = 0;
+  for (const pos of planPositions(plan, "extension")) {
+    if (ext >= counts.extension) break;
+    if (await insert(pos, { type: "extension", hits: 1000, hitsMax: 1000, off: false, store: { energy: extEnergy }, storeCapacityResource: { energy: extEnergy } })) ext++;
+  }
+  let towers = 0;
+  for (let i = 0; i < 6 && towers < counts.tower; i++) {
+    for (const pos of planPositions(plan, `tower.${i}`)) {
+      if (await insert(pos, { type: "tower", hits: 3000, hitsMax: 3000, store: { energy: 1000 }, storeCapacityResource: { energy: 1000 }, actionLog: { attack: null, heal: null, repair: null } })) towers++;
+    }
+  }
+  for (const type of ["container.source", "container.controller"]) {
+    for (const pos of planPositions(plan, type)) await insert(pos, { type: "container", hits: 250000, hitsMax: 250000, store: {}, storeCapacity: 2000, nextDecayTime: time + 500 });
+  }
+  const ramps = new Set(planPositions(plan, "rampart.ramp").map((p) => p.y * 50 + p.x));
+  let ramparts = 0;
+  for (const pos of planPositions(plan, "rampart")) {
+    if (ramps.has(pos.y * 50 + pos.x)) continue;
+    await db["rooms.objects"].insert({ room: ROOM, x: pos.x, y: pos.y, user: user.id, type: "rampart", hits: 600000, hitsMax: 600000, nextDecayTime: time + 100, isPublic: false });
+    ramparts++;
+  }
+  const terrain = fixtureTerrain;
+  let roads = 0;
+  for (const pos of planPositions(plan, "road")) {
+    if (taken.has(pos.y * 50 + pos.x) || (Number(terrain[pos.y * 50 + pos.x]) & 1)) continue;
+    await db["rooms.objects"].insert({ room: ROOM, x: pos.x, y: pos.y, type: "road", hits: 5000, hitsMax: 5000, nextDecayTime: time + 1000 });
+    roads++;
+  }
+  log(`Preset ${PRESET} at tick ${time}: storage, ${ext} extensions, ${towers} towers, ${ramparts} ramparts, ${roads} roads`);
+  return true;
+}
+let fixtureTerrain = "";
 
 async function enemyStatus(server, enemy) {
   const objects = await server.common.storage.db["rooms.objects"].find({ room: enemy.room, user: enemy.id });
@@ -376,6 +448,22 @@ async function snapshot(server, userId) {
     sites: objects.filter((o) => o.type === "constructionSite" && o.user === userId).length,
     storage: mine.filter((o) => o.type === "storage").reduce((sum, o) => sum + ((o.store && o.store.energy) || 0), 0),
     remoteRoads: (await db["rooms.objects"].find({ type: "road" })).filter((o) => o.room !== ROOM).length,
+    // Endgame structures (count by type) and non-energy resources in storage, terminal and containers
+    endgame: Object.fromEntries(
+      ["terminal", "extractor", "lab", "factory", "powerSpawn", "nuker", "observer"]
+        .map((t) => [t, mine.filter((o) => o.type === t).length])
+        .filter(([, n]) => n > 0)
+    ),
+    minerals: objects
+      .filter((o) => (o.user === userId || o.type === "container") && ["storage", "terminal", "container"].includes(o.type))
+      .reduce((acc, o) => {
+        for (const [r, n] of Object.entries(o.store || {})) if (r !== "energy" && n) acc[`${o.type}:${r}`] = (acc[`${o.type}:${r}`] || 0) + n;
+        return acc;
+      }, {}),
+    siteTypes: objects
+      .filter((o) => o.type === "constructionSite" && o.user === userId)
+      .reduce((acc, o) => ({ ...acc, [o.structureType]: (acc[o.structureType] || 0) + 1 }), {}),
+    terminalEnergy: mine.filter((o) => o.type === "terminal").reduce((sum, o) => sum + ((o.store && o.store.energy) || 0), 0),
     // Creeps in every room by name prefix (role), to compare bots
     creepsByRoom: await creepCensus(db, userId),
     // Every room we own and its level (expansion)
@@ -412,6 +500,7 @@ async function main() {
     );
   }
   const fixture = JSON.parse(fs.readFileSync(fixtureFile, "utf-8"));
+  fixtureTerrain = fixture.rooms[ROOM].terrain;
   const main = fs.readFileSync(CODE, "utf-8");
 
   const serverOpts = { path: "/tmp/mockup-server", logdir: "/tmp/mockup-server/logs" };
@@ -434,7 +523,7 @@ async function main() {
   const { env, pubsub } = server.common.storage;
   // The enemy first: adding a second user resets the first one's Memory
   const enemy = ENEMY ? await setupEnemy(server, fixture, ENEMY) : null;
-  if (PRESET) await applyPreset(server, fixture, spot, user.id);
+  if (QUICK_PRESET) await applyQuickPreset(server, fixture, spot, user.id);
   const stronghold = STRONGHOLD ? await setupStronghold(server, fixture, STRONGHOLD) : null;
   await env.set(env.keys.MEMORY + user.id, MEMORY_INIT);
   if (CPU_LIMIT !== null) {
@@ -499,7 +588,9 @@ async function main() {
     }
     return tiles;
   };
+  let presetDone = !PLAN_PRESET;
   for (tick = 1; tick <= TICKS; tick++) {
+    if (!presetDone) presetDone = await applyPlanPreset(server, user, await readMemory(user));
     for (const raid of RAIDS.filter((r) => r.tick === tick)) {
       const names = [];
       const raidRoom = raid.room || ROOM;
@@ -542,6 +633,7 @@ async function main() {
         `RCL ${w.rcl} (${w.progress}) | creeps ${w.creeps} | energy ${w.energy}/${w.energyCapacity}`,
         `| ext ${w.extensions} cont ${w.containers} roads ${w.roads}+${w.remoteRoads} sites ${w.sites} storage ${w.storage}`,
         `| cpu avg ${(cpuSum / Math.max(1, cpuSamples)).toFixed(2)}`,
+        PRESET ? `| endgame ${JSON.stringify(w.endgame)} sites ${JSON.stringify(w.siteTypes)} terminal ${w.terminalEnergy} minerals ${JSON.stringify(w.minerals)}` : "",
         Object.keys(w.ownedRooms).length > 1 ? `| rooms ${JSON.stringify(w.ownedRooms)}` : "",
         enemy ? `| enemy ${JSON.stringify(await enemyStatus(server, enemy))}` : "",
         stronghold ? `| stronghold ${JSON.stringify(await strongholdStatus(server, stronghold))}` : "",

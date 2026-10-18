@@ -1,6 +1,6 @@
 /**
  * Spawn roles: each one tells what it wants spawned in a room, as options (priority, weight).
- * Rules ported from Hivemind (MIT), src/spawn-role/{harvester,transporter,builder,upgrader,room-defense}.ts.
+ * Rules ported from Hivemind (MIT), src/spawn-role/{harvester,harvester.minerals,transporter,builder,upgrader,room-defense}.ts.
  * See docs/hivemind/hivemind-spawning.md for the exact rules and their sources.
  */
 
@@ -14,6 +14,7 @@ import {
     effectiveEnergy,
     harvestSpots,
     hasEnemies,
+    mineralContainer,
     mySpawns,
     sourceContainer,
     storageLocation
@@ -31,12 +32,14 @@ import { militarySpawnRole } from "../military/military";
 import { remoteSpawnRole } from "../remote/remoteSpawnRole";
 import { ENEMY_STRENGTH_NORMAL, enemyStrength } from "../defense/RoomDefense";
 import { GUARDIAN } from "../roles/guardian";
+import { isFullOn } from "../core/resources";
 
 export interface SpawnOption extends Option {
     role: string;
     /** Spawn next to this position when a spawn is close (harvesters) */
     preferClosestSpawn?: RoomPosition;
     source?: Id<Source>;
+    mineral?: Id<Mineral>;
     size?: number;
     force?: boolean;
     mini?: boolean;
@@ -156,6 +159,50 @@ const harvester: SpawnRole = {
 
     memory(room, option) {
         return { role: this.id, room: room.name, fixedSource: option.source };
+    }
+};
+
+// ------------------------------------------------------------------ mineral harvester
+
+/**
+ * One harvester per mineral with an active extractor, a container and minerals left, once the room has
+ * 5000 effective energy and is not full on minerals (Hivemind spawn-role/harvester.minerals.ts)
+ */
+const mineralHarvester: SpawnRole = {
+    id: "mineralHarvester",
+    emptyTimeout: 50,
+
+    options(room) {
+        if (effectiveEnergy(room) < 5000) return [];
+        const options: SpawnOption[] = [];
+        for (const mineral of room.find(FIND_MINERALS)) {
+            if (mineral.mineralAmount <= 0) continue;
+            const extractor = mineral.pos.lookFor(LOOK_STRUCTURES).find(s => s.structureType === STRUCTURE_EXTRACTOR) as
+                | StructureExtractor
+                | undefined;
+            if (!extractor?.my || !extractor.isActive()) continue;
+            if (!mineralContainer(mineral)) continue;
+            if (isFullOn(room, mineral.mineralType)) return [];
+            const harvesters = creepsByRole(room.name, this.id).filter(
+                c => c.memory.fixedMineralSource === mineral.id && (c.spawning || (c.ticksToLive ?? 0) > c.body.length * CREEP_SPAWN_TIME)
+            );
+            if (harvesters.length >= 1) continue;
+            options.push({ role: this.id, priority: 3, weight: 0.2, preferClosestSpawn: mineral.pos, mineral: mineral.id });
+        }
+        return options;
+    },
+
+    body(room) {
+        return buildBody({
+            weights: { [CARRY]: 1, [WORK]: 10 },
+            moveMode: MoveMode.ROAD,
+            carryContentLevel: 0,
+            energyLimit: Math.min(room.energyCapacityAvailable, Math.max(room.energyCapacityAvailable * 0.9, room.energyAvailable))
+        });
+    },
+
+    memory(room, option) {
+        return { role: this.id, room: room.name, fixedMineralSource: option.mineral };
     }
 };
 
@@ -510,6 +557,7 @@ export const ECONOMY_SPAWN_ROLES: SpawnRole[] = [
     remoteDefense,
     builder,
     harvester,
+    mineralHarvester,
     militarySpawnRole,
     reclaimSpawnRole,
     remoteSpawnRole,

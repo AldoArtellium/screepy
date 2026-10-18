@@ -27,6 +27,10 @@ const MAX_STRUCTURES: { [type: string]: number } = {
     terminal: 1,
     factory: 1,
     extractor: 1,
+    lab: 10,
+    powerSpawn: 1,
+    nuker: 1,
+    observer: 1,
 };
 
 interface FloodNode {

@@ -1,6 +1,6 @@
 /**
  * Where carried resources go. Priorities and weights ported from Hivemind (MIT),
- * src/dispatcher/resource-destination/*.ts (spawn, bay, tower, container, worker-creep, storage, drop).
+ * src/dispatcher/resource-destination/*.ts (spawn, bay, tower, container, worker-creep, storage, terminal, drop).
  */
 
 import { whenInRange } from "../core/movement";
@@ -19,8 +19,9 @@ import {
     structuresOfType
 } from "../core/roomState";
 import { cacheEmptyTasks, DispatchContext, Dispatcher, TaskProvider } from "./Dispatcher";
+import { bestStorageTarget, resourceAmount, stopTradePreparation, TERMINAL_MIN_ENERGY } from "../core/resources";
 
-type EnergyStructure = StructureSpawn | StructureExtension | StructureTower | StructureContainer | StructureStorage;
+type EnergyStructure = StructureSpawn | StructureExtension | StructureTower | StructureContainer | StructureStorage | StructureTerminal;
 
 function carriesEnergy(context: DispatchContext): boolean {
     return context.ignoreStoreContent || context.creep.store.energy > 0;
@@ -311,7 +312,10 @@ class WorkerCreepDestination implements TaskProvider {
     }
 }
 
-/** Storage: lowest priority sink */
+/**
+ * Storage or terminal (bestStorageTarget): lowest priority sink, one task per carried resource; other
+ * resources wait while the terminal has no room left for 5000 energy
+ */
 class StorageDestination extends StructureDestination {
     readonly type = "storage";
 
@@ -321,16 +325,64 @@ class StorageDestination extends StructureDestination {
 
     tasks(context: DispatchContext): Order[] {
         const creep = context.creep;
-        const storage = creep.room.storage;
-        if (!storage?.my) return [];
+        const room = creep.room;
+        if (!room.storage?.my && !room.terminal?.my) return [];
+        const terminal = room.terminal;
+        const terminalNeedsEnergySpace = !!terminal && terminal.store.getFreeCapacity() + terminal.store.energy < 5000;
         const tasks: Order[] = [];
         for (const resourceType in creep.store) {
             const amount = creep.store[resourceType as ResourceConstant];
             if (!amount) continue;
             if (context.resourceType && context.resourceType !== resourceType) continue;
-            tasks.push({ type: this.type, target: storage.id, resourceType: resourceType as ResourceConstant, amount, priority: 0, weight: amount / 100 });
+            const target = bestStorageTarget(room, amount, resourceType as ResourceConstant);
+            if (!target) continue;
+            if (resourceType !== RESOURCE_ENERGY && terminalNeedsEnergySpace) continue;
+            tasks.push({ type: this.type, target: target.id, resourceType: resourceType as ResourceConstant, amount, priority: 0, weight: amount / 100 });
         }
         return tasks;
+    }
+}
+
+/**
+ * Terminal: energy up to 5000 (priority 3, with a storage), and the resource a send or a deal waits
+ * for (room.memory.fillTerminal, priority 4, once the terminal has 5000 energy)
+ */
+class TerminalDestination extends StructureDestination {
+    readonly type = "terminal";
+
+    highestPriority(): number {
+        return 4;
+    }
+
+    tasks(context: DispatchContext): Order[] {
+        const room = context.creep.room;
+        const terminal = room.terminal;
+        if (!terminal?.my) return [];
+        return cacheEmptyTasks(`terminal:${room.name}:${context.resourceType ?? ""}`, () => {
+            const tasks: Order[] = [];
+            const energy = terminal.store.energy;
+            if ((!context.resourceType || context.resourceType === RESOURCE_ENERGY) && energy < TERMINAL_MIN_ENERGY && room.storage) {
+                tasks.push({
+                    type: this.type,
+                    target: terminal.id,
+                    resourceType: RESOURCE_ENERGY,
+                    amount: TERMINAL_MIN_ENERGY - energy,
+                    priority: 3,
+                    weight: 1 - energy / TERMINAL_MIN_ENERGY
+                });
+            }
+            const resourceType = room.memory.fillTerminal;
+            if (!resourceType || (context.resourceType && context.resourceType !== resourceType) || energy <= TERMINAL_MIN_ENERGY) return tasks;
+            const target = room.memory.fillTerminalAmount || 10000;
+            const missing = target - terminal.store[resourceType];
+            if (missing <= 0 || resourceAmount(room, resourceType) < target) {
+                stopTradePreparation(room);
+                return tasks;
+            }
+            if ((terminal.store.getFreeCapacity(resourceType) ?? 0) <= missing) return tasks;
+            tasks.push({ type: this.type, target: terminal.id, resourceType, amount: missing, priority: 4, weight: missing / target });
+            return tasks;
+        });
     }
 }
 
@@ -379,6 +431,7 @@ export const destinationDispatcher = new Dispatcher([
     new DropDestination(),
     new SpawnDestination(),
     new StorageDestination(),
+    new TerminalDestination(),
     new TowerDestination(),
     new WorkerCreepDestination()
 ]);
