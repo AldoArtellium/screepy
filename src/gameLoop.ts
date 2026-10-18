@@ -15,6 +15,7 @@ import { trafficManagerModule } from "modules/TrafficManager";
 import { roomPlannerModule } from "planner/RoomPlanner";
 import { remoteMiningModule } from "remote/RemoteMining";
 import { log } from "utils/logger";
+import { roomVisualsModule } from "visuals/roomVisuals";
 
 export const gameLoop = () => {
   const memLimit = 1000000;
@@ -49,6 +50,9 @@ export const gameLoop = () => {
     { name: "MarketManager", fn: marketManagerModule, runEvery: 20, priority: "low", disabled: true },
     // Memory of dead creeps (every 100 ticks) and unused rooms (every 1000)
     { name: "MemoryCleanup", fn: memoryCleanupModule },
+
+    // Plan overlay and economy panel on owned rooms (every tick: visuals last one tick; Memory.visuals = false)
+    { name: "RoomVisuals", fn: roomVisualsModule, priority: "low" },
 
     // Resolves all movement requests issued above (must run after every creep-moving module)
     { name: "TrafficManager", fn: trafficManagerModule, mandatory: true }
