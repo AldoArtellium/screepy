@@ -11,6 +11,7 @@
  */
 
 import { duoCreeps } from "../core/roomState";
+import { needsBoosting } from "../labs/boosts";
 import { trafficManager } from "../modules/TrafficManager";
 import { log } from "../utils/logger";
 import { countStat } from "../utils/stats";
@@ -279,6 +280,12 @@ export function runDuo(name: string, duo: DuoMemory): void {
         log.info("Duo", `${name}: lost ${member} (state ${duo.state})`);
     }
     duo.members = duo.members.filter(m => Game.creeps[m]);
+
+    // A member getting boosted at the labs (CreepRunner moves it): the duo waits (timeout in labs/boosts.ts)
+    if ((attacker && needsBoosting(attacker)) || (healer && needsBoosting(healer))) {
+        duo.state = "forming";
+        return;
+    }
 
     if (!attacker || !healer) {
         // Alone: leave the target room and wait for the partner at home

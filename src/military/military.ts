@@ -7,6 +7,7 @@
  */
 
 import { duoCreeps, effectiveEnergy, quadCreeps } from "../core/roomState";
+import { boostsFor } from "../labs/boosts";
 import { performRecycle } from "../roles/recycle";
 import { registerRole } from "../roles/registry";
 import type { SpawnOption, SpawnRole } from "../spawning/spawnRoles";
@@ -191,6 +192,20 @@ export const militarySpawnRole: SpawnRole = {
 
     memory(room, option) {
         return { role: option.role, room: room.name, duo: option.memory?.duo, quad: option.memory?.quad };
+    },
+
+    /**
+     * Best available boosts of the combat parts (Hivemind squad getCreepBoosts: attack, heal, and the
+     * blinky's ranged attack and TOUGH). MOVE stays unboosted: bodies are sized for plain MOVE parts.
+     * The squad waits at most BOOST_TIMEOUT ticks for them (labs/boosts.ts).
+     */
+    boosts(room, _option, body) {
+        return boostsFor(room, body, [
+            [TOUGH, "damage"],
+            [ATTACK, "attack"],
+            [HEAL, "heal"],
+            [RANGED_ATTACK, "rangedAttack"]
+        ]);
     }
 };
 

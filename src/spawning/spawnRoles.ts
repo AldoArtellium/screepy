@@ -33,6 +33,8 @@ import { remoteSpawnRole } from "../remote/remoteSpawnRole";
 import { ENEMY_STRENGTH_NORMAL, enemyStrength } from "../defense/RoomDefense";
 import { GUARDIAN } from "../roles/guardian";
 import { isFullOn } from "../core/resources";
+import { boostLabs, boostsFor } from "../labs/boosts";
+import { HELPER } from "../roles/helper";
 
 export interface SpawnOption extends Option {
     role: string;
@@ -56,6 +58,8 @@ export interface SpawnRole {
     options(room: Room): SpawnOption[];
     body(room: Room, option: SpawnOption): BodyPartConstant[];
     memory(room: Room, option: SpawnOption): Partial<CreepMemory>;
+    /** Compound per body part type to boost the new creep with (Hivemind getCreepBoosts) */
+    boosts?(room: Room, option: SpawnOption, body: BodyPartConstant[]): Partial<Record<BodyPartConstant, ResourceConstant>>;
 }
 
 /**
@@ -472,6 +476,32 @@ const upgrader: SpawnRole = {
     }
 };
 
+// ------------------------------------------------------------------ helper
+
+/** One helper while the room has a boost lab (Hivemind spawn-role/helper.ts) */
+const helper: SpawnRole = {
+    id: HELPER,
+    emptyTimeout: 10,
+
+    options(room) {
+        if (creepsByRole(room.name, HELPER).length >= 1 || boostLabs(room).length === 0) return [];
+        return [{ role: HELPER, priority: 5, weight: 1.1 }];
+    },
+
+    body(room) {
+        return buildBody({
+            weights: { [CARRY]: 1 },
+            partLimits: { [CARRY]: 12 },
+            moveMode: MoveMode.ROAD,
+            energyLimit: Math.min(room.energyCapacityAvailable, Math.max(room.energyCapacityAvailable * 0.9, room.energyAvailable))
+        });
+    },
+
+    memory(room) {
+        return { role: HELPER, room: room.name };
+    }
+};
+
 // ------------------------------------------------------------------ defense
 
 /** Remote defense (Hivemind spawn role "brawler", remote part) */
@@ -549,14 +579,38 @@ const roomDefense: SpawnRole = {
 
     memory(room, option) {
         return { role: option.role, room: room.name };
+    },
+
+    /**
+     * Hivemind room-defense getCreepBoosts: emergency builders WORK (repair), guardians ATTACK or
+     * RANGED_ATTACK, no stronger tier than the enemies' boosts (none: any tier)
+     */
+    boosts(room, option, body) {
+        const maxTier = maxEnemyBoostTier(room);
+        if (option.role === "builder") return boostsFor(room, body, [[WORK, "repair"]], maxTier);
+        if (option.role !== GUARDIAN) return {};
+        return body.includes(ATTACK)
+            ? boostsFor(room, body, [[ATTACK, "attack"]], maxTier)
+            : boostsFor(room, body, [[RANGED_ATTACK, "rangedAttack"]], maxTier);
     }
 };
+
+/** Highest boost tier (compound name length) on the enemies, 0 up to NORMAL (Hivemind getMaxEnemyBoostLevel) */
+function maxEnemyBoostTier(room: Room): number {
+    if (enemyStrength(room) <= ENEMY_STRENGTH_NORMAL) return 0;
+    let highest = 0;
+    for (const creep of room.find(FIND_HOSTILE_CREEPS)) {
+        for (const part of creep.body) if (typeof part.boost === "string") highest = Math.max(highest, part.boost.length);
+    }
+    return highest;
+}
 
 /** Hivemind registration order (alphabetical): it breaks priority/weight ties */
 export const ECONOMY_SPAWN_ROLES: SpawnRole[] = [
     remoteDefense,
     builder,
     harvester,
+    helper,
     mineralHarvester,
     militarySpawnRole,
     reclaimSpawnRole,

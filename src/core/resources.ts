@@ -4,8 +4,8 @@
  * Ported from Hivemind (MIT), src/prototype/room.resources.ts, src/room/resource-level-manager.ts and
  * src/empire/funnel-manager.ts. See docs/hivemind/hivemind-endgame.md.
  *
- * Not ported: evacuation and storage/terminal clearing modes, factory bars and batteries, labs,
- * boosts, power, ops and commodities levels.
+ * Not ported: evacuation and storage/terminal clearing modes, factory bars and batteries, power, ops
+ * and commodities levels.
  */
 
 import { ENEMY_STRENGTH_NORMAL, enemyStrength } from "../defense/RoomDefense";
@@ -147,9 +147,41 @@ function isAnyRoomUnderAttack(): boolean {
     return tickCache("anyRoomUnderAttack", () => _.some(Game.rooms, r => !!r.controller?.my && enemyStrength(r) > ENEMY_STRENGTH_NORMAL));
 }
 
-/** [excessive, high, medium] thresholds (Hivemind getResourceLevelCutoffs: energy, everything else 50k/0/0) */
-function levelCutoffs(room: Room, resourceType: ResourceConstant): [number, number, number] {
-    if (resourceType !== RESOURCE_ENERGY) return [50000, 0, 0];
+type Cutoffs = [number, number, number];
+
+/** Hivemind getBoostCutoffs: wanted while fighting (attack, ranged, repair), else kept up to 15k */
+function boostCutoffs(room: Room, resourceType: ResourceConstant): Cutoffs | null {
+    const boosts = BOOSTS as unknown as Record<string, Record<string, Record<string, number>>>;
+    let isBoost = false;
+    for (const part in boosts) {
+        const effect = boosts[part][resourceType];
+        if (!effect) continue;
+        isBoost = true;
+        if (part === WORK && effect.upgradeController && room.controller!.level >= 8) return [15000, 7500, 2500];
+        if (enemyStrength(room) <= ENEMY_STRENGTH_NORMAL) continue;
+        if (part === ATTACK || part === RANGED_ATTACK || (part === WORK && effect.repair)) return [15000, 7500, 2500];
+    }
+    if (!isBoost) return null;
+    return enemyStrength(room) > ENEMY_STRENGTH_NORMAL ? [1, 0, 0] : [15000, 0, 0];
+}
+
+/** Hivemind getReactionCutoffs: reagents of the reaction under way */
+function reactionCutoffs(room: Room, resourceType: ResourceConstant): Cutoffs | null {
+    const reaction = room.memory.currentReaction;
+    if (!reaction || !reaction.includes(resourceType)) return null;
+    return enemyStrength(room) > ENEMY_STRENGTH_NORMAL ? [1, 0, 0] : [30000, 20000, 10000];
+}
+
+/**
+ * [excessive, high, medium] thresholds (Hivemind getResourceLevelCutoffs: energy; boosts and reaction
+ * reagents, the highest of both; everything else 50k/0/0)
+ */
+function levelCutoffs(room: Room, resourceType: ResourceConstant): Cutoffs {
+    if (resourceType !== RESOURCE_ENERGY) {
+        const applicable = [boostCutoffs(room, resourceType), reactionCutoffs(room, resourceType)].filter((c): c is Cutoffs => !!c);
+        if (applicable.length === 0) return [50000, 0, 0];
+        return applicable.reduce((a, c) => [Math.max(a[0], c[0]), Math.max(a[1], c[1]), Math.max(a[2], c[2])]);
+    }
     if (enemyStrength(room) >= ENEMY_STRENGTH_NORMAL) return [200000, 100000, 50000];
     if (isAnyRoomUnderAttack()) return [50000, 20000, 15000];
     if (roomsToFunnel().includes(room.name)) return [500000, 300000, 150000];

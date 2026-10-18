@@ -9,6 +9,7 @@ import "../roles/builder";
 import "../roles/claimer";
 import "../roles/guardian";
 import "../roles/harvester";
+import "../roles/helper";
 import "../roles/mineralHarvester";
 import "../roles/pioneer";
 import "../roles/remoteBuilder";
@@ -18,6 +19,7 @@ import "../roles/remoteHauler";
 import "../roles/reserver";
 import "../roles/transporter";
 import "../roles/upgrader";
+import { needsBoosting, overrideForBoosting } from "../labs/boosts";
 import { getRoleHandler } from "../roles/registry";
 import { log } from "../utils/logger";
 import { countStat } from "../utils/stats";
@@ -59,7 +61,7 @@ function isThrottled(creep: Creep, role: string): boolean {
     return throttle(offset, stopAt, throttleAt);
 }
 
-const ROOM_BOUND_ROLES = new Set(["harvester", "mineralHarvester", "transporter", "builder", "upgrader", "brawler", "guardian"]);
+const ROOM_BOUND_ROLES = new Set(["harvester", "mineralHarvester", "transporter", "builder", "upgrader", "brawler", "guardian", "helper"]);
 const INWARD: { [edge: string]: DirectionConstant } = { left: RIGHT, right: LEFT, top: BOTTOM, bottom: TOP };
 
 /** True when the creep was moved back into its room this tick */
@@ -93,6 +95,8 @@ export const creepRunnerModule = () => {
             continue;
         }
         if (ROOM_BOUND_ROLES.has(role) && containInRoom(creep)) continue;
+        // Boosts first (Hivemind Role.preRun -> boostManager.overrideCreepLogic)
+        if (needsBoosting(creep) && overrideForBoosting(creep)) continue;
         const start = Game.cpu.getUsed();
         try {
             handler(creep);

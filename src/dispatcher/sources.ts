@@ -22,6 +22,8 @@ import {
 import { roomPlanner } from "../planner/RoomPlanner";
 import { bestStorageSource, bestStorageTarget } from "../core/resources";
 import { cacheEmptyTasks, DispatchContext, Dispatcher, TaskProvider } from "./Dispatcher";
+import { requiredBoostType } from "../labs/boosts";
+import { productOf } from "../labs/reactions";
 
 /** Without storage, Hivemind counts 10 000 of "virtual" room for dropped resources */
 const DEFAULT_STORAGE_LIMIT = 10000;
@@ -333,10 +335,72 @@ class OverfullExtensionSource extends StoreSource {
     }
 }
 
+/**
+ * Labs (Hivemind resource-source/lab.ts): a reactor's product 0 (+1 above 80%, 90% and 95% full), 3 when
+ * it is not the product of the reaction under way; source labs holding the wrong reagent 3; every lab
+ * without a reaction 3; -2 per creep already on it. A boost lab's own compound stays.
+ */
+class LabSource extends StoreSource {
+    readonly type = "lab";
+
+    highestPriority(): number {
+        return 3;
+    }
+
+    tasks(context: DispatchContext): Order[] {
+        const room = context.creep.room;
+        const layout = room.memory.labs;
+        if (!layout) return [];
+        return cacheEmptyTasks(`labSource:${room.name}:${context.resourceType ?? ""}`, () => {
+            const tasks: Order[] = [];
+            const reaction = room.memory.currentReaction;
+            const product = reaction ? productOf(reaction) : null;
+            for (const id of layout.reactor) {
+                const lab = Game.getObjectById(id);
+                if (!lab?.mineralType) continue;
+                if (context.resourceType && context.resourceType !== lab.mineralType) continue;
+                if (requiredBoostType(lab.id) === lab.mineralType) continue;
+                const amount = lab.store[lab.mineralType] ?? 0;
+                if (amount === 0) continue;
+                let priority = 0;
+                let weight = amount / LAB_MINERAL_CAPACITY;
+                if (amount > LAB_MINERAL_CAPACITY * 0.8) priority++;
+                if (amount > LAB_MINERAL_CAPACITY * 0.9) priority++;
+                if (amount > LAB_MINERAL_CAPACITY * 0.95) priority++;
+                if (product && product !== lab.mineralType) {
+                    priority = 3;
+                    weight = 0;
+                }
+                priority -= creepsWithOrder(room, this.type, lab.id).length * 2;
+                if (priority > 0) tasks.push({ type: this.type, target: lab.id, resourceType: lab.mineralType, priority, weight });
+            }
+            const clear = (labId: Id<StructureLab>, keep: ResourceConstant | null) => {
+                const lab = Game.getObjectById(labId);
+                if (!lab?.mineralType || lab.mineralType === keep || (lab.store[lab.mineralType] ?? 0) === 0) return;
+                if (context.resourceType && context.resourceType !== lab.mineralType) return;
+                if (requiredBoostType(lab.id) === lab.mineralType) return;
+                const priority = 3 - creepsWithOrder(room, this.type, lab.id).length * 2;
+                tasks.push({ type: this.type, target: lab.id, resourceType: lab.mineralType, priority, weight: 0 });
+            };
+            if (!reaction) {
+                // No reaction: everything goes back to the storage
+                clear(layout.source1, null);
+                clear(layout.source2, null);
+                for (const id of layout.reactor) clear(id, null);
+            } else {
+                clear(layout.source1, reaction[0]);
+                clear(layout.source2, reaction[1]);
+            }
+            return tasks;
+        });
+    }
+}
+
 export const sourceDispatcher = new Dispatcher([
     new ContainerSource(),
     new DropSource(),
     new GraveSource(),
+    new LabSource(),
     new OverfullExtensionSource(),
     new StorageSource()
 ]);
