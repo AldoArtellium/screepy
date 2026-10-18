@@ -7,6 +7,7 @@
 
 import { hasEnemies } from "../core/roomState";
 import { enemyStrength } from "../defense/RoomDefense";
+import { miningEfficiency } from "../modules/MiningStats";
 import { spawnManager } from "../modules/SpawnManager";
 
 const SAMPLE_INTERVAL = 100;
@@ -142,6 +143,15 @@ function economyRows(room: Room): Entry[] {
     if (local !== undefined && remote !== undefined) {
         rows.push({ label: "Income", text: `${rateText(local + remote)}/t   local ${rateText(local)} · remote ${rateText(remote)}` });
     }
+    const mining = miningEfficiency(room.name);
+    if (mining.total !== undefined) {
+        const parts = [mining.local, mining.remote].map(v => (v === undefined ? "-" : `${Math.round(100 * v)}`));
+        rows.push({
+            label: "Mining",
+            bar: { fill: mining.total, color: level(mining.total, 0.8, 0.6, true) },
+            text: `${Math.round(100 * mining.total)}%   local ${parts[0]} · remote ${parts[1]}`
+        });
+    }
     const cpu = Memory.stats?.cpuAvg ?? 0;
     const cpuFill = cpu / Game.cpu.limit;
     rows.push({ label: "CPU", bar: { fill: cpuFill, color: level(cpuFill, 0.8, 0.95) }, text: `${cpu.toFixed(1)}/${Game.cpu.limit}` });
@@ -206,7 +216,13 @@ function infoRows(room: Room): Entry[] {
 
     const remotes = Object.values(Memory.remoteMining?.sources ?? {}).filter(s => s.homeRoom === room.name);
     if (remotes.length > 0) {
-        rows.push({ label: "Remotes", text: `${remotes.length} sources · ${new Set(remotes.map(s => s.room)).size} rooms` });
+        const byRoom = miningEfficiency(room.name).rooms;
+        const roomNames = [...new Set(remotes.map(s => s.room))].sort();
+        const perRoom = roomNames.map(r => `${r} ${byRoom[r] === undefined ? "-" : Math.round(100 * byRoom[r]) + "%"}`);
+        rows.push({ label: "Remotes", text: `${remotes.length} sources` });
+        for (let i = 0; i < perRoom.length; i += 3) {
+            rows.push({ label: "", text: perRoom.slice(i, i + 3).join(" · "), color: DIM });
+        }
     }
     const plan = room.memory.plan;
     if (plan && !plan.done) rows.push({ label: "Plan", text: `searching (${plan.k ?? "?"})`, color: DIM });
@@ -230,6 +246,17 @@ export function drawPanel(visual: RoomVisual, room: Room): void {
     const rcl = controller.level < 8 ? `RCL ${controller.level} → ${controller.level + 1}` : "RCL 8";
     visual.text(room.name, LEFT + 0.3, TOP + 0.7, { align: "left", font: `bold ${FONT + 0.1}`, color: TITLE });
     visual.text(rcl, LEFT + WIDTH - 0.3, TOP + 0.7, { align: "right", font: FONT, color: DIM });
+
+    // Harvest share next to each source of the room
+    for (const { id, efficiency } of miningEfficiency(room.name).sources) {
+        const source = Game.getObjectById(id);
+        if (!source) continue;
+        visual.text(`${Math.round(100 * efficiency)}%`, source.pos.x, source.pos.y - 0.7, {
+            font: FONT - 0.1,
+            color: level(efficiency, 0.8, 0.6, true),
+            opacity: 0.9
+        });
+    }
 
     let y = TOP + 1.1;
     for (const entry of entries) {
