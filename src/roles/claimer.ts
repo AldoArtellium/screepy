@@ -27,6 +27,8 @@ export function runClaimer(creep: Creep): void {
     }
     const controller = creep.room.controller;
     if (!controller || controller.my) {
+        // Forget the target, else it walks back in as soon as it leaves the room
+        delete creep.memory.targetRoom;
         performRecycle(creep);
         return;
     }

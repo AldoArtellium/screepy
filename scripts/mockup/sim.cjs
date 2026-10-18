@@ -29,14 +29,16 @@ const MEMORY_INIT = opt("memory", "{}");
 /**
  * Invader raids: "tick:body+body,tick:body" with the backend's raid bodies (smallMelee, smallRanged,
  * smallHealer, bigMelee, bigRanged, bigHealer), e.g. --raid 12000:bigMelee+bigRanged. The creeps
- * appear on the first exit tiles of the room and run the engine's invader AI.
+ * appear on the first exit tiles of the room and run the engine's invader AI. "@ROOM" after the bodies
+ * puts them in another room of the fixture (a remote), e.g. --raid 12000:smallMelee@W7N4.
  */
 const RAIDS = (opt("raid", "") || "")
   .split(",")
   .filter(Boolean)
   .map((r) => {
-    const [t, bodies] = r.split(":");
-    return { tick: Number(t), bodies: bodies.split("+") };
+    const [t, spec] = r.split(":");
+    const [bodies, room] = spec.split("@");
+    return { tick: Number(t), bodies: bodies.split("+"), room };
   });
 /** Bodies of backend/lib/cronjobs.js createCreep */
 const RAID_BODIES = {
@@ -397,28 +399,34 @@ async function main() {
   const t0 = Date.now();
   const { db } = server.common.storage;
   const raidLog = [];
-  const exitTiles = [];
-  for (let i = 1; i < 49; i++) {
-    for (const [x, y] of [[i, 0], [0, i], [49, i], [i, 49]]) {
-      if (!(Number(fixture.rooms[ROOM].terrain[y * 50 + x]) & 1)) exitTiles.push([x, y]);
+  const exitTilesOf = (room) => {
+    const tiles = [];
+    for (let i = 1; i < 49; i++) {
+      for (const [x, y] of [[i, 0], [0, i], [49, i], [i, 49]]) {
+        if (!(Number(fixture.rooms[room].terrain[y * 50 + x]) & 1)) tiles.push([x, y]);
+      }
     }
-  }
+    return tiles;
+  };
   for (tick = 1; tick <= TICKS; tick++) {
     for (const raid of RAIDS.filter((r) => r.tick === tick)) {
       const names = [];
+      const raidRoom = raid.room || ROOM;
+      if (!fixture.rooms[raidRoom]) throw new Error(`Raid room ${raidRoom} is not in the fixture`);
+      const exitTiles = exitTilesOf(raidRoom);
       for (const [i, type] of raid.bodies.entries()) {
         const [x, y] = exitTiles[(i * 3) % exitTiles.length];
         const body = RAID_BODIES[type];
         if (!body) throw new Error(`Unknown raid body ${type}`);
-        const name = `invader_${ROOM}_${tick}_${i}`;
+        const name = `invader_${raidRoom}_${tick}_${i}`;
         await db["rooms.objects"].insert({
           type: "creep", user: "2", body: body.map((t) => ({ type: t, hits: 100 })), hits: body.length * 100,
-          hitsMax: body.length * 100, ticksToLive: 1500, x, y, room: ROOM, fatigue: 0, store: {}, storeCapacity: 0, name
+          hitsMax: body.length * 100, ticksToLive: 1500, x, y, room: raidRoom, fatigue: 0, store: {}, storeCapacity: 0, name
         });
         names.push(name);
       }
       raidLog.push({ tick, bodies: raid.bodies, names });
-      log(`Raid at tick ${tick}: ${raid.bodies.join(" + ")}`);
+      log(`Raid at tick ${tick}: ${raid.bodies.join(" + ")}${raid.room ? ` in ${raid.room}` : ""}`);
     }
     for (const raid of raidLog) {
       if (raid.over) continue;

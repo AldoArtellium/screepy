@@ -44,6 +44,9 @@ export function runRemoteDefender(creep: Creep): void {
         return;
     }
     if (!isRoomUnderAttack(targetRoom)) {
+        // Forget the target: else, back out of it, the defender walked to it again (endless bounce
+        // on the room edge)
+        delete creep.memory.targetRoom;
         performRecycle(creep);
         return;
     }

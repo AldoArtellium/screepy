@@ -72,6 +72,7 @@ npm run test:mockup -- --list-rooms                    # rooms with a fixture
 npm run test:mockup -- --profile                       # + wall ms/tick per main loop stage and CPU per engine process
 npm run test:mockup -- --cpu-limit 13                  # lower the bot's CPU limit (13 code CPU ~ 20 official CPU with intents)
 npm run test:mockup -- --raid 9000:smallMelee+smallRanged,15000:bigMelee+bigRanged   # invader raids (backend bodies), outcome in the report
+npm run test:mockup -- --raid 13500:smallMelee@W7N4   # raid in another room of the fixture (a remote)
 npm run test:mockup -- --no-fast                       # unpatched engine (upstream main loop, 1 processor, TCP): A/B check of the speed-ups
 CODES="before=a.js after=dist/main.js" RUNS=1 JOBS=6 bash scripts/mockup/compare.sh   # like scripts/compare.sh, parallel
 node scripts/mockup/extract-fixtures.mjs W5N5          # add a room fixture from the private server (read-only)
