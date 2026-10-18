@@ -75,7 +75,8 @@ npm run test:mockup -- --raid 9000:smallMelee+smallRanged,15000:bigMelee+bigRang
 npm run test:mockup -- --raid 13500:smallMelee@W7N4   # raid in another room of the fixture (a remote)
 npm run test:mockup -- --no-fast                       # unpatched engine (upstream main loop, 1 processor, TCP): A/B check of the speed-ups
 npm run test:mockup -- --ticks 22000 --save-state test-results/states/W7N3-22k.json   # save the world (objects, game time, Memory) at the end
-npm run test:mockup -- --load-state test-results/states/W7N3-22k.json --ticks 15000   # start from it (same room; Memory.stats counters reset)
+npm run test:mockup -- --load-state test-results/states/W7N3-22k.json --ticks 15000   # start from it (same room; Memory.stats counters and moduleErrors reset)
+npm run test:mockup -- --load-state test-results/states/W7N3-22k.json --set-rcl 5     # ... with the controller forced to RCL 5 (progress 0): RCL 5+ code from an RCL 4 economy
 CODES="before=a.js after=dist/main.js" RUNS=1 JOBS=6 bash scripts/mockup/compare.sh   # like scripts/compare.sh, parallel
 node scripts/mockup/extract-fixtures.mjs W5N5          # add a room fixture from the private server (read-only)
 ```
@@ -85,6 +86,7 @@ node scripts/mockup/extract-fixtures.mjs W5N5          # add a room fixture from
 - From-scratch runs reach the storage around tick 11k on W7N3 and 20k+ on W1N3 (W9N5: RCL 3 at 20k): measure storage-era changes with `TICKS=30000`.
 - CPU: the mockup and the private server don't charge the official 0.2 CPU per intent. The bot counts successful intents (`src/utils/intents.ts`, counters `intents`, `intents:<method>`), and the reports print `Intents x/tick | official CPU estimate` (code CPU + 0.2 x intents) and `CPU by role (per tick / per creep)` (counters `cpu:<role>`, `creepTicks:<role>`).
 - Don't start `compare.sh` twice at once: both write the same logs and summary.
+- States: `--save-state` also saves every 2000 ticks (written atomically), so a run whose engine died can be resumed with `--load-state` + `--save-state` on the same file. On load every `user` reference but the NPCs ("2", "3") becomes the new user (controller reservations and signs included). With many containers at once the Docker VM runs out of memory and kills engine processes: the run then stops after 3 minutes without a tick (exit 2) instead of waiting forever.
 - Not the full world: no other players, no backend/cron jobs. Use it to iterate, confirm on the private server before concluding.
 - Speed-ups (default, `--no-fast` disables them all; checked on 3 rooms x 8000 ticks: same points within noise):
   - `scripts/mockup/fast.cjs` (preload, inherited by the engine child processes): no room history (`roomHistory:<room>`, replay data for the web client: the LokiJS storage answers each `hmset` with the whole hash, which grows without bound for rooms not active on a multiple of 20 ticks, so ticks got slower over a run: 16 ms/tick over 3000 ticks, 30-46 ms/tick over 8000 with 3-4 runs in parallel, vs 17-31 now) and no `mapView` writes; the runner fetches `users.code` (the 400+ KB bundle) once instead of every tick; the processor caches room terrain.

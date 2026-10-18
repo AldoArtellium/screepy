@@ -68,6 +68,8 @@ const CPU_LIMIT = opt("cpu-limit", null);
  */
 const SAVE_STATE = opt("save-state", null);
 const LOAD_STATE = opt("load-state", null);
+/** With --load-state: controller level forced on load (progress 0), e.g. 5 to test RCL 5 code from an RCL 4 economy */
+const SET_RCL = Number(opt("set-rcl", 0));
 const OUT = opt("out");
 const VERBOSE = flag("verbose");
 const LOG_EVERY = Number(opt("log-every", 500));
@@ -331,7 +333,8 @@ async function saveState(server, userId, file) {
     objects: (await db["rooms.objects"].find({})).map(plain)
   };
   fs.mkdirSync(path.dirname(file), { recursive: true });
-  fs.writeFileSync(file, JSON.stringify(state));
+  fs.writeFileSync(`${file}.tmp`, JSON.stringify(state));
+  fs.renameSync(`${file}.tmp`, file);
   log(`State saved to ${file} (tick ${state.gameTime}, ${state.objects.length} objects)`);
 }
 
@@ -342,21 +345,35 @@ async function loadState(server, userId, file) {
   if (state.room !== ROOM) throw new Error(`State ${file} is for ${state.room}, not ${ROOM}`);
   await db["rooms.objects"].removeWhere({});
   const rooms = new Set();
-  for (const o of state.objects) {
-    if (o.user === state.userId) {
-      o.user = userId;
-      rooms.add(o.room);
+  // Every user reference (owner, controller reservation and sign...) but the NPCs ("2" invaders,
+  // "3" source keepers) is ours: the saved world has a single player
+  const reown = (value) => {
+    if (!value || typeof value !== "object") return;
+    for (const [key, v] of Object.entries(value)) {
+      if (key === "user" && typeof v === "string" && v !== "2" && v !== "3") value[key] = userId;
+      else reown(v);
     }
+  };
+  for (const o of state.objects) {
+    reown(o);
+    if (o.user === userId) rooms.add(o.room);
     await db["rooms.objects"].insert(o);
   }
   for (const room of rooms) {
     await db.rooms.update({ _id: room }, { $set: { active: true } });
     await env.sadd(env.keys.ACTIVE_ROOMS, room);
   }
+  if (SET_RCL) {
+    await db["rooms.objects"].update(
+      { room: ROOM, type: "controller" },
+      { $set: { level: SET_RCL, progress: 0, downgradeTime: state.gameTime + 50000 } }
+    );
+  }
   await db.users.update({ _id: userId }, { $set: { gcl: state.gcl } });
   await env.set(env.keys.GAMETIME, state.gameTime);
   const memory = JSON.parse(state.memory || "{}");
   if (memory.stats) memory.stats.counters = {};
+  delete memory.moduleErrors;
   await env.set(env.keys.MEMORY + userId, JSON.stringify(memory));
   log(`State loaded from ${file} (tick ${state.gameTime}, ${state.objects.length} objects, rooms ${[...rooms].join(" ")})`);
 }
@@ -464,6 +481,13 @@ async function main() {
     }
     return tiles;
   };
+  // An engine process killed (e.g. out of memory) leaves the loop waiting forever: give up
+  let lastTickAt = Date.now();
+  setInterval(() => {
+    if (Date.now() - lastTickAt < 180000) return;
+    console.error(`No tick for 3 minutes (tick ${tick}): an engine process died, giving up`);
+    process.exit(2);
+  }, 10000).unref();
   for (tick = 1; tick <= TICKS; tick++) {
     for (const raid of RAIDS.filter((r) => r.tick === tick)) {
       const names = [];
@@ -499,6 +523,9 @@ async function main() {
       if (u && typeof u.lastUsedCpu === "number") addCpu(u.lastUsedCpu);
       stage(null);
     }
+    // Long runs: keep the latest state on disk, so a crashed run can be resumed with --load-state
+    if (SAVE_STATE && tick % 2000 === 0 && tick !== TICKS) await saveState(server, user.id, SAVE_STATE);
+    lastTickAt = Date.now();
     if (tick % LOG_EVERY === 0 || tick === TICKS) {
       const w = await snapshot(server, user.id);
       const elapsed = (Date.now() - t0) / 1000;
