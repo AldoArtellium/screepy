@@ -83,17 +83,26 @@ class TrafficManager {
         this.trackStuck(creep, inRange);
 
         const priority = options.priority ?? this.getCreepPriority(creep);
-        const result = moveTo(
-            creep,
-            { pos: targetPos, range },
-            {
-                // cartographer: higher value = more important
-                priority: 101 - Math.min(100, Math.max(0, priority)),
-                reusePath: options.reusePath,
-                avoidCreeps: options.combat ?? false,
-                visualizePathStyle: options.visualize ? { stroke: options.combat ? "#ff0000" : "#ffffff", lineStyle: "dashed" } : undefined
-            }
-        );
+        const moveOpts = {
+            // cartographer: higher value = more important
+            priority: 101 - Math.min(100, Math.max(0, priority)),
+            reusePath: options.reusePath,
+            avoidCreeps: options.combat ?? false,
+            visualizePathStyle: options.visualize ? { stroke: options.combat ? "#ff0000" : "#ffffff", lineStyle: "dashed" as const } : undefined
+        };
+        // Stuck creeps: cartographer repaths with avoidCreeps, which marks every creep tile impassable,
+        // the goal included. A goal held by creeps (a bay or drop spot taken, every tile next to a
+        // controller taken) or a gap closed by creeps then has no path: ERR_NO_PATH every other tick and
+        // the creep never moves. Keep the path through creeps then, the reconciler shoves or swaps them.
+        const stuck = this.getStuckTicks(creep) >= 2;
+        const avoidCreepsWhenStuck = !(stuck && goalHeldByCreeps(creep, targetPos, range));
+        const goal = { pos: targetPos, range };
+        let result = moveTo(creep, goal, moveOpts, { avoidCreeps: avoidCreepsWhenStuck });
+        if (result === ERR_NO_PATH && stuck && avoidCreepsWhenStuck && !moveOpts.avoidCreeps) {
+            // Creeps closed every way to the goal: the failed fallback reset the cached path, repath through them
+            countStat("moveRetry");
+            result = moveTo(creep, goal, moveOpts, { avoidCreeps: false });
+        }
         if (result !== OK && result !== ERR_TIRED) {
             const what = "body" in creep ? creep.memory.role ?? "idle" : "powerCreep";
             countStat(`moveError:${result}:${what}`);
@@ -112,7 +121,7 @@ class TrafficManager {
         return this.requestMove(creep, new RoomPosition(25, 25, roomName), { ...options, range: 20 });
     }
 
-    getStuckTicks(creep: Creep): number {
+    getStuckTicks(creep: Creep | PowerCreep): number {
         const state = this.stuck.get(creep.name);
         if (!state || state.tick < Game.time - 1) return 0;
         return state.stuckTicks;
@@ -254,6 +263,37 @@ class TrafficManager {
             requestsThisTick: this.requestsTick === Game.time ? this.requestsThisTick : 0
         };
     }
+}
+
+/**
+ * Every walkable tile within range of the goal holds another creep (only checked up to range 3, in a
+ * visible room): a path avoiding creeps can't reach it.
+ */
+function goalHeldByCreeps(creep: Creep | PowerCreep, goal: RoomPosition, range: number): boolean {
+    const room = Game.rooms[goal.roomName];
+    if (!room || range > 3) return false;
+    const terrain = room.getTerrain();
+    const top = Math.max(0, goal.y - range);
+    const left = Math.max(0, goal.x - range);
+    const bottom = Math.min(49, goal.y + range);
+    const right = Math.min(49, goal.x + range);
+    const taken = new Set<number>();
+    for (const { x, y, creep: other } of room.lookForAtArea(LOOK_CREEPS, top, left, bottom, right, true)) {
+        if (other.id !== creep.id) taken.add(y * 50 + x);
+    }
+    for (const { x, y, powerCreep } of room.lookForAtArea(LOOK_POWER_CREEPS, top, left, bottom, right, true)) {
+        if (powerCreep.id !== creep.id) taken.add(y * 50 + x);
+    }
+    if (taken.size === 0) return false;
+    for (const { x, y, structure } of room.lookForAtArea(LOOK_STRUCTURES, top, left, bottom, right, true)) {
+        if ((OBSTACLE_OBJECT_TYPES as string[]).includes(structure.structureType)) taken.add(y * 50 + x);
+    }
+    for (let y = top; y <= bottom; y++) {
+        for (let x = left; x <= right; x++) {
+            if (!taken.has(y * 50 + x) && terrain.get(x, y) !== TERRAIN_MASK_WALL) return false;
+        }
+    }
+    return true;
 }
 
 // Singleton instance
