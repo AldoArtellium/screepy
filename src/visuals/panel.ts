@@ -231,7 +231,7 @@ function infoRows(room: Room): Entry[] {
     if (expansion?.spawnRoom === room.name) {
         rows.push({ label: "Expansion", text: `${expansion.roomName}${expansion.claimed ? " · claimed" : ""}` });
     }
-    const attack = Memory.military?.attack;
+    const attack = Memory.military?.attack ?? Memory.military?.target?.room;
     if (attack) rows.push({ label: "Attack", text: attack, color: BAD });
     return rows;
 }

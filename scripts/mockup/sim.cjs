@@ -58,6 +58,23 @@ const RAID_BODIES = {
 const ENEMY = opt("enemy", null);
 /** Global control level of the bot (default 1), e.g. 2 to allow a second room (expansion tests) */
 const GCL = Number(opt("gcl", 1));
+/**
+ * Fast-forwarded start (same idea as pserver-test.mjs --preset): "rcl4", "rcl5" or "rcl7" sets the controller
+ * level and adds a storage with energy, the extensions of the level on a checkerboard around the
+ * spawn and a container by each source, e.g. to test attacks without growing the room for 12000 ticks.
+ */
+const PRESETS = {
+  rcl4: { rcl: 4, extensions: 20, storageEnergy: 100000 },
+  rcl5: { rcl: 5, extensions: 30, storageEnergy: 150000 },
+  rcl7: { rcl: 7, extensions: 50, storageEnergy: 300000 }
+};
+const PRESET = opt("preset", null);
+/**
+ * Invader stronghold: "ROOM:LEVEL", e.g. --stronghold W7N4:1. An invader core (bunker template of the
+ * level) deploying 5 ticks later on the room's spawn spot: the engine builds its towers, ramparts and
+ * defenders (level 2+) and refills its towers.
+ */
+const STRONGHOLD = opt("stronghold", null);
 /** CPU limit of the bot (default: the mockup's, 100), e.g. 8 to drain the bucket and test throttling */
 const CPU_LIMIT = opt("cpu-limit", null);
 const OUT = opt("out");
@@ -148,6 +165,78 @@ async function setupEnemy(server, fixture, spec) {
   }
   log(`Enemy in ${room} (RCL ${rcl}): spawn ${spot.x},${spot.y}, ${placed.length} towers, ${ring} ring ramparts of ${ringHits} hits`);
   return { id: enemy.id, room };
+}
+
+/** Fast-forwarded room (see PRESETS) */
+async function applyPreset(server, fixture, spot, userId) {
+  const preset = PRESETS[PRESET];
+  if (!preset) throw new Error(`Unknown preset ${PRESET} (available: ${Object.keys(PRESETS).join(", ")})`);
+  const { db } = server.common.storage;
+  const r = fixture.rooms[ROOM];
+  const time = await server.world.gameTime;
+  const taken = new Set([spot.y * 50 + spot.x, ...r.objects.map((o) => o.y * 50 + o.x)]);
+  const free = (x, y) => x > 1 && x < 48 && y > 1 && y < 48 && (Number(r.terrain[y * 50 + x]) & 1) === 0 && !taken.has(y * 50 + x);
+  const insert = async (doc) => {
+    taken.add(doc.y * 50 + doc.x);
+    await db["rooms.objects"].insert({ room: ROOM, user: userId, notifyWhenAttacked: true, ...doc });
+  };
+  await db["rooms.objects"].update({ room: ROOM, type: "controller" }, { $set: { level: preset.rcl, progress: 0, downgradeTime: time + 20000 } });
+  const spots = [];
+  for (let radius = 2; radius <= 8; radius++) {
+    for (let dx = -radius; dx <= radius; dx++) {
+      for (let dy = -radius; dy <= radius; dy++) {
+        if (Math.max(Math.abs(dx), Math.abs(dy)) !== radius) continue;
+        const x = spot.x + dx;
+        const y = spot.y + dy;
+        if ((x + y) % 2 === (spot.x + spot.y) % 2 && free(x, y)) spots.push({ x, y });
+      }
+    }
+  }
+  const s = spots.shift();
+  await insert({ type: "storage", x: s.x, y: s.y, hits: 10000, hitsMax: 10000, store: { energy: preset.storageEnergy }, storeCapacity: 1000000 });
+  const capacity = preset.rcl >= 8 ? 200 : preset.rcl === 7 ? 100 : 50;
+  for (let i = 0; i < preset.extensions && spots.length; i++) {
+    const e = spots.shift();
+    await insert({ type: "extension", x: e.x, y: e.y, hits: 1000, hitsMax: 1000, off: false, store: { energy: capacity }, storeCapacityResource: { energy: capacity } });
+  }
+  for (const source of r.objects.filter((o) => o.type === "source")) {
+    let best = null;
+    for (let dx = -1; dx <= 1; dx++) {
+      for (let dy = -1; dy <= 1; dy++) {
+        const x = source.x + dx;
+        const y = source.y + dy;
+        if (!(dx || dy) || !free(x, y)) continue;
+        const d = Math.max(Math.abs(x - spot.x), Math.abs(y - spot.y));
+        if (!best || d < best.d) best = { x, y, d };
+      }
+    }
+    if (best) await insert({ type: "container", x: best.x, y: best.y, hits: 250000, hitsMax: 250000, store: {}, storeCapacity: 2000, nextDecayTime: time + 500 });
+  }
+  log(`Preset ${PRESET}: RCL ${preset.rcl}, ${preset.extensions} extensions, storage ${preset.storageEnergy}, source containers`);
+}
+
+/** Invader stronghold (see STRONGHOLD) */
+async function setupStronghold(server, fixture, spec) {
+  const [room, levelText] = spec.split(":");
+  const level = Number(levelText || 1);
+  const r = fixture.rooms[room];
+  if (!r) throw new Error(`Stronghold room ${room} is not in the fixture`);
+  const spot = findSpawnSpot(r.terrain, r.objects);
+  const { db } = server.common.storage;
+  const time = await server.world.gameTime;
+  await db.rooms.update({ _id: room }, { $set: { active: true } });
+  await db["rooms.objects"].insert({
+    type: "invaderCore", room, x: spot.x, y: spot.y, user: "2", level, templateName: `bunker${level}`, strongholdId: `test${room}`,
+    hits: 100000, hitsMax: 100000, deployTime: time + 5, depositType: "silicon", effects: [], actionLog: {}
+  });
+  log(`Stronghold level ${level} in ${room} at ${spot.x},${spot.y}`);
+  return { room };
+}
+
+async function strongholdStatus(server, stronghold) {
+  const objects = await server.common.storage.db["rooms.objects"].find({ room: stronghold.room, user: "2" });
+  const count = (type) => objects.filter((o) => o.type === type).length;
+  return { cores: count("invaderCore"), towers: count("tower"), ramparts: count("rampart"), creeps: count("creep") };
 }
 
 async function enemyStatus(server, enemy) {
@@ -345,6 +434,8 @@ async function main() {
   const { env, pubsub } = server.common.storage;
   // The enemy first: adding a second user resets the first one's Memory
   const enemy = ENEMY ? await setupEnemy(server, fixture, ENEMY) : null;
+  if (PRESET) await applyPreset(server, fixture, spot, user.id);
+  const stronghold = STRONGHOLD ? await setupStronghold(server, fixture, STRONGHOLD) : null;
   await env.set(env.keys.MEMORY + user.id, MEMORY_INIT);
   if (CPU_LIMIT !== null) {
     await server.common.storage.db.users.update({ _id: user.id }, { $set: { cpu: Number(CPU_LIMIT), cpuAvailable: 10000 } });
@@ -453,6 +544,7 @@ async function main() {
         `| cpu avg ${(cpuSum / Math.max(1, cpuSamples)).toFixed(2)}`,
         Object.keys(w.ownedRooms).length > 1 ? `| rooms ${JSON.stringify(w.ownedRooms)}` : "",
         enemy ? `| enemy ${JSON.stringify(await enemyStatus(server, enemy))}` : "",
+        stronghold ? `| stronghold ${JSON.stringify(await strongholdStatus(server, stronghold))}` : "",
         CPU_LIMIT !== null ? `| bucket ${(await server.common.storage.db.users.findOne({ _id: user.id })).cpuAvailable | 0}` : "",
         `| ${(tick / elapsed).toFixed(1)} ticks/s`,
         errorCount ? `| ${errorCount} console errors` : ""
@@ -506,6 +598,7 @@ async function main() {
         roleCpu.map((r) => `${r.role} ${r.perTick.toFixed(2)}/${r.perCreep.toFixed(3)}`).join(", ")
     );
   if (enemy) console.log(`Enemy ${enemy.room}: ${JSON.stringify(await enemyStatus(server, enemy))}`);
+  if (stronghold) console.log(`Stronghold ${stronghold.room}: ${JSON.stringify(await strongholdStatus(server, stronghold))}`);
   for (const raid of raidLog) {
     console.log(`Raid tick ${raid.tick} (${raid.bodies.join("+")}): ${raid.over ? `cleared after ${raid.over - raid.tick} ticks` : "still alive at the end"}`);
   }
@@ -553,6 +646,7 @@ async function main() {
     cpu: { avg: cpuAvg, max: cpuMax, intentsPerTick, officialEstimate: officialCpu, byRole: roleCpu },
     raids: raidLog,
     enemy: enemy ? await enemyStatus(server, enemy) : null,
+    stronghold: stronghold ? await strongholdStatus(server, stronghold) : null,
     stats,
     errors: moduleErrors,
     consoleErrors,

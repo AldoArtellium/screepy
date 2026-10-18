@@ -11,7 +11,7 @@ export type Verdict = "safe" | "rescue" | "doomed";
 /** Ticks a creep must be able to survive on a tile before it may step there */
 const SURVIVAL_TICKS = 3;
 
-function towerPower(range: number): number {
+export function towerPower(range: number): number {
     const r = Math.min(Math.max(range, TOWER_OPTIMAL_RANGE), TOWER_FALLOFF_RANGE);
     return 1 - ((r - TOWER_OPTIMAL_RANGE) / (TOWER_FALLOFF_RANGE - TOWER_OPTIMAL_RANGE)) * TOWER_FALLOFF;
 }

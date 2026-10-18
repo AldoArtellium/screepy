@@ -44,8 +44,8 @@ const RETREAT_HITS = 0.6;
 const HEALER_PRIORITY = 1;
 const ATTACKER_PRIORITY = 2;
 const READY_HITS = 0.95;
-const TARGET_ORDER: StructureConstant[] = [STRUCTURE_TOWER, STRUCTURE_SPAWN, STRUCTURE_EXTENSION, STRUCTURE_STORAGE, STRUCTURE_TERMINAL];
-const IGNORED: StructureConstant[] = [STRUCTURE_CONTROLLER, STRUCTURE_RAMPART, STRUCTURE_WALL, STRUCTURE_ROAD, STRUCTURE_CONTAINER, STRUCTURE_EXTRACTOR, STRUCTURE_KEEPER_LAIR, STRUCTURE_PORTAL, STRUCTURE_INVADER_CORE];
+const TARGET_ORDER: StructureConstant[] = [STRUCTURE_TOWER, STRUCTURE_INVADER_CORE, STRUCTURE_SPAWN, STRUCTURE_EXTENSION, STRUCTURE_STORAGE, STRUCTURE_TERMINAL];
+const IGNORED: StructureConstant[] = [STRUCTURE_CONTROLLER, STRUCTURE_RAMPART, STRUCTURE_WALL, STRUCTURE_ROAD, STRUCTURE_CONTAINER, STRUCTURE_EXTRACTOR, STRUCTURE_KEEPER_LAIR, STRUCTURE_PORTAL];
 
 function hitsRatio(creep: Creep): number {
     return creep.hits / creep.hitsMax;
@@ -56,8 +56,8 @@ function members(name: string): { attacker?: Creep; healer?: Creep } {
     return { attacker: all.find(c => c.memory.role === DUO_ATTACKER), healer: all.find(c => c.memory.role === DUO_HEALER) };
 }
 
-/** Structure the duo goes for in the target room */
-function pickTarget(room: Room, from: RoomPosition): Structure | null {
+/** Structure a squad goes for in the target room: towers, the invader core, spawns, then the rest */
+export function pickTarget(room: Room, from: RoomPosition): Structure | null {
     const hostile = room.find(FIND_HOSTILE_STRUCTURES).filter(s => !IGNORED.includes(s.structureType));
     for (const type of TARGET_ORDER) {
         const target = from.findClosestByRange(hostile.filter(s => s.structureType === type));
@@ -86,7 +86,7 @@ function breachMatrix(room: Room, target: Structure): CostMatrix {
     return matrix;
 }
 
-function isMine(s: Structure): boolean {
+export function isMine(s: Structure): boolean {
     return "my" in s && !!(s as OwnedStructure).my;
 }
 
@@ -110,7 +110,7 @@ function avoiding(matrix: CostMatrix | boolean, roomName: string, avoid?: RoomPo
     return copy;
 }
 
-function travelMatrix(roomName: string): CostMatrix | boolean {
+export function travelMatrix(roomName: string): CostMatrix | boolean {
     const room = Game.rooms[roomName];
     if (!room) return true;
     const cached = travelMatrices.get(roomName);
