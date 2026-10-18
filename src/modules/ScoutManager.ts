@@ -25,6 +25,9 @@ const SCOUT_CONFIG = {
     MAX_SCOUTS_PER_ROOM: 1,
     /** Distance to scout from each owned room */
     SCOUT_RANGE: 3,
+    /** From RCL 4 (expansion): candidates further away (expansion targets beyond 3 rooms score lower) */
+    EXPANSION_SCOUT_RANGE: 5,
+    EXPANSION_RCL: 4,
     /** Minimum RCL to start scouting (remote mining starts at RCL 1, like Hivemind) */
     MIN_RCL: 1,
     /** Ticks between scout spawns */
@@ -39,8 +42,11 @@ class ScoutManager {
     private unreachable: Map<string, number> = new Map();
 
     private roomsToScout(homeRoom: string): string[] {
+        const level = Game.rooms[homeRoom]?.controller?.level ?? 0;
+        const range =
+            level >= SCOUT_CONFIG.EXPANSION_RCL ? SCOUT_CONFIG.EXPANSION_SCOUT_RANGE : SCOUT_CONFIG.SCOUT_RANGE;
         return intelManager
-            .getRoomsNeedingScouting(homeRoom, SCOUT_CONFIG.SCOUT_RANGE)
+            .getRoomsNeedingScouting(homeRoom, range)
             .filter(r => (this.unreachable.get(r) ?? 0) < Game.time);
     }
 
@@ -104,8 +110,8 @@ class ScoutManager {
 
             // Assign closest unvisited room
             const sorted = roomsToScout.sort((a, b) => {
-                const distA = intelManager.getRoomDistance(scout.room.name, a);
-                const distB = intelManager.getRoomDistance(scout.room.name, b);
+                const distA = Game.map.getRoomLinearDistance(scout.room.name, a);
+                const distB = Game.map.getRoomLinearDistance(scout.room.name, b);
                 return distA - distB;
             });
 

@@ -9,9 +9,10 @@
 
 import { squadsOf } from "../expansion/Expansion";
 import { intelManager } from "../modules/IntelManager";
-import { isRoomUnderAttack } from "../modules/RoomIntel";
+import { hasInvaderCore, isRoomUnderAttack } from "../modules/RoomIntel";
 import { roomPlanner } from "../planner/RoomPlanner";
 import { log } from "../utils/logger";
+import { roomsInRange } from "../utils/rooms";
 import { countStat } from "../utils/stats";
 
 export interface RemoteSource {
@@ -157,7 +158,7 @@ function pathFor(home: Room, sourcePos: RoomPosition): RoomPosition[] | null {
 
 /** Remote room candidates of a home room: known, not owned, not source keeper, within 3 rooms */
 function candidateRooms(home: Room): string[] {
-    return intelManager.getRoomsInRange(home.name, MAX_ROOM_DISTANCE).filter(roomName => {
+    return roomsInRange(home.name, MAX_ROOM_DISTANCE).filter(roomName => {
         const intel = intelManager.getIntel(roomName);
         if (!intel?.sources?.length) return false;
         if (intel.owner || intel.hasSourceKeepers) return false;
@@ -309,7 +310,7 @@ export function isRemoteUnderAttack(source: RemoteSource): boolean {
 }
 
 export function remoteHasInvaderCore(source: RemoteSource): boolean {
-    return !!Memory.rooms?.[source.room]?.enemies?.hasInvaderCore;
+    return hasInvaderCore(source.room);
 }
 
 export interface EnemyData {

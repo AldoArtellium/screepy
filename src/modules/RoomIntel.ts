@@ -63,3 +63,8 @@ export function isRoomUnderAttack(roomName: string): boolean {
     const enemies = Memory.rooms?.[roomName]?.enemies;
     return !!enemies && !enemies.safe && (enemies.expires ?? 0) > Game.time;
 }
+
+/** An invader core was seen in the room (kept out of sight until the room is seen without it) */
+export function hasInvaderCore(roomName: string): boolean {
+    return !!Memory.rooms?.[roomName]?.enemies?.hasInvaderCore;
+}

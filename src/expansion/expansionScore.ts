@@ -9,6 +9,7 @@
  */
 
 import { intelManager } from "../modules/IntelManager";
+import { isHighway, roomStatus } from "../utils/rooms";
 
 const SCORE_CACHE_TTL = 20000;
 const MAX_ROOM_DISTANCE = 3;
@@ -17,11 +18,6 @@ const cache: Map<string, { tick: number; score: number }> = new Map();
 
 function exitsOf(roomName: string): string[] {
     return Object.values(Game.map.describeExits(roomName) ?? {}) as string[];
-}
-
-function isHighway(roomName: string): boolean {
-    const match = /^[WE](\d+)[NS](\d+)$/.exec(roomName);
-    return !!match && (Number(match[1]) % 10 === 0 || Number(match[2]) % 10 === 0);
 }
 
 function myRoomNames(): string[] {
@@ -37,7 +33,7 @@ export function harvestRoomScore(roomName: string): number {
     let sourceFactor = intel.hasSourceKeepers ? 0.15 : 0.25;
     if (intel.owner && intel.owner !== "Invader" && intel.owner !== Memory.username) return -0.5;
     if (intel.reserver && intel.reserver !== "Invader" && intel.reserver !== Memory.username) sourceFactor = 0.1;
-    return intel.sourceCount * sourceFactor;
+    return intelManager.sourceCount(roomName) * sourceFactor;
 }
 
 /** Exit, wall and swamp tiles (walls and swamps inside 1..48, exits = non-wall border tiles) */
@@ -60,18 +56,13 @@ function terrainCounts(roomName: string): { exit: number; wall: number; swamp: n
 function calculate(roomName: string): number {
     const intel = intelManager.getIntel(roomName);
     if (!intel?.controllerPos || intel.hasSourceKeepers) return 0;
-    let status = "normal";
-    try {
-        status = Game.map.getRoomStatus(roomName)?.status ?? "normal";
-    } catch {
-        // unknown: keep normal
-    }
-    if (status === "closed") return 0;
+    if (roomStatus(roomName) === "closed") return 0;
 
-    let score = 2 * intel.sourceCount - 2;
+    let score = 2 * intelManager.sourceCount(roomName) - 2;
     const mine = myRoomNames();
     if (intel.mineralType) {
-        const owned = mine.filter(r => intelManager.getIntel(r)?.mineralType === intel.mineralType).length;
+        // Our rooms are always visible: their mineral is read directly
+        const owned = mine.filter(r => Game.rooms[r].find(FIND_MINERALS)[0]?.mineralType === intel.mineralType).length;
         score += 1 / (owned + 1);
     }
 
