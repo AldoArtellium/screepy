@@ -54,7 +54,8 @@ for (const room of rooms) {
     const minerals = objects.filter(o => o.type === "mineral");
 
     // Every variation, like RoomPlanner over several ticks; the best score wins
-    const input = { roomName: room, terrain, controller, sources, minerals };
+    const spawn = objects.find(o => o.type === "spawn");
+    const input = { roomName: room, terrain, controller, sources, minerals, ...(spawn && { spawn }) };
     const variations = listVariations(input);
     mocks.resetCpu();
     let best = null;
@@ -144,6 +145,21 @@ for (const room of rooms) {
     console.log(`${room}: ${errors.length ? "FAIL " + errors.join("; ") : "PASS"} - best ${best.key} ${best.score.toFixed(3)} ` +
         `(first ${scores[0]}), ${variations.length} variations in ${ms.toFixed(0)} ms, ${pathCalls} paths, ` +
         `${plan.count("extension")} ext, ${plan.count("spawn")} spawns, ${plan.count("tower")} towers, ${plan.count("road")} roads`);
+    // Defense geometry: ramparts, safe area, tower distances to the center (in build order) and the
+    // tower damage factor on the core (spawns + storage), first 1 / 3 / 6 towers
+    const rng = (a, b) => Math.max(Math.abs(a.x - b.x), Math.abs(a.y - b.y));
+    const falloff = r => (r <= 5 ? 1 : r >= 20 ? 0.25 : 1 - ((r - 5) / 15) * 0.75);
+    const ordered = Array.from({ length: 6 }, (_, i) => plan.getLocations("tower." + i)[0]).filter(Boolean);
+    const core = [...plan.getLocations("spawn"), ...plan.getLocations("storage")];
+    const cover = n => (sumOf(core, c => sumOf(ordered.slice(0, n), t => falloff(rng(t, c)))) / core.length).toFixed(2);
+    const ramparts = plan.getLocations("rampart");
+    const rampCover = (sumOf(ramparts, r => sumOf(ordered, t => falloff(rng(t, r)))) / Math.max(1, ramparts.length)).toFixed(2);
+    console.log(`  defense: ${plan.count("rampart")} ramparts (${plan.count("rampart.ramp")} on-ramps), ${plan.count("safe")} safe tiles, ` +
+        `towers at ${ordered.map(t => rng(t, center)).join("/")} from center, core cover 1/3/6 towers ${cover(1)}/${cover(3)}/${cover(6)}, rampart cover ${rampCover}`);
     if (errors.length) failures++;
+}
+
+function sumOf(items, f) {
+    return items.reduce((s, i) => s + f(i), 0);
 }
 process.exit(failures ? 1 : 0);
