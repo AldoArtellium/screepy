@@ -6,7 +6,7 @@
  */
 
 import { buildBody, MoveMode } from "../core/bodyBuilder";
-import { effectiveEnergy } from "../core/roomState";
+import { duoCreeps, effectiveEnergy } from "../core/roomState";
 import { performRecycle } from "../roles/recycle";
 import { registerRole } from "../roles/registry";
 import type { SpawnOption, SpawnRole } from "../spawning/spawnRoles";
@@ -93,7 +93,7 @@ function duoMissing(roomName: string): { name: string; role: string } | null {
     for (const [name, duo] of Object.entries(militaryMemory().duos)) {
         if (duo.spawnRoom !== roomName) continue;
         for (const role of [DUO_HEALER, DUO_ATTACKER]) {
-            if (!_.some(Game.creeps, c => c.memory.duo === name && c.memory.role === role)) return { name, role };
+            if (!duoCreeps(name).some(c => c.memory.role === role)) return { name, role };
         }
     }
     return null;

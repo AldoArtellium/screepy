@@ -10,6 +10,7 @@
  * Our design; see docs/superpowers/roadmap.md (J7) and Harabi's "Combat Blob" log for the ideas.
  */
 
+import { duoCreeps } from "../core/roomState";
 import { trafficManager } from "../modules/TrafficManager";
 import { log } from "../utils/logger";
 import { countStat } from "../utils/stats";
@@ -51,7 +52,7 @@ function hitsRatio(creep: Creep): number {
 }
 
 function members(name: string): { attacker?: Creep; healer?: Creep } {
-    const all = _.filter(Game.creeps, c => c.memory.duo === name && !c.spawning);
+    const all = duoCreeps(name).filter(c => !c.spawning);
     return { attacker: all.find(c => c.memory.role === DUO_ATTACKER), healer: all.find(c => c.memory.role === DUO_HEALER) };
 }
 

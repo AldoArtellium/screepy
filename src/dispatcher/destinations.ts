@@ -8,6 +8,7 @@ import {
     activeParts,
     clearOrder,
     controllerContainer,
+    controllerRefillPathLength,
     creepsByRole,
     creepsWithOrder,
     hasEnemies,
@@ -192,21 +193,6 @@ function upgradeWork(room: Room): number {
     return activeParts(creepsByRole(room.name, "upgrader"), WORK);
 }
 
-/** Path length from the storage location to the controller container (cached long, like Hivemind) */
-const refillPathLength: Map<string, { until: number; length: number }> = new Map();
-function controllerRefillPathLength(room: Room, container: StructureContainer): number {
-    const cached = refillPathLength.get(room.name);
-    if (cached && cached.until > Game.time) return cached.length;
-    const from = storageLocation(room);
-    let length = 1;
-    if (from) {
-        const result = PathFinder.search(from, { pos: container.pos, range: 1 }, { maxRooms: 1 });
-        if (!result.incomplete) length = result.path.length;
-    }
-    refillPathLength.set(room.name, { until: Game.time + 5000, length });
-    return length;
-}
-
 /** Controller container: 4, lowered when it needs little */
 class ControllerContainerDestination implements TaskProvider {
     readonly type = "container";
@@ -226,7 +212,7 @@ class ControllerContainerDestination implements TaskProvider {
             const incoming = _.sum(creepsWithOrder(room, this.type, container.id), c => c.store.energy);
             const needed =
                 container.store.getFreeCapacity(RESOURCE_ENERGY) +
-                upgradeWork(room) * UPGRADE_CONTROLLER_POWER * controllerRefillPathLength(room, container) -
+                upgradeWork(room) * UPGRADE_CONTROLLER_POWER * controllerRefillPathLength(room) -
                 incoming;
             const capacity = container.store.getCapacity(RESOURCE_ENERGY);
             let priority = 4;

@@ -45,10 +45,12 @@ interface TickCache {
     tick: number;
     byRole: Map<string, Creep[]>;
     byOrder: Map<string, Creep[]>;
+    /** Creeps by `duo:<name>` / `squad:<name>` */
+    byGroup: Map<string, Creep[]>;
     values: Map<string, unknown>;
 }
 
-let cache: TickCache = { tick: -1, byRole: new Map(), byOrder: new Map(), values: new Map() };
+let cache: TickCache = { tick: -1, byRole: new Map(), byOrder: new Map(), byGroup: new Map(), values: new Map() };
 
 function orderKey(roomName: string, type: string, target: string | undefined): string {
     return `${roomName}|${type}|${target ?? ""}`;
@@ -56,7 +58,7 @@ function orderKey(roomName: string, type: string, target: string | undefined): s
 
 function refresh(): TickCache {
     if (cache.tick === Game.time) return cache;
-    cache = { tick: Game.time, byRole: new Map(), byOrder: new Map(), values: new Map() };
+    cache = { tick: Game.time, byRole: new Map(), byOrder: new Map(), byGroup: new Map(), values: new Map() };
     for (const name in Game.creeps) {
         const creep = Game.creeps[name];
         const home = creep.memory.room ?? creep.room.name;
@@ -66,8 +68,16 @@ function refresh(): TickCache {
         if (list) list.push(creep);
         else cache.byRole.set(key, [creep]);
         indexOrder(creep, creep.memory.order);
+        if (creep.memory.duo) indexGroup(`duo:${creep.memory.duo}`, creep);
+        if (creep.memory.squad) indexGroup(`squad:${creep.memory.squad}`, creep);
     }
     return cache;
+}
+
+function indexGroup(key: string, creep: Creep): void {
+    const list = cache.byGroup.get(key);
+    if (list) list.push(creep);
+    else cache.byGroup.set(key, [creep]);
 }
 
 function indexOrder(creep: Creep, order: Order | undefined): void {
@@ -98,6 +108,16 @@ export function tickCache<T>(key: string, compute: () => T): T {
 /** Creeps of a home room with a role, spawning ones included */
 export function creepsByRole(roomName: string, role: string): Creep[] {
     return refresh().byRole.get(`${roomName}|${role}`) ?? [];
+}
+
+/** Creeps of a military duo (memory.duo), spawning ones included */
+export function duoCreeps(duo: string): Creep[] {
+    return refresh().byGroup.get(`duo:${duo}`) ?? [];
+}
+
+/** Creeps of an expansion squad (memory.squad), spawning ones included */
+export function squadCreeps(squad: string): Creep[] {
+    return refresh().byGroup.get(`squad:${squad}`) ?? [];
 }
 
 /** Creeps in the room holding an order of this type on this target */
@@ -170,6 +190,25 @@ export function storageLocation(room: Room): RoomPosition | null {
         if (center) return center;
         return room.storage?.pos ?? mySpawns(room)[0]?.pos ?? null;
     });
+}
+
+/**
+ * Path length from the storage location to the controller container, cached 5000 ticks (like
+ * Hivemind) per pair of positions. 1 without container: nothing cached, so the real length counts
+ * as soon as the container is built.
+ */
+const refillPaths: Map<string, { until: number; key: string; length: number }> = new Map();
+export function controllerRefillPathLength(room: Room): number {
+    const container = controllerContainer(room);
+    const from = storageLocation(room);
+    if (!container || !from) return 1;
+    const key = `${from.x},${from.y}:${container.pos.x},${container.pos.y}`;
+    const cached = refillPaths.get(room.name);
+    if (cached && cached.key === key && cached.until > Game.time) return cached.length;
+    const result = PathFinder.search(from, { pos: container.pos, range: 1 }, { maxRooms: 1 });
+    const length = result.incomplete ? 1 : result.path.length;
+    refillPaths.set(room.name, { until: Game.time + 5000, key, length });
+    return length;
 }
 
 /** Energy in storage + transporters (Hivemind getCurrentResourceAmount) */
