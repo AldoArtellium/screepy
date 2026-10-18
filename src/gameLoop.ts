@@ -7,6 +7,7 @@ import { expansionModule } from "expansion/Expansion";
 import { militaryModule } from "military/military";
 import { intelManagerModule } from "modules/IntelManager";
 import { marketManagerModule } from "modules/MarketManager";
+import { terminalTransfersModule } from "modules/TerminalTransfers";
 import { memoryCleanupModule } from "modules/MemoryCleanup";
 import { miningStatsModule } from "modules/MiningStats";
 import { roomIntelModule } from "modules/RoomIntel";
@@ -47,8 +48,10 @@ export const gameLoop = () => {
     { name: "Expansion", fn: expansionModule, runEvery: 5, priority: "high" },
     // Attacks (Memory.military.attack): duos moving and fighting as one
     { name: "Military", fn: militaryModule, priority: "always" },
-    // Nothing to trade before a terminal (RCL 6): back with the terminal milestone
-    { name: "MarketManager", fn: marketManagerModule, runEvery: 20, priority: "low", disabled: true },
+    // Market (Hivemind trade): sells surpluses, buys missing base minerals; nothing before a terminal
+    { name: "MarketManager", fn: marketManagerModule, runEvery: 20, priority: "low" },
+    // Terminal sends between owned rooms (Hivemind resources process); nothing below 2 terminals
+    { name: "TerminalTransfers", fn: terminalTransfersModule, runEvery: 5 },
     // Memory of dead creeps (every 100 ticks) and unused rooms (every 1000)
     { name: "MemoryCleanup", fn: memoryCleanupModule },
 

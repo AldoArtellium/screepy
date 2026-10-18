@@ -167,6 +167,20 @@ export function sourceContainer(source: Source): StructureContainer | null {
     });
 }
 
+/** Container next to a mineral (planned 'container.mineral' when the room has a plan), range 1 */
+export function mineralContainer(mineral: Mineral): StructureContainer | null {
+    return tickCache(`mineralContainer:${mineral.id}`, () => {
+        const room = Game.rooms[mineral.pos.roomName];
+        if (!room) return null;
+        const plan = roomPlanner.getPlan(room.name);
+        return (
+            structuresOfType<StructureContainer>(room, STRUCTURE_CONTAINER).find(
+                c => c.pos.isNearTo(mineral) && (!plan || plan.has(c.pos, "container.mineral"))
+            ) ?? null
+        );
+    });
+}
+
 /** Container of the controller (planned 'container.controller', else any container within 3) */
 export function controllerContainer(room: Room): StructureContainer | null {
     return tickCache(`controllerContainer:${room.name}`, () => {
