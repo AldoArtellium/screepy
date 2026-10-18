@@ -7,6 +7,7 @@ import { expansionModule } from "expansion/Expansion";
 import { militaryModule } from "military/military";
 import { intelManagerModule } from "modules/IntelManager";
 import { marketManagerModule } from "modules/MarketManager";
+import { memoryCleanupModule } from "modules/MemoryCleanup";
 import { roomIntelModule } from "modules/RoomIntel";
 import { scoutManagerModule } from "modules/ScoutManager";
 import { spawnManagerModule } from "modules/SpawnManager";
@@ -44,7 +45,10 @@ export const gameLoop = () => {
     { name: "Expansion", fn: expansionModule, runEvery: 5, priority: "high" },
     // Attacks (Memory.military.attack): duos moving and fighting as one
     { name: "Military", fn: militaryModule, priority: "always" },
-    { name: "MarketManager", fn: marketManagerModule, runEvery: 20, priority: "low" },
+    // Nothing to trade before a terminal (RCL 6): back with the terminal milestone
+    { name: "MarketManager", fn: marketManagerModule, runEvery: 20, priority: "low", disabled: true },
+    // Memory of dead creeps (every 100 ticks) and unused rooms (every 1000)
+    { name: "MemoryCleanup", fn: memoryCleanupModule },
 
     // Resolves all movement requests issued above (must run after every creep-moving module)
     { name: "TrafficManager", fn: trafficManagerModule, mandatory: true }

@@ -4,7 +4,7 @@
  * Ported from Hivemind (MIT), src/process/strategy/expand.ts, reclaim-manager.ts.
  * See docs/hivemind/hivemind-expansion.md.
  *
- * - May expand: a room at RCL 4+, fewer owned rooms than the GCL, average CPU below 80% of the
+ * - May expand: a room at RCL 5+ (where the squad spawns), fewer owned rooms than the GCL, average CPU below 80% of the
  *   limit (100% with a single room, Hivemind's quirk). Target: best modified expansion score among
  *   scouted claimable rooms nobody owns, reachable from an RCL 5+ room with a spawn (<= 10 rooms).
  * - Squad "expand" from that room: a claimer and 2 pioneers (+ a defender when the target has
@@ -35,6 +35,8 @@ declare global {
             current?: { roomName: string; spawnRoom: string; score: number; started: number; claimed?: number; pathBlocked?: number };
             failed: { roomName: string; time: number }[];
             squads: { [name: string]: Squad };
+            /** No target found: next search */
+            nextTry?: number;
         };
     }
     interface CreepMemory {
@@ -53,6 +55,7 @@ const FAILURE_MEMORY = 1000000;
 const MAX_ROUTE_ROOMS = 10;
 const SUPPORT_ENERGY = 50000;
 const MAX_SUPPORT_SQUADS = 5;
+const NO_TARGET_RETRY = 500;
 
 export function expansionMemory(): NonNullable<Memory["expand"]> {
     if (!Memory.expand) Memory.expand = { failed: [], squads: {} };
@@ -92,7 +95,8 @@ function findSpawnRoom(target: string): string | null {
 
 function mayExpand(): boolean {
     const rooms = myRooms();
-    if (!rooms.some(r => r.controller!.level >= 4)) return false;
+    // Same RCL as findSpawnRoom: from RCL 4 the target search ran every 5 ticks without any origin
+    if (!rooms.some(r => r.controller!.level >= 5)) return false;
     if (rooms.length >= Game.gcl.level) return false;
     const cpu = Memory.stats?.cpuAvg;
     if (cpu === undefined) return false;
@@ -222,6 +226,10 @@ export function squadsOf(roomName: string): [string, Squad][] {
 export const expansionModule = (): void => {
     const memory = expansionMemory();
     if (Game.time % 5000 === 0) memory.failed = memory.failed.filter(f => Game.time - f.time <= FAILURE_MEMORY);
-    if (!memory.current && mayExpand()) chooseTarget();
+    if (!memory.current && Game.time >= (memory.nextTry ?? 0) && mayExpand()) {
+        chooseTarget();
+        // No target yet (scouting incomplete, none reachable): look again later
+        if (!memory.current) memory.nextTry = Game.time + NO_TARGET_RETRY;
+    }
     if (memory.current) manageCurrent();
 };

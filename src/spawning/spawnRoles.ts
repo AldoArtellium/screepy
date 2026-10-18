@@ -464,7 +464,9 @@ function guardianIsRanged(room: Room): boolean {
 }
 
 /**
- * Owned room defense (Hivemind spawn role "room-defense"): a brawler below RCL 4; from RCL 4, while
+ * Owned room defense (Hivemind spawn role "room-defense"): a brawler below RCL 4, also during a safe
+ * mode (Hivemind waits for its last 500 ticks, but the first room's 20000-tick safe mode let an early
+ * invader live its whole life: our attacks still work in safe mode); from RCL 4, while
  * enemies are at least NORMAL, up to 5 guardians, and up to 5 builders to keep the ramparts up when
  * 10000 energy is available.
  */
@@ -477,7 +479,6 @@ const roomDefense: SpawnRole = {
         const controller = room.controller!;
         if (
             controller.level < 4 &&
-            (controller.safeMode ?? 0) <= 500 &&
             hasEnemies(room) &&
             creepsByRole(room.name, "brawler").length < 2
         ) {
