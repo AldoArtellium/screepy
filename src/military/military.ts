@@ -1,43 +1,31 @@
 /**
- * Offense, first step: `Memory.military.attack = "<room>"` sends a duo from the closest RCL 4+
- * room with a spawn; the mission ends when the room has no spawn and no tower left, or after the
- * duo lost 10 creeps. Automatic target selection comes later (Harabi's ROI: threat / elimination cost).
- * Our design; see docs/superpowers/roadmap.md (J7).
+ * Offense: `Memory.military.attack = "<room>"` (by hand), else an automatic target (targets.ts:
+ * strongholds near our rooms; player rooms only with `Memory.military.auto = true`), sends a duo or
+ * a quad (sizing.ts, `Memory.military.squad` to force one) from the closest RCL 4+ room with a spawn.
+ * The mission ends when the room has no spawn, no tower and no invader core left, or after the
+ * squad lost 10 creeps. Our design; see docs/superpowers/roadmap.md (J7).
  */
 
-import { buildBody, MoveMode } from "../core/bodyBuilder";
-import { duoCreeps, effectiveEnergy } from "../core/roomState";
+import { duoCreeps, effectiveEnergy, quadCreeps } from "../core/roomState";
 import { performRecycle } from "../roles/recycle";
 import { registerRole } from "../roles/registry";
 import type { SpawnOption, SpawnRole } from "../spawning/spawnRoles";
 import { log } from "../utils/logger";
 import { DUO_ATTACKER, DUO_HEALER, DuoMemory, runDuo } from "./duo";
+import { hostileRoom, militaryMemory, updateMilitaryIntel } from "./intel";
+import { QUAD_ATTACKER, QUAD_HEALER, QUAD_ROSTER, runQuad } from "./quad";
+import { duoAttackerBody, duoHealerBody, planSquad, quadAttackerBody, quadHealerBody } from "./sizing";
+import { chooseAutoTarget } from "./targets";
 
-declare global {
-    interface Memory {
-        military?: {
-            /** Room to attack (set by hand for now) */
-            attack?: string;
-            duos: { [name: string]: DuoMemory };
-            /** Lowest RCL of the attacking room (default 4; lower it to test sooner) */
-            minRcl?: number;
-            /** Finished missions */
-            log?: { room: string; result: "success" | "abandoned"; time: number; losses: number }[];
-        };
-    }
-}
+export { militaryMemory } from "./intel";
 
 /** Draining towers costs creeps: give up after this many */
 const MAX_LOSSES = 10;
 const MIN_ENERGY = 2000;
 const MAX_ROUTE_ROOMS = 10;
+const AUTO_TARGET_EVERY = 100;
 
-export function militaryMemory(): NonNullable<Memory["military"]> {
-    if (!Memory.military) Memory.military = { duos: {} };
-    return Memory.military;
-}
-
-/** Closest RCL 4+ room with a spawn, and the room the duo heals up in before the target */
+/** Closest RCL 4+ room with a spawn, and the room the squad heals up in before the target */
 function findOrigin(target: string): { spawnRoom: string; stagingRoom: string } | null {
     let best: { spawnRoom: string; stagingRoom: string; length: number } | null = null;
     const minRcl = militaryMemory().minRcl ?? 4;
@@ -51,41 +39,110 @@ function findOrigin(target: string): { spawnRoom: string; stagingRoom: string } 
     return best;
 }
 
-function finish(name: string, duo: DuoMemory, result: "success" | "abandoned"): void {
+/** Room under attack: set by hand, else the automatic target */
+export function currentTarget(): string | undefined {
     const memory = militaryMemory();
-    memory.log = [...(memory.log ?? []).slice(-9), { room: duo.targetRoom, result, time: Game.time, losses: duo.losses }];
-    delete memory.duos[name];
-    if (memory.attack === duo.targetRoom) delete memory.attack;
-    log.info("Military", `Attack on ${duo.targetRoom}: ${result} (${duo.losses} creeps lost)`);
+    return memory.attack ?? memory.target?.room;
 }
 
+function finish(
+    kind: "duo" | "quad",
+    name: string,
+    mission: { targetRoom: string; losses: number },
+    result: "success" | "abandoned"
+): void {
+    const memory = militaryMemory();
+    memory.log = [
+        ...(memory.log ?? []).slice(-9),
+        { room: mission.targetRoom, result, time: Game.time, losses: mission.losses, squad: kind }
+    ];
+    if (kind === "duo") delete memory.duos[name];
+    else delete memory.quads?.[name];
+    if (memory.attack === mission.targetRoom) delete memory.attack;
+    if (memory.target?.room === mission.targetRoom) delete memory.target;
+    log.info("Military", `Attack on ${mission.targetRoom} (${kind}): ${result} (${mission.losses} creeps lost)`);
+}
+
+/** Visible room without spawn, tower or invader core left */
 function isNeutralized(roomName: string): boolean {
     const room = Game.rooms[roomName];
     if (!room) return false;
-    return room.find(FIND_HOSTILE_STRUCTURES, { filter: s => s.structureType === STRUCTURE_SPAWN || s.structureType === STRUCTURE_TOWER }).length === 0;
+    const left = room.find(FIND_HOSTILE_STRUCTURES, {
+        filter: s =>
+            s.structureType === STRUCTURE_SPAWN ||
+            s.structureType === STRUCTURE_TOWER ||
+            s.structureType === STRUCTURE_INVADER_CORE
+    });
+    return left.length === 0;
+}
+
+/** A duo that lost a pair against a room now sized for a quad (unless the squad type is forced) */
+function shouldUpgrade(duo: DuoMemory): boolean {
+    const memory = militaryMemory();
+    if (memory.squad || duo.losses < 2 || duo.losses >= MAX_LOSSES || !Game.rooms[duo.spawnRoom]) return false;
+    const refills = (hostileRoom(duo.targetRoom)?.coreLevel ?? 0) > 0;
+    return (
+        planSquad(duo.targetRoom, Game.rooms[duo.spawnRoom].energyCapacityAvailable, undefined, refills).type === "quad"
+    );
+}
+
+function hasMission(target: string): boolean {
+    const memory = militaryMemory();
+    return !!memory.duos[`duo.${target}`] || !!memory.quads?.[`quad.${target}`];
+}
+
+function startMission(target: string): void {
+    const memory = militaryMemory();
+    const origin = findOrigin(target);
+    if (!origin) return;
+    const refills = (hostileRoom(target)?.coreLevel ?? 0) > 0;
+    const plan = planSquad(target, Game.rooms[origin.spawnRoom].energyCapacityAvailable, memory.squad, refills);
+    if (!plan.feasible && !memory.attack) {
+        delete memory.target;
+        return;
+    }
+    const base = { ...origin, targetRoom: target, members: [], losses: 0 };
+    if (plan.type === "duo") memory.duos[`duo.${target}`] = { ...base, state: "forming" };
+    else memory.quads = { ...memory.quads, [`quad.${target}`]: { ...base, state: "forming" } };
+    log.info(
+        "Military",
+        `${plan.type} from ${origin.spawnRoom} to attack ${target} (staging in ${origin.stagingRoom}): edge damage ${plan.threat.edge},`,
+        `duo heal ${plan.duoHeal}, quad heal ${plan.quadHeal}${plan.feasible ? "" : " (not enough healing: drain only)"}`
+    );
 }
 
 export const militaryModule = (): void => {
+    updateMilitaryIntel();
     const memory = militaryMemory();
-    const target = memory.attack;
-    if (target && !memory.duos[`duo.${target}`]) {
-        const origin = findOrigin(target);
-        if (origin) {
-            memory.duos[`duo.${target}`] = { ...origin, targetRoom: target, state: "forming", members: [], losses: 0 };
-            log.info("Military", `Duo from ${origin.spawnRoom} to attack ${target} (staging in ${origin.stagingRoom})`);
-        }
+    if (!memory.attack && Game.time % AUTO_TARGET_EVERY === 0) {
+        const auto = chooseAutoTarget();
+        if (auto && auto.room !== memory.target?.room) {
+            memory.target = { ...auto, since: Game.time };
+            log.info("Military", `Automatic target: ${auto.room} (${auto.reason})`);
+        } else if (!auto && memory.target && !hasMission(memory.target.room)) delete memory.target;
     }
+    const target = currentTarget();
+    if (target && !hasMission(target)) startMission(target);
+
     for (const name in memory.duos) {
         const duo = memory.duos[name];
-        if (isNeutralized(duo.targetRoom)) {
-            finish(name, duo, "success");
+        if (shouldUpgrade(duo)) {
+            // The duo was sized on stale intel: the threat seen in the fight calls for a quad
+            delete memory.duos[name];
+            memory.quads = { ...memory.quads, [`quad.${duo.targetRoom}`]: { ...duo, members: [], state: "forming" } };
+            log.info("Military", `${name} lost ${duo.losses} creeps: a quad takes over`);
             continue;
         }
-        if (duo.losses >= MAX_LOSSES || duo.targetRoom !== memory.attack) {
-            finish(name, duo, "abandoned");
-            continue;
-        }
-        runDuo(name, duo);
+        if (isNeutralized(duo.targetRoom)) finish("duo", name, duo, "success");
+        else if (duo.losses >= MAX_LOSSES || duo.targetRoom !== currentTarget()) finish("duo", name, duo, "abandoned");
+        else runDuo(name, duo);
+    }
+    for (const name in memory.quads ?? {}) {
+        const quad = memory.quads![name];
+        if (isNeutralized(quad.targetRoom)) finish("quad", name, quad, "success");
+        else if (quad.losses >= MAX_LOSSES || quad.targetRoom !== currentTarget())
+            finish("quad", name, quad, "abandoned");
+        else runQuad(name, quad);
     }
 };
 
@@ -99,33 +156,52 @@ function duoMissing(roomName: string): { name: string; role: string } | null {
     return null;
 }
 
-/** Spawn role of the duos (the healer first: the attacker waits next to it) */
+/** Quads are refilled only while forming at home */
+function quadMissing(roomName: string): { name: string; role: string } | null {
+    for (const [name, quad] of Object.entries(militaryMemory().quads ?? {})) {
+        if (quad.spawnRoom !== roomName || quad.state !== "forming") continue;
+        const have = _.countBy(quadCreeps(name), c => c.memory.role);
+        const wanted = _.countBy(QUAD_ROSTER);
+        for (const role of QUAD_ROSTER) if ((have[role] ?? 0) < wanted[role]) return { name, role };
+    }
+    return null;
+}
+
+/** Spawn role of the duos and quads (healers first: the others wait next to them) */
 export const militarySpawnRole: SpawnRole = {
     id: "military",
     emptyTimeout: 10,
 
     options(room) {
         if (effectiveEnergy(room) < MIN_ENERGY) return [];
-        const missing = duoMissing(room.name);
-        if (!missing) return [];
-        return [{ role: missing.role, priority: 3, weight: 1, memory: { duo: missing.name } } as SpawnOption];
+        const duo = duoMissing(room.name);
+        if (duo) return [{ role: duo.role, priority: 3, weight: 1, memory: { duo: duo.name } } as SpawnOption];
+        const quad = quadMissing(room.name);
+        if (quad) return [{ role: quad.role, priority: 3, weight: 1, memory: { quad: quad.name } } as SpawnOption];
+        return [];
     },
 
     body(room, option) {
-        const energyLimit = room.energyCapacityAvailable;
-        if (option.role === DUO_HEALER) return buildBody({ weights: { [HEAL]: 1 }, moveMode: MoveMode.PLAINS, energyLimit });
-        // ATTACK only (Hivemind's attacker body): with a TOUGH weight our body builder made no ATTACK part
-        return buildBody({ weights: { [ATTACK]: 1 }, moveMode: MoveMode.PLAINS, energyLimit });
+        const energy = room.energyCapacityAvailable;
+        if (option.role === DUO_HEALER) return duoHealerBody(energy);
+        if (option.role === QUAD_HEALER) return quadHealerBody(energy);
+        if (option.role === QUAD_ATTACKER) return quadAttackerBody(energy);
+        return duoAttackerBody(energy);
     },
 
     memory(room, option) {
-        return { role: option.role, room: room.name, duo: option.memory?.duo };
+        return { role: option.role, room: room.name, duo: option.memory?.duo, quad: option.memory?.quad };
     }
 };
 
-/** Duo creeps are run by the military module; without a duo they go back to be recycled */
+/** Squad creeps are run by the military module; without a mission they go back to be recycled */
 for (const role of [DUO_ATTACKER, DUO_HEALER]) {
     registerRole(role, creep => {
         if (!creep.memory.duo || !militaryMemory().duos[creep.memory.duo]) performRecycle(creep);
+    });
+}
+for (const role of [QUAD_ATTACKER, QUAD_HEALER]) {
+    registerRole(role, creep => {
+        if (!creep.memory.quad || !militaryMemory().quads?.[creep.memory.quad]) performRecycle(creep);
     });
 }

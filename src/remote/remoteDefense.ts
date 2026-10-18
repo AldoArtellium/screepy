@@ -2,7 +2,8 @@
  * Remote defense: a defender for a mined remote with an invader core, or with hostiles once the home
  * room has 5000 energy to spare (before that, spawning there just stops until the hostiles die).
  * Ported from Hivemind (MIT), src/spawn-role/brawler.ts (remote part, getDefenseCreepSize).
- * See docs/hivemind/hivemind-remote.md §9.3. Larger threats (trains, quads) get no defender.
+ * See docs/hivemind/hivemind-remote.md §9.3. Larger threats (trains, quads) get no defender; strongholds
+ * (invader cores of level 1+) are left to the military module.
  */
 
 import { buildBody, MoveMode } from "../core/bodyBuilder";
@@ -57,6 +58,8 @@ export function remoteDefenseOptions(home: Room): DefenseOption[] {
         seen.add(source.room);
         const underAttack = isRemoteUnderAttack(source);
         if (!underAttack && !remoteHasInvaderCore(source)) continue;
+        // Strongholds (core level 1+) are military targets (military/targets.ts): an ATTACKER would die to their towers
+        if ((Memory.military?.rooms?.[source.room]?.coreLevel ?? 0) > 0) continue;
         // Hivemind returns here: no remote gets a defender while the home room is short on energy
         if (underAttack && effectiveEnergy(home) < MIN_DEFENSE_ENERGY) return options;
         const recent = home.memory.recentDefender?.[source.room] ?? -Infinity;

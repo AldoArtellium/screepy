@@ -45,7 +45,7 @@ interface TickCache {
     tick: number;
     byRole: Map<string, Creep[]>;
     byOrder: Map<string, Creep[]>;
-    /** Creeps by `duo:<name>` / `squad:<name>` */
+    /** Creeps by `duo:<name>` / `quad:<name>` / `squad:<name>` */
     byGroup: Map<string, Creep[]>;
     values: Map<string, unknown>;
 }
@@ -70,6 +70,7 @@ function refresh(): TickCache {
         indexOrder(creep, creep.memory.order);
         if (creep.memory.duo) indexGroup(`duo:${creep.memory.duo}`, creep);
         if (creep.memory.squad) indexGroup(`squad:${creep.memory.squad}`, creep);
+        if (creep.memory.quad) indexGroup(`quad:${creep.memory.quad}`, creep);
     }
     return cache;
 }
@@ -113,6 +114,11 @@ export function creepsByRole(roomName: string, role: string): Creep[] {
 /** Creeps of a military duo (memory.duo), spawning ones included */
 export function duoCreeps(duo: string): Creep[] {
     return refresh().byGroup.get(`duo:${duo}`) ?? [];
+}
+
+/** Creeps of a military quad (memory.quad), spawning ones included */
+export function quadCreeps(quad: string): Creep[] {
+    return refresh().byGroup.get(`quad:${quad}`) ?? [];
 }
 
 /** Creeps of an expansion squad (memory.squad), spawning ones included */

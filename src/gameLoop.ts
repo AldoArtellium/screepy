@@ -45,7 +45,7 @@ export const gameLoop = () => {
     { name: "RemoteMining", fn: remoteMiningModule, priority: "high" },
     // Claims and bootstraps new rooms, helps rooms without spawn
     { name: "Expansion", fn: expansionModule, runEvery: 5, priority: "high" },
-    // Attacks (Memory.military.attack): duos moving and fighting as one
+    // Attacks (Memory.military.attack or automatic targets): duos and quads moving and fighting as one
     { name: "Military", fn: militaryModule, priority: "always" },
     // Nothing to trade before a terminal (RCL 6): back with the terminal milestone
     { name: "MarketManager", fn: marketManagerModule, runEvery: 20, priority: "low", disabled: true },
