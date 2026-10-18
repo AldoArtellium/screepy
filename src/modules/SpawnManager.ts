@@ -44,6 +44,8 @@ class SpawnManager {
     private readonly idleRoomUntil: Map<string, number> = new Map();
     /** Rooms waiting for energy: highest energy seen and when it last rose */
     private readonly waiting: Map<string, { energy: number; since: number }> = new Map();
+    /** Role of the best option a room is waiting to pay for (room visuals) */
+    private readonly waitingRole: Map<string, string> = new Map();
     private readonly roles: SpawnRole[];
 
     constructor() {
@@ -71,6 +73,11 @@ class SpawnManager {
     hasPendingRequest(id: string): boolean {
         const request = this.external.get(id);
         return !!request && request.expiresAt >= Game.time;
+    }
+
+    /** Role the room will spawn next once it has the energy, if it is waiting */
+    nextRole(roomName: string): string | undefined {
+        return this.waitingRole.get(roomName);
     }
 
     run(): void {
@@ -133,6 +140,7 @@ class SpawnManager {
             return closest.pos.getRangeTo(option.preferClosestSpawn) >= 3 || available.includes(closest);
         });
         const option = getBestOption(options);
+        this.waitingRole.delete(room.name);
         if (!option) return;
 
         let spawn = _.sample(available);
@@ -144,6 +152,7 @@ class SpawnManager {
             this.waiting.delete(room.name);
             starvedRooms.delete(room.name);
         } else {
+            this.waitingRole.set(room.name, option.role);
             this.trackStarvation(room);
         }
     }

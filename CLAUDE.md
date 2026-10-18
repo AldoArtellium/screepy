@@ -116,6 +116,7 @@ The ModuleManager runs modules in order with a CPU budget (80% of the limit): `m
 | Expansion | every 5 (priority high) | Claims and bootstraps new rooms, reclaims rooms that lost their spawn (`src/expansion/`) |
 | ScoutManager (10), MarketManager (20, disabled until the terminal milestone) | | Kept from the previous design (scout: from RCL 1, priority 4 before the storage; range 3 rooms, 5 from RCL 4; rescouts rooms never seen, older than 50000 ticks, or with a controller seen more than 10000 ticks ago) |
 | MemoryCleanup | every tick (work every 100 / 1000) | Drops the memory of dead creeps, and of rooms not owned, not mined, not targeted and without a living hostile |
+| RoomVisuals | every tick (priority low) | Plan overlay and economy panel on owned rooms (`src/visuals/`) |
 | TrafficManager | mandatory, last | Resolves every move (cartographer `reconcileTraffic`) |
 
 ### Economy core
@@ -178,6 +179,12 @@ Counters in `Memory.stats.counters`: `spawned:<role>`, `work:{harvest,build,repa
 - Modules (`ModuleManager`, `priority`): `always` (mandatory, towers), `high` 500/5000 (remote mining), `default` 3000/8000, `low` 5000/9500 (scout, market): the interval is multiplied by the recent CPU use, this tick's use above half the limit and the bucket below `throttleAt`; stopped below `stopAt`. `Memory.moduleState[m].throttled` counts held-back ticks.
 - Measured (W7N3, CPU limit 8, mockup): without throttling the bucket sits at 0 and the script is killed every tick; with it the bucket holds ~3000 and nothing is killed.
 - Official CPU (W7N3, RCL 4 + 5 remotes, ~30 creeps): ~13 code + ~30 intents x 0.2 = ~19. Intents by type per tick: move 12, harvest 7.6, upgrade 3.9, reserve 2.4.
+
+### Visuals (`src/visuals/`)
+
+- Every owned room: the planned structures not built yet (opacity 0.2, a shape and color per structure type) and the outline of the planner's `safe` area (`planVisual.ts`, redrawn every 100 ticks or when the plan changes); a panel top left (`panel.ts`, every 5 ticks): RCL, % and ETA (progress rate over 1000 ticks, heap), energy, storage, empire income from the `work:harvest` / `work:remoteHarvest` counters, CPU and bucket, creeps by role, spawning and the role waiting for energy (`spawnManager.nextRole`), remotes, construction sites; then enemy strength, safe mode, tower energy, plan key/score, expansion, attack.
+- Each layer is cached as a `RoomVisual` export in the heap and imported on the other ticks. `Memory.visuals = false` turns it off. Priority `low`: skipped as the bucket drops below 9500, so the visuals flicker or vanish then.
+- Cost (mockup, W7N3, 3000 ticks): ~0.06 CPU/tick, ~300 elements (34 KB) per room; the module logs both every 1000 ticks.
 
 ### Traffic (`src/modules/TrafficManager.ts`)
 
