@@ -262,7 +262,7 @@ function ensureContainer(creep: Creep, source: RemoteSource, work: number, state
         return container.hits < container.hitsMax - 2 * work * REPAIR_POWER;
     }
     const pos = containerPos(source);
-    if (pos.roomName !== creep.room.name) return false;
+    if (!pos || pos.roomName !== creep.room.name) return false;
     if (!pos.lookFor(LOOK_CONSTRUCTION_SITES).some(s => s.structureType === STRUCTURE_CONTAINER)) {
         pos.createConstructionSite(STRUCTURE_CONTAINER);
     }

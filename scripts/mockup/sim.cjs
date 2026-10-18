@@ -554,6 +554,13 @@ function plain(doc) {
   return rest;
 }
 
+/** Non-empty RawMemory segments of the bot, by id */
+async function readSegments(env, userId) {
+  const ids = Array.from({ length: 100 }, (_, i) => i);
+  const values = (await env.hmget(env.keys.MEMORY_SEGMENTS + userId, ids)) || [];
+  return Object.fromEntries(ids.map((id, i) => [id, values[i]]).filter(([, v]) => v));
+}
+
 async function saveState(server, userId, file) {
   const { db, env } = server.common.storage;
   const state = {
@@ -563,7 +570,7 @@ async function saveState(server, userId, file) {
     gcl: (await db.users.findOne({ _id: userId })).gcl,
     memory: await env.get(env.keys.MEMORY + userId),
     // RawMemory segments (plans, intel, remote paths live there)
-    segments: await env.hgetall(env.keys.MEMORY_SEGMENTS + userId),
+    segments: await readSegments(env, userId),
     objects: (await db["rooms.objects"].find({})).map(plain)
   };
   fs.mkdirSync(path.dirname(file), { recursive: true });
@@ -609,7 +616,7 @@ async function loadState(server, userId, file) {
   if (memory.stats) memory.stats.counters = {};
   delete memory.moduleErrors;
   await env.set(env.keys.MEMORY + userId, JSON.stringify(memory));
-  for (const [id, data] of Object.entries(state.segments || {})) await env.hset(env.keys.MEMORY_SEGMENTS + userId, id, data);
+  if (state.segments && Object.keys(state.segments).length) await env.hmset(env.keys.MEMORY_SEGMENTS + userId, state.segments);
   log(`State loaded from ${file} (tick ${state.gameTime}, ${state.objects.length} objects, rooms ${[...rooms].join(" ")})`);
 }
 

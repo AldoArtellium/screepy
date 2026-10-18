@@ -332,7 +332,7 @@ export function sourcePos(source: RemoteSource): RoomPosition {
 }
 
 /** Container tile: first tile of the path, next to the source */
-export function containerPos(source: RemoteSource): RoomPosition {
+export function containerPos(source: RemoteSource): RoomPosition | undefined {
     return remotePath(source)[0];
 }
 
@@ -345,8 +345,10 @@ export function remoteContainer(source: RemoteSource): StructureContainer | null
         else return null;
     }
     const room = Game.rooms[source.room];
-    if (!room) return null;
-    const container = containerPos(source)
+    const pos = containerPos(source);
+    // Path unknown (paths segment not loaded yet on the first tick after a reset)
+    if (!room || !pos) return null;
+    const container = pos
         .lookFor(LOOK_STRUCTURES)
         .find(s => s.structureType === STRUCTURE_CONTAINER) as StructureContainer | undefined;
     if (container) source.containerId = container.id;
@@ -418,8 +420,8 @@ export function maintenanceWork(source: RemoteSource): number {
 }
 
 /** Hits missing on a tile (out of sight: nothing); missing structure: its build cost x 100 */
-function neededWorkAt(pos: RoomPosition, type: BuildableStructureConstant): number {
-    if (!Game.rooms[pos.roomName]) return 0;
+function neededWorkAt(pos: RoomPosition | undefined, type: BuildableStructureConstant): number {
+    if (!pos || !Game.rooms[pos.roomName]) return 0;
     const structure = pos.lookFor(LOOK_STRUCTURES).find(s => s.structureType === type);
     if (structure) return structure.hitsMax - structure.hits;
     return CONSTRUCTION_COST[type] * 100;

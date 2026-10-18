@@ -70,7 +70,7 @@ export function runRemoteHarvester(creep: Creep): void {
         }
         if (!hasRemoteContainer(source)) {
             const pos = containerPos(source);
-            if (!pos.lookFor(LOOK_CONSTRUCTION_SITES).some(s => s.structureType === STRUCTURE_CONTAINER)) {
+            if (pos && !pos.lookFor(LOOK_CONSTRUCTION_SITES).some(s => s.structureType === STRUCTURE_CONTAINER)) {
                 pos.createConstructionSite(STRUCTURE_CONTAINER);
             }
         }
