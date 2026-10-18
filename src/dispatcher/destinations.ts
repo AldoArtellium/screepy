@@ -386,6 +386,48 @@ class TerminalDestination extends StructureDestination {
     }
 }
 
+/**
+ * Source labs of the reaction under way (Hivemind resource-destination/lab.ts): their reagent while
+ * less than 80% full, priority 4 below LAB_REACTION_AMOUNT, else 3, -1 above 20% full
+ */
+class LabDestination extends StructureDestination {
+    readonly type = "lab";
+
+    highestPriority(): number {
+        return 4;
+    }
+
+    tasks(context: DispatchContext): Order[] {
+        const room = context.creep.room;
+        const reaction = room.memory.currentReaction;
+        const layout = room.memory.labs;
+        if (!reaction || !layout) return [];
+        return cacheEmptyTasks(`labDestination:${room.name}:${context.resourceType ?? ""}`, () => {
+            const tasks: Order[] = [];
+            const add = (labId: Id<StructureLab>, resourceType: ResourceConstant) => {
+                const lab = Game.getObjectById(labId);
+                if (!lab || (lab.mineralType && lab.mineralType !== resourceType)) return;
+                if (context.resourceType && context.resourceType !== resourceType) return;
+                const free = lab.store.getFreeCapacity(resourceType) ?? 0;
+                if (free < LAB_MINERAL_CAPACITY * 0.2) return;
+                const amount = lab.store[resourceType] ?? 0;
+                let priority = 3 + (amount > LAB_REACTION_AMOUNT ? 0 : 1);
+                if (amount > LAB_MINERAL_CAPACITY * 0.2) priority--;
+                tasks.push({ type: this.type, target: lab.id, resourceType, amount: free, priority, weight: 1 - amount / LAB_MINERAL_CAPACITY });
+            };
+            add(layout.source1, reaction[0]);
+            add(layout.source2, reaction[1]);
+            return tasks;
+        });
+    }
+
+    isValid(task: Order, context: DispatchContext): boolean {
+        if (!super.isValid(task, context)) return false;
+        const lab = Game.getObjectById(task.target as Id<StructureLab>);
+        return !lab?.mineralType || lab.mineralType === task.resourceType;
+    }
+}
+
 /** No storage yet: drop the energy on the base center, where the storage will be */
 class DropDestination implements TaskProvider {
     readonly type = "drop";
@@ -429,6 +471,7 @@ export const destinationDispatcher = new Dispatcher([
     new BayDestination(),
     new ControllerContainerDestination(),
     new DropDestination(),
+    new LabDestination(),
     new SpawnDestination(),
     new StorageDestination(),
     new TerminalDestination(),

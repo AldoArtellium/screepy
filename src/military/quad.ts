@@ -20,6 +20,7 @@
  */
 
 import { quadCreeps } from "../core/roomState";
+import { needsBoosting } from "../labs/boosts";
 import { trafficManager } from "../modules/TrafficManager";
 import { log } from "../utils/logger";
 import { parseRoomName } from "../utils/rooms";
@@ -794,6 +795,8 @@ export function runQuad(name: string, quad: QuadMemory): void {
     if (quad.state === "forming") {
         // Gather at home (spawning refills the missing members)
         for (const creep of group) {
+            // Getting boosted at the labs (CreepRunner moves it)
+            if (needsBoosting(creep)) continue;
             if (creep.room.name !== quad.spawnRoom)
                 trafficManager.moveToRoom(creep, quad.spawnRoom, { priority: PRIORITY });
             else {
@@ -802,7 +805,7 @@ export function runQuad(name: string, quad: QuadMemory): void {
             }
         }
         attackQuad(group, null);
-        if (full && group.every(c => c.room.name === quad.spawnRoom)) quad.state = "travel";
+        if (full && group.every(c => c.room.name === quad.spawnRoom && !needsBoosting(c))) quad.state = "travel";
     } else if (quad.state === "retreat") {
         retreat(quad, group);
         attackQuad(group, null);

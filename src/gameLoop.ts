@@ -6,6 +6,7 @@ import { defenseModule } from "defense/defenseModule";
 import { expansionModule } from "expansion/Expansion";
 import { militaryModule } from "military/military";
 import { intelManagerModule } from "modules/IntelManager";
+import { labsModule } from "labs/labsModule";
 import { marketManagerModule } from "modules/MarketManager";
 import { terminalTransfersModule } from "modules/TerminalTransfers";
 import { memoryCleanupModule } from "modules/MemoryCleanup";
@@ -37,6 +38,9 @@ export const gameLoop = () => {
 
     // Construction sites from the plan
     { name: "RoomBuilder", fn: roomBuilderModule, runEvery: 20 },
+
+    // Labs: boost labs for the creeps to boost, reactions (military compounds first)
+    { name: "Labs", fn: labsModule },
 
     // Towers and safe mode
     { name: "Defense", fn: defenseModule, priority: "always" },

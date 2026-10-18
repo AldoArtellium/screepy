@@ -83,6 +83,17 @@ const CPU_LIMIT = opt("cpu-limit", null);
  * source/controller containers, roads and main ramparts (600k hits) are built for it, like the private
  * server preset. rcl4/rcl5/rcl7 are the quick presets above (PRESETS).
  */
+/**
+ * With a plan preset: resources added to the storage, e.g. --minerals H:20000,O:20000,XLHO2:3000 (lab and
+ * boost tests), and --labs: the plan's terminal and labs (as many as the level allows) built at once
+ */
+const MINERALS = Object.fromEntries(
+  (opt("minerals", "") || "").split(",").filter(Boolean).map((s) => {
+    const [r, n] = s.split(":");
+    return [r, Number(n)];
+  })
+);
+const LABS = flag("labs");
 const QUICK_PRESET = PRESET && PRESETS[PRESET] ? PRESET : null;
 const PLAN_PRESET = PRESET && !QUICK_PRESET ? PRESET : null;
 const OUT = opt("out");
@@ -277,7 +288,20 @@ async function applyPlanPreset(server, user, memory) {
   };
   const extEnergy = { 7: 100, 8: 200 }[rcl] || 50;
   const counts = { extension: { 5: 30, 6: 40, 7: 50, 8: 60 }[rcl], tower: { 5: 2, 6: 3, 7: 4, 8: 6 }[rcl] };
-  await insert(planPositions(plan, "storage")[0], { type: "storage", hits: 10000, hitsMax: 10000, store: { energy: 300000 }, storeCapacity: 1000000 });
+  await insert(planPositions(plan, "storage")[0], { type: "storage", hits: 10000, hitsMax: 10000, store: { energy: 300000, ...MINERALS }, storeCapacity: 1000000 });
+  let labs = 0;
+  if (LABS) {
+    await insert(planPositions(plan, "terminal")[0], { type: "terminal", hits: 3000, hitsMax: 3000, store: { energy: 10000 }, storeCapacity: 300000 });
+    const maxLabs = { 6: 3, 7: 6, 8: 10 }[rcl] || 0;
+    // Source labs first: every other lab reacts with them
+    const sources = planPositions(plan, "lab.source");
+    const key = (p) => p.y * 50 + p.x;
+    const ordered = [...sources, ...planPositions(plan, "lab").filter((p) => !sources.some((s) => key(s) === key(p)))];
+    for (const pos of ordered) {
+      if (labs >= maxLabs) break;
+      if (await insert(pos, { type: "lab", hits: 500, hitsMax: 500, mineralAmount: 0, store: { energy: 0 }, storeCapacity: 5000, storeCapacityResource: { energy: 2000 }, cooldown: 0, actionLog: { runReaction: null, reverseReaction: null } })) labs++;
+    }
+  }
   let ext = 0;
   for (const pos of planPositions(plan, "extension")) {
     if (ext >= counts.extension) break;
@@ -306,7 +330,7 @@ async function applyPlanPreset(server, user, memory) {
     await db["rooms.objects"].insert({ room: ROOM, x: pos.x, y: pos.y, type: "road", hits: 5000, hitsMax: 5000, nextDecayTime: time + 1000 });
     roads++;
   }
-  log(`Preset ${PRESET} at tick ${time}: storage, ${ext} extensions, ${towers} towers, ${ramparts} ramparts, ${roads} roads`);
+  log(`Preset ${PRESET} at tick ${time}: storage, ${ext} extensions, ${towers} towers, ${ramparts} ramparts, ${roads} roads${LABS ? `, terminal, ${labs} labs` : ""}${Object.keys(MINERALS).length ? `, storage minerals ${JSON.stringify(MINERALS)}` : ""}`);
   return true;
 }
 let fixtureTerrain = "";
@@ -454,8 +478,20 @@ async function snapshot(server, userId) {
         .map((t) => [t, mine.filter((o) => o.type === t).length])
         .filter(([, n]) => n > 0)
     ),
+    // Boosted body parts of our creeps in the room, by role (name prefix) and compound
+    boostedParts: mine
+      .filter((o) => o.type === "creep")
+      .reduce((acc, o) => {
+        for (const part of o.body || []) {
+          if (part.boost) {
+            const key = `${String(o.name).split("_")[0]}:${part.boost}`;
+            acc[key] = (acc[key] || 0) + 1;
+          }
+        }
+        return acc;
+      }, {}),
     minerals: objects
-      .filter((o) => (o.user === userId || o.type === "container") && ["storage", "terminal", "container"].includes(o.type))
+      .filter((o) => (o.user === userId || o.type === "container") && ["storage", "terminal", "container", "lab"].includes(o.type))
       .reduce((acc, o) => {
         for (const [r, n] of Object.entries(o.store || {})) if (r !== "energy" && n) acc[`${o.type}:${r}`] = (acc[`${o.type}:${r}`] || 0) + n;
         return acc;
@@ -633,7 +669,7 @@ async function main() {
         `RCL ${w.rcl} (${w.progress}) | creeps ${w.creeps} | energy ${w.energy}/${w.energyCapacity}`,
         `| ext ${w.extensions} cont ${w.containers} roads ${w.roads}+${w.remoteRoads} sites ${w.sites} storage ${w.storage}`,
         `| cpu avg ${(cpuSum / Math.max(1, cpuSamples)).toFixed(2)}`,
-        PRESET ? `| endgame ${JSON.stringify(w.endgame)} sites ${JSON.stringify(w.siteTypes)} terminal ${w.terminalEnergy} minerals ${JSON.stringify(w.minerals)}` : "",
+        PRESET ? `| endgame ${JSON.stringify(w.endgame)} sites ${JSON.stringify(w.siteTypes)} terminal ${w.terminalEnergy} minerals ${JSON.stringify(w.minerals)} boosted ${JSON.stringify(w.boostedParts)}` : "",
         Object.keys(w.ownedRooms).length > 1 ? `| rooms ${JSON.stringify(w.ownedRooms)}` : "",
         enemy ? `| enemy ${JSON.stringify(await enemyStatus(server, enemy))}` : "",
         stronghold ? `| stronghold ${JSON.stringify(await strongholdStatus(server, stronghold))}` : "",
