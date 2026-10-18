@@ -63,6 +63,8 @@ const NPC = ["Invader", "Source Keeper"];
 
 export function militaryMemory(): NonNullable<Memory["military"]> {
     if (!Memory.military) Memory.military = { duos: {} };
+    // Set by hand as `Memory.military = { attack: "W8N3" }`: fill the required fields
+    if (!Memory.military.duos) Memory.military.duos = {};
     return Memory.military;
 }
 
