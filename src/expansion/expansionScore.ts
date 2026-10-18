@@ -10,11 +10,12 @@
 
 import { intelManager } from "../modules/IntelManager";
 import { isHighway, roomStatus } from "../utils/rooms";
+import { jitter } from "../utils/jitter";
 
 const SCORE_CACHE_TTL = 20000;
 const MAX_ROOM_DISTANCE = 3;
 
-const cache: Map<string, { tick: number; score: number }> = new Map();
+const cache: Map<string, { until: number; score: number }> = new Map();
 
 function exitsOf(roomName: string): string[] {
     return Object.values(Game.map.describeExits(roomName) ?? {}) as string[];
@@ -105,8 +106,8 @@ function calculate(roomName: string): number {
 
 export function expansionScore(roomName: string): number {
     const cached = cache.get(roomName);
-    if (cached && Game.time - cached.tick < SCORE_CACHE_TTL) return cached.score;
+    if (cached && cached.until > Game.time) return cached.score;
     const score = calculate(roomName);
-    cache.set(roomName, { tick: Game.time, score });
+    cache.set(roomName, { until: Game.time + jitter(SCORE_CACHE_TTL), score });
     return score;
 }

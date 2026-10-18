@@ -118,7 +118,7 @@ function modifiedScore(roomName: string, score: number): number {
 
 function chooseTarget(): void {
     let best: { roomName: string; spawnRoom: string; score: number; modified: number } | null = null;
-    for (const roomName in Memory.intel ?? {}) {
+    for (const roomName in intelManager.allIntel()) {
         const intel = intelManager.getIntel(roomName)!;
         if (intel.owner || Game.rooms[roomName]?.controller?.my) continue;
         const score = expansionScore(roomName);

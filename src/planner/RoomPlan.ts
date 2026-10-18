@@ -3,7 +3,7 @@
  *
  * A tile can carry several types. Positions are kept as `x + 50 * y` and returned in that order
  * (row by row), like Hivemind's RoomPlan (MIT, src/room/planner/room-plan.ts).
- * Stored packed in `Memory.rooms[room].plan`: one UTF-16 char per position, ((x << 6) | y) + 65.
+ * Stored packed (RoomPlanner, RawMemory segments): one UTF-16 char per position, ((x << 6) | y) + 65.
  */
 
 /** Bump to replan every room (format or algorithm change) */
@@ -26,6 +26,7 @@ export interface PlanMemory {
 
 declare global {
     interface RoomMemory {
+        /** Legacy: plans live in segments now (RoomPlanner), migrated then deleted */
         plan?: PlanMemory;
     }
 }

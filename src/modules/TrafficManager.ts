@@ -14,6 +14,7 @@
 
 import { moveTo, preTick, reconcileTraffic } from "screeps-cartographer";
 import { countStat, recordSample } from "../utils/stats";
+import { jitter } from "../utils/jitter";
 
 /** Move request options */
 interface MoveOptions {
@@ -48,7 +49,7 @@ class TrafficManager {
     private stuck: Map<string, StuckState> = new Map();
 
     /** Idle position candidates per room */
-    private idleCandidates: Map<string, { tick: number; positions: { x: number; y: number }[] }> = new Map();
+    private idleCandidates: Map<string, { until: number; positions: { x: number; y: number }[] }> = new Map();
 
     /** Idle positions handed out this tick, per room */
     private idleClaimed: Map<string, Set<number>> = new Map();
@@ -213,7 +214,7 @@ class TrafficManager {
 
     private getIdleCandidates(room: Room): { x: number; y: number }[] {
         const cached = this.idleCandidates.get(room.name);
-        if (cached && Game.time - cached.tick < IDLE_CACHE_TTL) return cached.positions;
+        if (cached && cached.until > Game.time) return cached.positions;
 
         const positions: { x: number; y: number }[] = [];
         const spawn = room.find(FIND_MY_SPAWNS)[0];
@@ -243,7 +244,7 @@ class TrafficManager {
             }
         }
 
-        this.idleCandidates.set(room.name, { tick: Game.time, positions });
+        this.idleCandidates.set(room.name, { until: Game.time + jitter(IDLE_CACHE_TTL), positions });
         return positions;
     }
 

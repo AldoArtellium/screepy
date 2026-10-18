@@ -7,6 +7,7 @@
 
 import { whenInRange } from "../core/movement";
 import { CLAIMER } from "../expansion/squadSpawnRole";
+import { intelManager } from "../modules/IntelManager";
 import { trafficManager } from "../modules/TrafficManager";
 import { fleeIfThreatened } from "./flee";
 import { performRecycle } from "./recycle";
@@ -19,7 +20,7 @@ export function runClaimer(creep: Creep): void {
         return;
     }
     if (creep.room.name !== target) {
-        const pos = Memory.intel?.[target]?.controllerPos;
+        const pos = intelManager.getIntel(target)?.controllerPos;
         const goal = pos ? new RoomPosition(pos.x, pos.y, target) : new RoomPosition(25, 25, target);
         if (fleeIfThreatened(creep, goal)) return;
         trafficManager.requestMove(creep, goal, { range: 1, priority: 30 });

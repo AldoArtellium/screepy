@@ -4,6 +4,7 @@
  */
 
 import { whenInRange } from "../core/movement";
+import { intelManager } from "../modules/IntelManager";
 import { trafficManager } from "../modules/TrafficManager";
 import { RESERVER } from "../remote/remoteSpawnRole";
 import { fleeIfThreatened } from "./flee";
@@ -12,7 +13,7 @@ import { registerRole } from "./registry";
 export function runReserver(creep: Creep): void {
     const roomName = creep.memory.reserveRoom;
     if (!roomName) return;
-    const controllerPos = Memory.intel?.[roomName]?.controllerPos;
+    const controllerPos = intelManager.getIntel(roomName)?.controllerPos;
     if (!controllerPos) return;
     const target = new RoomPosition(controllerPos.x, controllerPos.y, roomName);
     if (fleeIfThreatened(creep, target)) return;

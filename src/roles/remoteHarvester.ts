@@ -5,6 +5,7 @@
  */
 
 import { whenInRange } from "../core/movement";
+import { intelManager } from "../modules/IntelManager";
 import { trafficManager } from "../modules/TrafficManager";
 import { containerPos, getRemoteSource, hasRemoteContainer, remoteContainer, sourcePos } from "../remote/RemoteMining";
 import { REMOTE_HARVESTER } from "../remote/remoteSpawnRole";
@@ -77,7 +78,7 @@ export function runRemoteHarvester(creep: Creep): void {
 }
 
 function intelSourceId(roomName: string, pos: RoomPosition): Id<Source> {
-    const source = Memory.intel?.[roomName]?.sources?.find(s => s.x === pos.x && s.y === pos.y);
+    const source = intelManager.getIntel(roomName)?.sources?.find(s => s.x === pos.x && s.y === pos.y);
     return (source?.id ?? "") as Id<Source>;
 }
 

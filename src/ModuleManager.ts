@@ -103,7 +103,8 @@ export function runModuleManager(modules: Module[], cpuLimit: number) {
       recordError(module.name, error);
     }
     const cpu = Game.cpu.getUsed() - before;
-    state.avgCpu = state.avgCpu === undefined ? cpu : state.avgCpu * 0.9 + cpu * 0.1;
+    // 4 decimals: full doubles cost ~12 chars of Memory per module
+    state.avgCpu = Math.round((state.avgCpu === undefined ? cpu : state.avgCpu * 0.9 + cpu * 0.1) * 10000) / 10000;
     state.lastRun = Game.time;
     state.consecutiveSkips = 0;
   }

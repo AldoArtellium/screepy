@@ -35,6 +35,7 @@ import { GUARDIAN } from "../roles/guardian";
 import { isFullOn } from "../core/resources";
 import { boostLabs, boostsFor } from "../labs/boosts";
 import { HELPER } from "../roles/helper";
+import { jitter } from "../utils/jitter";
 
 export interface SpawnOption extends Option {
     role: string;
@@ -266,7 +267,7 @@ function haulPaths(room: Room): { roundTrip: number; swampShare: number } {
                 swamps += result.path.filter(p => terrain.get(p.x, p.y) === TERRAIN_MASK_SWAMP).length;
             }
         }
-        cached = { until: Game.time + CREEP_LIFE_TIME, roundTrip, swampShare: tiles ? swamps / tiles : 0 };
+        cached = { until: Game.time + jitter(CREEP_LIFE_TIME), roundTrip, swampShare: tiles ? swamps / tiles : 0 };
         haulTrips.set(room.name, cached);
     }
     return cached;

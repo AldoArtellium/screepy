@@ -9,6 +9,7 @@ import { hasEnemies } from "../core/roomState";
 import { enemyStrength } from "../defense/RoomDefense";
 import { miningEfficiency } from "../modules/MiningStats";
 import { spawnManager } from "../modules/SpawnManager";
+import { roomPlanner } from "../planner/RoomPlanner";
 
 const SAMPLE_INTERVAL = 100;
 /** Samples kept: 10 intervals = 1000 ticks */
@@ -225,7 +226,7 @@ function infoRows(room: Room): Entry[] {
             rows.push({ label: "", text: perRoom.slice(i, i + 3).join(" · "), color: DIM });
         }
     }
-    const plan = room.memory.plan;
+    const plan = roomPlanner.planMemory(room.name);
     if (plan && !plan.done) rows.push({ label: "Plan", text: `searching (${plan.k ?? "?"})`, color: DIM });
 
     const expansion = Memory.expand?.current;

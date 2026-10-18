@@ -3,6 +3,7 @@ import { log } from "utils/logger";
 import MemHack from "utils/MemHack";
 import { installIntentCounter } from "utils/intents";
 import { recordTickStats } from "utils/stats";
+import { segmentsPostTick, segmentsPreTick } from "utils/segments";
 import { trafficManager } from "modules/TrafficManager";
 import { } from "./type";
 
@@ -16,7 +17,10 @@ installIntentCounter();
 
 export const loop = () => {
   MemHack.pretick();
+  // Intel, room plans and remote paths live in RawMemory segments (heap copy)
+  segmentsPreTick();
   trafficManager.preTick();
   gameLoop();
-  recordTickStats();
+  segmentsPostTick();
+  recordTickStats(MemHack.parseTime);
 };

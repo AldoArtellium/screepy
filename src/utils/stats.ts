@@ -27,10 +27,13 @@ export function recordSample(name: string, sample: string): void {
 /** Last tick recorded by this global (undefined right after a global reset) */
 let lastRecordedTick: number | undefined;
 
-/** Record end-of-tick stats. Call last in the loop. */
-export function recordTickStats(): void {
+/** Record end-of-tick stats. Call last in the loop. `parseCpu`: Memory parse of this global (MemHack) */
+export function recordTickStats(parseCpu?: number): void {
     const stats = getStats();
-    if (lastRecordedTick === undefined) countStat("globalReset");
+    if (lastRecordedTick === undefined) {
+        countStat("globalReset");
+        if (parseCpu !== undefined && parseCpu >= 0) stats.memoryParse = Math.round(parseCpu * 1000) / 1000;
+    }
     lastRecordedTick = Game.time;
     const cpu = Game.cpu.getUsed();
     stats.tick = Game.time;
@@ -40,6 +43,14 @@ export function recordTickStats(): void {
     stats.bucket = Game.cpu.bucket;
 
     if (Game.time % 10 !== 0) return;
+
+    // Heap of the isolate (official server and isolated-vm private servers; absent in the simulator)
+    const heap = Game.cpu.getHeapStatistics?.();
+    if (heap) {
+        const used = heap.used_heap_size + heap.externally_allocated_size;
+        const limit = heap.heap_size_limit;
+        stats.heap = { used, limit, ratio: Math.round((used / limit) * 1000) / 1000 };
+    }
 
     const creepsByRoom: { [room: string]: number } = {};
     for (const name in Game.creeps) {

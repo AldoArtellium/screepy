@@ -5,8 +5,9 @@
  * Independent from the docker compose private server: runs can go in parallel.
  *
  * Usage: npm run test:mockup -- [--ticks 3000] [--room W7N3] [--code path/to/main.js] [--no-build]
- *                               [--memory '<json>'] [--min-rcl 2] [--max-cpu 20] [--log-every 500]
+ *                               [--memory '<json>' | @file.json] [--min-rcl 2] [--max-cpu 20] [--log-every 500]
  *                               [--verbose]       (print the bot console)
+ *                               [--dump-memory]   (Memory and segments at the end, <report>-memory.json)
  *                               [--processors 2]  (engine processor processes, 1 with --no-fast)
  *                               [--no-fast]       (unpatched engine: no fast.cjs speed-ups)
  *                               [--profile]       (wall time per main loop stage, CPU per process)

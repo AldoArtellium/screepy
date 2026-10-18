@@ -13,7 +13,8 @@
  */
 
 import { log } from "../utils/logger";
-import { EXTENDABLE_PLAN_VERSION, PLAN_VERSION, RoomPlan } from "./RoomPlan";
+import { segmentStore } from "../utils/segments";
+import { EXTENDABLE_PLAN_VERSION, PLAN_VERSION, PlanMemory, RoomPlan } from "./RoomPlan";
 import { ROAD_POSITION, PlacementManager } from "./PlacementManager";
 import { chebyshev, forEachInArea, generateDistanceMatrices, getExitCenters, idx } from "./matrices";
 import { getCutTiles, MinCutRect } from "./minCut";
@@ -917,6 +918,24 @@ export function buildVariation(input: PlannerInput, variation: PlanVariation): {
     return { plan, score: scoreRoomPlan(plan, input, exit).total, pathCalls: builder.pathCalls };
 }
 
+/**
+ * Plans of the owned rooms, by room, in RawMemory segments 3-4 (utils/segments.ts, heap copy).
+ * Was `Memory.rooms[r].plan`: migrated when the segments load. Written the tick it changes.
+ */
+const plans = segmentStore<{ [roomName: string]: PlanMemory }>("plans", [3, 4], 0, {
+    read: () => {
+        const legacy: { [roomName: string]: PlanMemory } = {};
+        for (const name in Memory.rooms ?? {}) {
+            const plan = Memory.rooms[name].plan;
+            if (plan) legacy[name] = plan;
+        }
+        return Object.keys(legacy).length ? legacy : undefined;
+    },
+    clear: () => {
+        for (const name in Memory.rooms ?? {}) delete Memory.rooms[name].plan;
+    }
+});
+
 /** Heap state of a room whose variations are still being tried */
 interface VariationSearch {
     input: PlannerInput;
@@ -930,12 +949,30 @@ class RoomPlanner {
     private readonly failedAt: Map<string, number> = new Map();
     private readonly searches: Map<string, VariationSearch> = new Map();
 
+    /** Stored plan data of a room (segment), undefined if none */
+    planMemory(roomName: string): PlanMemory | undefined {
+        return plans.get()[roomName];
+    }
+
+    /** Drops the plan of a room we lost (MemoryCleanup) */
+    forget(roomName: string): void {
+        if (!plans.ready || !plans.get()[roomName]) return;
+        delete plans.get()[roomName];
+        this.cache.delete(roomName);
+        plans.touchNow();
+    }
+
+    /** Rooms with a stored plan */
+    plannedRooms(): string[] {
+        return Object.keys(plans.get());
+    }
+
     /**
-     * Plan of an owned room (heap cache, else Memory.rooms[r].plan if version matches), null if not planned yet.
+     * Plan of an owned room (heap cache, else the stored plan if version matches), null if not planned yet.
      * A PLAN_VERSION 3 plan is used as is until run() extends it.
      */
     getPlan(roomName: string): RoomPlan | null {
-        const memory = Memory.rooms?.[roomName]?.plan;
+        const memory = this.planMemory(roomName);
         if (!memory || (memory.v !== PLAN_VERSION && memory.v !== EXTENDABLE_PLAN_VERSION)) {
             // Deleted or outdated in Memory: replan
             this.cache.delete(roomName);
@@ -952,7 +989,7 @@ class RoomPlanner {
 
     /** Every variation was tried: the plan won't change any more */
     isFinal(roomName: string): boolean {
-        return !!this.getPlan(roomName) && !!Memory.rooms[roomName].plan!.done;
+        return !!this.getPlan(roomName) && !!this.planMemory(roomName)!.done;
     }
 
     private input(room: Room): PlannerInput | null {
@@ -969,9 +1006,8 @@ class RoomPlanner {
     }
 
     private store(room: Room, plan: RoomPlan, key: string, score: number, done: boolean): void {
-        if (!Memory.rooms) Memory.rooms = {};
-        if (!Memory.rooms[room.name]) Memory.rooms[room.name] = {} as RoomMemory;
-        Memory.rooms[room.name].plan = { ...plan.serialize(), k: key, s: score, done };
+        plans.get()[room.name] = { ...plan.serialize(), k: key, s: score, done };
+        plans.touchNow();
         this.cache.set(room.name, plan);
     }
 
@@ -1005,15 +1041,14 @@ class RoomPlanner {
 
     /** Adds the structures of PLAN_VERSION 4 to an older plan, without moving anything (built structures stay valid) */
     private extendPlan(room: Room): void {
-        const memory = Memory.rooms[room.name].plan!;
+        const memory = this.planMemory(room.name)!;
         const input = this.input(room);
         const old = this.getPlan(room.name);
         if (!input || !old) return;
         const plan = extendRoomPlan(input, old);
         if (!plan) {
             // No center: replan from scratch
-            delete Memory.rooms[room.name].plan;
-            this.cache.delete(room.name);
+            this.forget(room.name);
             return;
         }
         const { exit } = generateDistanceMatrices(input.terrain);
@@ -1035,7 +1070,7 @@ class RoomPlanner {
     /** Tries the next variations of a room while CPU allows; at the end keeps the best scored plan */
     private searchVariations(room: Room): void {
         let search = this.searches.get(room.name);
-        const memory = Memory.rooms[room.name].plan!;
+        const memory = this.planMemory(room.name)!;
         if (!search) {
             // Global reset: start over from the stored plan
             const input = this.input(room);
@@ -1061,6 +1096,7 @@ class RoomPlanner {
             log.info("RoomPlanner", `${room.name}: best variation ${search.best.key}, score ${search.best.score.toFixed(3)}`);
         } else {
             memory.done = true;
+            plans.touchNow();
             log.info("RoomPlanner", `${room.name}: keeping ${memory.k}${search.best.key !== memory.k ? ` (${search.best.key} scored better, already building)` : ""}`);
         }
     }
@@ -1068,11 +1104,13 @@ class RoomPlanner {
     /** Plans the first owned room without a valid plan, else tries variations of an unfinished plan */
     run(): void {
         if ((Game.cpu.bucket ?? 10000) < MIN_BUCKET) return;
+        // Plans not loaded yet (first tick after the segments were requested): never replan on partial data
+        if (!plans.ready) return;
         for (const name in Game.rooms) {
             const room = Game.rooms[name];
             if (!room.controller?.my) continue;
             if (this.getPlan(name)) {
-                if (Memory.rooms[name].plan!.v !== PLAN_VERSION) {
+                if (this.planMemory(name)!.v !== PLAN_VERSION) {
                     this.extendPlan(room);
                     return;
                 }
