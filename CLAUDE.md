@@ -162,6 +162,15 @@ Counters in `Memory.stats.counters`: `spawned:<role>`, `work:{harvest,build,repa
 - Deviations: units spawn claimer first (Hivemind: random), the defender only against hostiles (Hivemind: always one), the claim happens on arrival; no exit direction is safe in the score. Not ported: tunnels to the controller, evacuation, terminal help (RCL 6).
 - Mockup: `--gcl 2` allows a second room; the report lists `world.ownedRooms`.
 
+### Military (`src/military/`, our own design, milestone 7 step 1)
+
+- `Memory.military.attack = "<room>"` (by hand for now) sends a duo from the closest RCL 4+ room (`minRcl` to lower it in tests): an attacker (ATTACK + MOVE) and a healer (HEAL + MOVE), spawn role `military` (priority 3, effective energy >= 2000). Ends when the room has no spawn and no tower left (success) or after 10 lost creeps.
+- `combat.ts`: worst damage on a tile next tick (every enemy tower focusing, melee within 2, ranged within 4) vs our healing; verdict safe (healing outpaces damage), rescue (survives 3 ticks), doomed.
+- `duo.ts`: forming -> advance -> retreat (below 60% hits) -> advance (from 95%). The attacker only steps with the healer next to it; nobody steps onto a tile that kills it within 3 ticks, evaluated on the tile it really lands on (exit tiles carry creeps to the next room); when only the healer would be doomed the attacker goes in alone and comes back to be healed, which drains towers. In the room: towers, then spawns, then other structures, breaking the weakest ramparts on the way (path cost by hits). The healer has the higher traffic priority so the attacker never shoves it onto an exit. Trace: `[Duo]` log lines (state changes, every 10 ticks near the target, last tick's actions).
+- Mockup: `--enemy W8N3:3[:defenders[:ringHits]]` builds an enemy base (full towers, ramparts on spawn and towers, a ring of ramparts at range 5, no safe mode) run by `scripts/mockup/enemy-bot.js`; the report gives `enemy` (spawns, towers, tower energy, ramparts).
+- Measured (W7N3 vs W8N3 RCL 3, 1 tower, 30k ring): duo out at tick 10519, tower drained by in-and-out, ring breached, tower and spawn destroyed at tick 12565, 2 creeps lost (old age).
+- Known: our body builder makes no ATTACK part with a TOUGH weight (attacker is ATTACK only for now).
+
 ### CPU throttling (`src/utils/throttle.ts`, Hivemind)
 
 - Creeps (`CreepRunner`): below a role's `throttleAt` bucket its logic is skipped on a growing share of ticks (spread per creep by a Van der Corput sequence), on every tick below `stopAt`; every creep is skipped once the tick used 85% of `Game.cpu.tickLimit` (except on exit tiles). Thresholds: harvester/upgrader 0/2000, transporter 0/5000, remote harvester 2000/5000, defenders and reservers never, others 2000/8000. Counter `throttled:<role>`.

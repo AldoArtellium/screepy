@@ -24,7 +24,8 @@ Mise à jour : 2026-10-17 (J6 terminé). Le détail de chaque jalon terminé est
 
 ## Prochains jalons (ordre proposé)
 
-1. **J7, l'attaque : notre propre stratégie.** Les bots open source (Hivemind compris) laissent volontairement la partie offensive hors de leurs dépôts : rien à porter. Objectif : des squads de creeps qui agissent à l'unisson (déplacement en formation, cible commune, mouvements synchronisés). À concevoir avec l'utilisateur.
+1. **J7, l'attaque : notre propre stratégie.** Étape 1 faite (2026-10-18) : duo attaquant + soigneur, prévision de dégâts par case (sûr / sauvable / condamné), états avancer / reculer, drain des tours par va-et-vient, percée des ramparts les plus faibles ; mockup `--enemy`. Mockup : base RCL 3 (1 tour, anneau de ramparts 30k) détruite en ~2000 ticks, 2 creeps perdus. Suite : quad, cibles automatiques (ROI), boosts, défenseurs ennemis, bug du bodyBuilder avec TOUGH.
+   Rappel de l'idée de départ : Les bots open source (Hivemind compris) laissent volontairement la partie offensive hors de leurs dépôts : rien à porter. Objectif : des squads de creeps qui agissent à l'unisson (déplacement en formation, cible commune, mouvements synchronisés). À concevoir avec l'utilisateur.
 2. **Plus tard :** links, terminal et market, labs et boosts, factory, power.
 
 ## Points ouverts
