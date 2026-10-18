@@ -6,6 +6,7 @@ import { defenseModule } from "defense/defenseModule";
 import { expansionModule } from "expansion/Expansion";
 import { militaryModule } from "military/military";
 import { intelManagerModule } from "modules/IntelManager";
+import { linksModule } from "modules/Links";
 import { marketManagerModule } from "modules/MarketManager";
 import { memoryCleanupModule } from "modules/MemoryCleanup";
 import { miningStatsModule } from "modules/MiningStats";
@@ -39,6 +40,8 @@ export const gameLoop = () => {
 
     // Towers and safe mode
     { name: "Defense", fn: defenseModule, priority: "always" },
+    // Link transfers (RCL 5+): source links -> controller link, storage link as buffer
+    { name: "Links", fn: linksModule, runEvery: 3, priority: "high" },
     { name: "IntelManager", fn: intelManagerModule },
     { name: "ScoutManager", fn: scoutManagerModule, runEvery: 10, priority: "low" },
     // Remote sources each owned room mines (selection every 20 ticks)

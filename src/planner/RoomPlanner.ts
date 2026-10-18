@@ -9,7 +9,7 @@
  * labs, high level structures, quad breaker, decorative walls. Ramparts on the min cut around the
  * important structures, safe area, towers by rampart coverage, roads to the ramparts and on-ramps
  * follow Hivemind. No exit direction is considered safe (Hivemind: exits towards rooms enemies
- * can't reach). The controller link is not planned (links are not used yet).
+ * can't reach). Links: controller (next to the upgrader spot), storage (core), one per source bay.
  */
 
 import { log } from "../utils/logger";
@@ -267,6 +267,16 @@ class PlanBuilder {
                 this.pm.planLocation({ x, y }, "road", ROAD_POSITION);
                 this.pm.planLocation({ x, y }, "road.controller", null);
             });
+        }
+
+        // Controller link next to the upgrader spot, off the road
+        const link = findControllerLinkPosition(upgraderPos, controller, (x, y) => this.pm.isBuildableTile(x, y, false, true), (x, y) =>
+            this.pm.isWallTile(x, y)
+        );
+        if (link) {
+            this.pm.planLocation(link, "link.controller", null);
+            this.pm.planLocation(link, "link");
+            this.protectPosition(link, 0);
         }
 
         // No other path through the upgrader position
@@ -711,6 +721,56 @@ class PlanBuilder {
     }
 }
 
+/**
+ * Controller link spot around the upgrader position (Hivemind findControllerLinkPosition): most upgrade
+ * spots in its 3x3 (minus itself), +1.5 out of range 3 of the controller (it blocks no upgrade spot)
+ */
+export function findControllerLinkPosition(
+    upgraderPos: { x: number; y: number },
+    controller: { x: number; y: number },
+    isBuildable: (x: number, y: number) => boolean,
+    isWall: (x: number, y: number) => boolean
+): { x: number; y: number } | null {
+    let best: { x: number; y: number; score: number } | null = null;
+    forEachInArea(upgraderPos.x, upgraderPos.y, (x, y) => {
+        if (!isBuildable(x, y)) return;
+        let score = -1;
+        forEachInArea(x, y, (x2, y2) => {
+            if (!isWall(x2, y2) && chebyshev(x2, y2, controller.x, controller.y) <= 3) score++;
+        });
+        if (chebyshev(x, y, controller.x, controller.y) > 3) score += 1.5;
+        if (!best || best.score < score) best = { x, y, score };
+    });
+    const found = best as { x: number; y: number } | null;
+    return found ? { x: found.x, y: found.y } : null;
+}
+
+/** Plan types that occupy a tile (a controller link added to an older plan avoids them) */
+const OCCUPYING_TYPES = [
+    "road", "container", "spawn", "extension", "tower", "link", "storage", "terminal", "factory", "lab", "nuker",
+    "powerSpawn", "observer", "extractor", "upgrader.0", "harvester", "bay_center", "center"
+];
+
+/**
+ * Plans stored before the controller link existed (no replan: their rooms are already built): the
+ * link goes on a free tile next to the upgrader spot, with the planner's rule. True when added.
+ */
+function addMissingControllerLink(plan: RoomPlan): boolean {
+    if (plan.count("link.controller") > 0) return false;
+    const upgraderPos = plan.getLocations("upgrader.0")[0];
+    const controller = Game.rooms[plan.roomName]?.controller;
+    if (!upgraderPos || !controller) return false;
+    const terrain = Game.map.getRoomTerrain(plan.roomName);
+    const isWall = (x: number, y: number) => terrain.get(x, y) === TERRAIN_MASK_WALL;
+    const isBuildable = (x: number, y: number) =>
+        x > 2 && y > 2 && x < 47 && y < 47 && !isWall(x, y) && !OCCUPYING_TYPES.some(type => plan.has({ x, y }, type));
+    const link = findControllerLinkPosition(upgraderPos, controller.pos, isBuildable, isWall);
+    if (!link) return false;
+    plan.add("link.controller", link.x, link.y);
+    plan.add("link", link.x, link.y);
+    return true;
+}
+
 /** Computes a room plan from raw room data (no Game access besides PathFinder / RoomPosition) */
 export function generateRoomPlan(input: PlannerInput): { plan: RoomPlan | null; pathCalls: number } {
     const builder = new PlanBuilder({ ...input, variation: input.variation ?? listVariations(input)[0] });
@@ -784,6 +844,7 @@ class RoomPlanner {
         let plan = this.cache.get(roomName);
         if (!plan) {
             plan = RoomPlan.deserialize(roomName, memory);
+            if (addMissingControllerLink(plan)) memory.t = plan.serialize().t;
             this.cache.set(roomName, plan);
         }
         return plan;

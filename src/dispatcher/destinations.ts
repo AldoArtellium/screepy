@@ -1,6 +1,6 @@
 /**
  * Where carried resources go. Priorities and weights ported from Hivemind (MIT),
- * src/dispatcher/resource-destination/*.ts (spawn, bay, tower, container, worker-creep, storage, drop).
+ * src/dispatcher/resource-destination/*.ts (spawn, bay, tower, container, link, worker-creep, storage, drop).
  */
 
 import { whenInRange } from "../core/movement";
@@ -13,6 +13,7 @@ import {
     creepsWithOrder,
     hasEnemies,
     isInBay,
+    linkNetwork,
     Order,
     roomBays,
     storageLocation,
@@ -20,7 +21,7 @@ import {
 } from "../core/roomState";
 import { cacheEmptyTasks, DispatchContext, Dispatcher, TaskProvider } from "./Dispatcher";
 
-type EnergyStructure = StructureSpawn | StructureExtension | StructureTower | StructureContainer | StructureStorage;
+type EnergyStructure = StructureSpawn | StructureExtension | StructureTower | StructureContainer | StructureStorage | StructureLink;
 
 function carriesEnergy(context: DispatchContext): boolean {
     return context.ignoreStoreContent || context.creep.store.energy > 0;
@@ -185,6 +186,45 @@ class TowerDestination extends StructureDestination {
                     };
                 })
         );
+    }
+}
+
+/**
+ * Neutral links (storage link) while the link network lacks energy (the controller link wants
+ * some): 5, -1 beyond 10 tiles (Hivemind resource-destination/link.ts)
+ */
+class LinkDestination extends StructureDestination {
+    readonly type = "link";
+
+    highestPriority(): number {
+        return 5;
+    }
+
+    tasks(context: DispatchContext): Order[] {
+        if (context.resourceType && context.resourceType !== RESOURCE_ENERGY) return [];
+        const creep = context.creep;
+        const room = creep.room;
+        const network = linkNetwork(room);
+        if (!network || network.energy >= network.minEnergy) return [];
+        return network.neutral
+            .filter(link => link.store.getFreeCapacity(RESOURCE_ENERGY) > 0)
+            .map(link => {
+                const free = link.store.getFreeCapacity(RESOURCE_ENERGY);
+                return {
+                    type: this.type,
+                    target: link.id,
+                    resourceType: RESOURCE_ENERGY,
+                    amount: free,
+                    priority: creep.pos.getRangeTo(link) > 10 ? 4 : 5,
+                    weight: free / 100
+                };
+            });
+    }
+
+    isValid(task: Order, context: DispatchContext): boolean {
+        if (!super.isValid(task, context)) return false;
+        const network = linkNetwork(context.creep.room);
+        return !!network && network.energy < network.minEnergy;
     }
 }
 
@@ -377,6 +417,7 @@ export const destinationDispatcher = new Dispatcher([
     new BayDestination(),
     new ControllerContainerDestination(),
     new DropDestination(),
+    new LinkDestination(),
     new SpawnDestination(),
     new StorageDestination(),
     new TowerDestination(),

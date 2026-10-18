@@ -182,6 +182,76 @@ export function controllerContainer(room: Room): StructureContainer | null {
     });
 }
 
+// ------------------------------------------------------------------ links
+
+/** Controller link (planned 'link.controller', else any link within 3), Hivemind updateControllerLink */
+export function controllerLink(room: Room): StructureLink | null {
+    return tickCache(`controllerLink:${room.name}`, () => {
+        const controller = room.controller;
+        if (!controller) return null;
+        const links = structuresOfType<StructureLink>(room, STRUCTURE_LINK).filter(l => l.my);
+        const plan = roomPlanner.getPlan(room.name);
+        if (plan && plan.count("link.controller") > 0) return links.find(l => plan.has(l.pos, "link.controller")) ?? null;
+        return links.find(l => l.pos.inRangeTo(controller, 3)) ?? null;
+    });
+}
+
+/** Closest link within 3 of a source (Hivemind getNearbyLink) */
+export function sourceLink(source: Source): StructureLink | null {
+    return tickCache(`sourceLink:${source.id}`, () => {
+        const links = structuresOfType<StructureLink>(source.room, STRUCTURE_LINK).filter(l => l.my && l.pos.inRangeTo(source, 3));
+        return source.pos.findClosestByRange(links);
+    });
+}
+
+export interface LinkAndDelta {
+    link: StructureLink;
+    delta: number;
+}
+
+/**
+ * Links of a room by role (Hivemind LinkNetwork, generateLinkNetwork): source links are "in" (want 0),
+ * the controller link "out" (wants full), both at once "in-out" (half), the others neutral (storage)
+ */
+export interface LinkNetwork {
+    neutral: StructureLink[];
+    underfull: LinkAndDelta[];
+    overfull: LinkAndDelta[];
+    energy: number;
+    /** Sum of the wanted levels */
+    minEnergy: number;
+    /** Sum of the wanted levels, neutral links counted full */
+    maxEnergy: number;
+}
+
+export function linkNetwork(room: Room): LinkNetwork | null {
+    return tickCache(`linkNetwork:${room.name}`, () => {
+        const links = structuresOfType<StructureLink>(room, STRUCTURE_LINK).filter(l => l.my);
+        if (links.length === 0) return null;
+        const network: LinkNetwork = { neutral: [], underfull: [], overfull: [], energy: 0, minEnergy: 0, maxEnergy: 0 };
+        const controller = controllerLink(room);
+        const sourceLinks = new Set(room.find(FIND_SOURCES).map(s => sourceLink(s)?.id));
+        for (const link of links) {
+            const capacity = link.store.getCapacity(RESOURCE_ENERGY);
+            const energy = link.store.energy;
+            network.energy += energy;
+            let wanted: number | null = null;
+            if (link.id === controller?.id) wanted = sourceLinks.has(link.id) ? capacity / 2 : capacity;
+            else if (sourceLinks.has(link.id)) wanted = 0;
+            if (wanted === null) {
+                network.neutral.push(link);
+                network.maxEnergy += capacity;
+                continue;
+            }
+            network.minEnergy += wanted;
+            network.maxEnergy += wanted;
+            if (energy < wanted) network.underfull.push({ link, delta: wanted - energy });
+            else if (energy > wanted) network.overfull.push({ link, delta: energy - wanted });
+        }
+        return network;
+    });
+}
+
 /** Where energy is dropped before the storage exists: plan center, else storage, else first spawn */
 export function storageLocation(room: Room): RoomPosition | null {
     return tickCache(`storageLocation:${room.name}`, () => {

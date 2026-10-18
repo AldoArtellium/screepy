@@ -5,7 +5,7 @@
  *
  * RCL 1: spawns. RCL 2+: extensions bay by bay, source and controller containers, roads on swamps
  * towards sources and controller. RCL 3: extensions around sources, towers, ramparts. RCL 4: storage, then every
- * planned road once the storage is built, and the roads of the remote mining paths in the room.
+ * planned road once the storage is built, and the roads of the remote mining paths in the room. RCL 5+: links.
  */
 
 import { RoomPlan } from "../planner/RoomPlan";
@@ -96,6 +96,28 @@ function manageRamparts(ctx: RoomContext): void {
     ctx.buildPlanned("rampart", STRUCTURE_RAMPART);
 }
 
+/**
+ * Links within the RCL limit (Hivemind manageLinks): controller first, then source links farthest
+ * from the controller first, then the storage link (with 2 sources: RCL 5 controller + 1 source,
+ * RCL 6 both sources, RCL 7 storage). Unplanned links are not destroyed (Hivemind does).
+ */
+function manageLinks(ctx: RoomContext): void {
+    const limit = CONTROLLER_STRUCTURES[STRUCTURE_LINK][ctx.rcl] ?? 0;
+    if (limit === 0) return;
+    let count = 0;
+    if (!ctx.buildPlanned("link.controller", STRUCTURE_LINK)) return;
+    if (++count >= limit) return;
+    const controller = ctx.room.controller!.pos;
+    const farthest = _.sortBy(ctx.plan.getLocations("link.source"), pos => -pos.getRangeTo(controller));
+    for (const pos of farthest) {
+        if (!ctx.tryBuild(pos, STRUCTURE_LINK)) return;
+        if (++count >= limit) return;
+    }
+    ctx.buildPlanned("link.storage", STRUCTURE_LINK);
+    if (++count >= limit) return;
+    ctx.buildPlanned("link", STRUCTURE_LINK);
+}
+
 function manageStructures(ctx: RoomContext): void {
     const room = ctx.room;
     const onlySpawn = _.size(Game.spawns) === 1 ? _.values<StructureSpawn>(Game.spawns)[0] : null;
@@ -125,6 +147,7 @@ function manageStructures(ctx: RoomContext): void {
         ctx.buildPlanned("road.controller", STRUCTURE_ROAD, pos => ctx.isSwamp(pos));
     }
     if (!ctx.canCreate()) return;
+    manageLinks(ctx);
     if (ctx.rcl < 4) return;
 
     if (room.storage) {

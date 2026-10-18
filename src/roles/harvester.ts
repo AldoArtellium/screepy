@@ -1,11 +1,12 @@
 /**
  * Harvester: bound to one source. Stationary on its planned harvest position (the source container)
- * as soon as the room has a transporter; delivers like a transporter before that.
+ * as soon as the room has a transporter; delivers like a transporter before that. Fills its source
+ * link before the container (RCL 5+).
  * Ported from Hivemind (MIT), src/role/harvester.ts.
  */
 
 import { whenInRange } from "../core/movement";
-import { clearOrder, creepsByRole, roomBays, sourceContainer } from "../core/roomState";
+import { clearOrder, creepsByRole, roomBays, sourceContainer, sourceLink, structuresOfType } from "../core/roomState";
 import { roomPlanner } from "../planner/RoomPlanner";
 import { countStat } from "../utils/stats";
 import { registerRole } from "./registry";
@@ -123,8 +124,22 @@ function depositResources(creep: Creep, source: Source): void {
         }
     }
 
-    if (container && container.store.getFreeCapacity() > 0 && creep.pos.getRangeTo(container) > 0) {
-        whenInRange(creep, 1, container, () => creep.transfer(container, RESOURCE_ENERGY));
+    // The source link (else another link within 3 of the source) beats the container while it has room
+    let target: StructureContainer | StructureLink | null = container && container.store.getFreeCapacity() > 0 ? container : null;
+    if (creep.store.energy > 0) {
+        const link = sourceLink(source);
+        if (link && link.store.getFreeCapacity(RESOURCE_ENERGY) > 0) {
+            target = link;
+        } else {
+            const other = structuresOfType<StructureLink>(creep.room, STRUCTURE_LINK).find(
+                l => l.my && l.store.getFreeCapacity(RESOURCE_ENERGY) > 0 && l.pos.inRangeTo(source, 3)
+            );
+            if (other) target = other;
+        }
+    }
+    const depositTarget = target;
+    if (depositTarget && !(depositTarget.structureType === STRUCTURE_CONTAINER && creep.pos.isEqualTo(depositTarget.pos))) {
+        whenInRange(creep, 1, depositTarget, () => creep.transfer(depositTarget, RESOURCE_ENERGY));
     }
 
     // Hand energy to adjacent workers (RCL < 6)

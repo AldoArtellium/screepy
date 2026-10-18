@@ -1,10 +1,11 @@
 /**
- * Upgrader: upgrades the controller, refilling from the controller container while working.
+ * Upgrader: upgrades the controller, refilling from the controller link, else the controller
+ * container, while working.
  * Ported from Hivemind (MIT), src/role/upgrader.ts.
  */
 
 import { whenInRange } from "../core/movement";
-import { controllerContainer, creepsByRole, creepsWithOrder } from "../core/roomState";
+import { controllerContainer, controllerLink, creepsByRole, creepsWithOrder } from "../core/roomState";
 import { roomPlanner } from "../planner/RoomPlanner";
 import { countStat } from "../utils/stats";
 import { registerRole } from "./registry";
@@ -28,16 +29,17 @@ export function runUpgrader(creep: Creep): void {
     }
 
     const container = controllerContainer(room);
+    const link = controllerLink(room);
     if (creep.memory.upgrading && creep.store.energy === 0) creep.memory.upgrading = false;
-    if (!creep.memory.upgrading && (creep.store.getFreeCapacity() === 0 || (creep.store.energy > 0 && container))) {
+    if (!creep.memory.upgrading && (creep.store.getFreeCapacity() === 0 || (creep.store.energy > 0 && (container || link)))) {
         creep.memory.upgrading = true;
     }
 
-    if (creep.memory.upgrading) performUpgrade(creep, container);
-    else getUpgraderEnergy(creep, container);
+    if (creep.memory.upgrading) performUpgrade(creep, container, link);
+    else getUpgraderEnergy(creep, container, link);
 }
 
-function performUpgrade(creep: Creep, container: StructureContainer | null): void {
+function performUpgrade(creep: Creep, container: StructureContainer | null, link: StructureLink | null): void {
     const controller = creep.room.controller;
     if (!controller) return;
     const isOnlyUpgrader = creepsByRole(creep.memory.room ?? creep.room.name, "upgrader").length === 1;
@@ -48,15 +50,20 @@ function performUpgrade(creep: Creep, container: StructureContainer | null): voi
         whenInRange(creep, 3, controller, () => creep.upgradeController(controller) === OK && countStat("work:upgrade"));
     }
 
-    // Keep refilling at the container while upgrading
-    if (container && creep.store.energy < creep.getActiveBodyparts(WORK) * 2) {
-        if (container.store.energy > 50 && creep.pos.isNearTo(container)) creep.withdraw(container, RESOURCE_ENERGY);
+    // Keep refilling at the link, else the container, while upgrading
+    if (creep.store.energy < creep.getActiveBodyparts(WORK) * 2) {
+        if (link && link.store.energy > 50 && creep.pos.isNearTo(link) && creep.withdraw(link, RESOURCE_ENERGY) === OK) return;
+        if (container && container.store.energy > 50 && creep.pos.isNearTo(container)) creep.withdraw(container, RESOURCE_ENERGY);
     }
 }
 
-function getUpgraderEnergy(creep: Creep, container: StructureContainer | null): void {
+function getUpgraderEnergy(creep: Creep, container: StructureContainer | null, link: StructureLink | null): void {
     const room = creep.room;
     const controller = room.controller!;
+    if (link && link.store.energy > 50) {
+        whenInRange(creep, 1, link, () => creep.withdraw(link, RESOURCE_ENERGY));
+        return;
+    }
     if (container && container.store.energy > 50) {
         whenInRange(creep, 1, container, () => creep.withdraw(container, RESOURCE_ENERGY));
         return;
@@ -89,7 +96,7 @@ function getUpgraderEnergy(creep: Creep, container: StructureContainer | null): 
         return;
     }
 
-    if (!container) performGetEnergy(creep);
+    if (!container && !link) performGetEnergy(creep);
     else whenInRange(creep, 3, controller);
 }
 

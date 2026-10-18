@@ -1,6 +1,6 @@
 /**
  * Where creeps take resources from. Priorities and weights ported from Hivemind (MIT),
- * src/dispatcher/resource-source/*.ts (container, drop, grave, storage, overfull-extension).
+ * src/dispatcher/resource-source/*.ts (container, drop, grave, link, storage, overfull-extension).
  */
 
 import { whenInRange } from "../core/movement";
@@ -11,6 +11,7 @@ import {
     creepsWithOrder,
     currentEnergy,
     effectiveEnergy,
+    linkNetwork,
     Order,
     roomBays,
     sourceContainer,
@@ -33,7 +34,7 @@ function wantsEnergy(context: DispatchContext): boolean {
     return !context.resourceType || context.resourceType === RESOURCE_ENERGY;
 }
 
-type Withdrawable = StructureContainer | StructureStorage | StructureExtension | Tombstone | Ruin;
+type Withdrawable = StructureContainer | StructureStorage | StructureExtension | StructureLink | Tombstone | Ruin;
 
 /** Base withdraw source */
 abstract class StoreSource implements TaskProvider {
@@ -259,10 +260,47 @@ class OverfullExtensionSource extends StoreSource {
     }
 }
 
+/**
+ * Neutral links (storage link) while the link network holds more than it wants: 5, -1 beyond 10
+ * tiles, -2 per creep already on it (Hivemind resource-source/link.ts)
+ */
+class LinkSource extends StoreSource {
+    readonly type = "link";
+
+    highestPriority(): number {
+        return 5;
+    }
+
+    tasks(context: DispatchContext): Order[] {
+        if (!wantsEnergy(context)) return [];
+        const creep = context.creep;
+        const room = creep.room;
+        const network = linkNetwork(room);
+        if (!network) return [];
+        return cacheEmptyTasks(`link:${room.name}`, () =>
+            network.neutral
+                .filter(link => link.store.energy > 0)
+                .map(link => {
+                    let priority = 5;
+                    if (creep.pos.getRangeTo(link) > 10) priority--;
+                    priority -= creepsWithOrder(room, this.type, link.id).length * 2;
+                    return { type: this.type, target: link.id, resourceType: RESOURCE_ENERGY, priority, weight: link.store.energy / 100 };
+                })
+        );
+    }
+
+    isValid(task: Order, context: DispatchContext): boolean {
+        const network = linkNetwork(context.creep.room);
+        if (!network || network.energy <= network.maxEnergy) return false;
+        return super.isValid(task, context);
+    }
+}
+
 export const sourceDispatcher = new Dispatcher([
     new ContainerSource(),
     new DropSource(),
     new GraveSource(),
+    new LinkSource(),
     new OverfullExtensionSource(),
     new StorageSource()
 ]);

@@ -60,6 +60,14 @@ const ENEMY = opt("enemy", null);
 const GCL = Number(opt("gcl", 1));
 /** CPU limit of the bot (default: the mockup's, 100), e.g. 8 to drain the bucket and test throttling */
 const CPU_LIMIT = opt("cpu-limit", null);
+/**
+ * World state: --save-state <file> writes every room object, the game time and the bot's Memory at
+ * the end of the run; --load-state <file> starts from such a file (same room, objects re-owned by the
+ * new user, Memory.stats counters reset). Lets RCL 5+ changes be compared from one advanced state
+ * instead of 25k+ ticks from scratch.
+ */
+const SAVE_STATE = opt("save-state", null);
+const LOAD_STATE = opt("load-state", null);
 const OUT = opt("out");
 const VERBOSE = flag("verbose");
 const LOG_EVERY = Number(opt("log-every", 500));
@@ -306,6 +314,53 @@ async function creepCensus(db, userId) {
   return census;
 }
 
+/** Strips the LokiJS bookkeeping of a document */
+function plain(doc) {
+  const { $loki, meta, ...rest } = doc;
+  return rest;
+}
+
+async function saveState(server, userId, file) {
+  const { db, env } = server.common.storage;
+  const state = {
+    room: ROOM,
+    userId,
+    gameTime: Number(await server.world.gameTime),
+    gcl: (await db.users.findOne({ _id: userId })).gcl,
+    memory: await env.get(env.keys.MEMORY + userId),
+    objects: (await db["rooms.objects"].find({})).map(plain)
+  };
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(file, JSON.stringify(state));
+  log(`State saved to ${file} (tick ${state.gameTime}, ${state.objects.length} objects)`);
+}
+
+/** Replaces the world's objects, game time and Memory by a saved state (see SAVE_STATE) */
+async function loadState(server, userId, file) {
+  const { db, env } = server.common.storage;
+  const state = JSON.parse(fs.readFileSync(file, "utf-8"));
+  if (state.room !== ROOM) throw new Error(`State ${file} is for ${state.room}, not ${ROOM}`);
+  await db["rooms.objects"].removeWhere({});
+  const rooms = new Set();
+  for (const o of state.objects) {
+    if (o.user === state.userId) {
+      o.user = userId;
+      rooms.add(o.room);
+    }
+    await db["rooms.objects"].insert(o);
+  }
+  for (const room of rooms) {
+    await db.rooms.update({ _id: room }, { $set: { active: true } });
+    await env.sadd(env.keys.ACTIVE_ROOMS, room);
+  }
+  await db.users.update({ _id: userId }, { $set: { gcl: state.gcl } });
+  await env.set(env.keys.GAMETIME, state.gameTime);
+  const memory = JSON.parse(state.memory || "{}");
+  if (memory.stats) memory.stats.counters = {};
+  await env.set(env.keys.MEMORY + userId, JSON.stringify(memory));
+  log(`State loaded from ${file} (tick ${state.gameTime}, ${state.objects.length} objects, rooms ${[...rooms].join(" ")})`);
+}
+
 async function readMemory(user) {
   try {
     return JSON.parse(await user.memory);
@@ -346,6 +401,7 @@ async function main() {
   // The enemy first: adding a second user resets the first one's Memory
   const enemy = ENEMY ? await setupEnemy(server, fixture, ENEMY) : null;
   await env.set(env.keys.MEMORY + user.id, MEMORY_INIT);
+  if (LOAD_STATE) await loadState(server, user.id, LOAD_STATE);
   if (CPU_LIMIT !== null) {
     await server.common.storage.db.users.update({ _id: user.id }, { $set: { cpu: Number(CPU_LIMIT), cpuAvailable: 10000 } });
     log(`CPU limit ${CPU_LIMIT}, bucket 10000`);
@@ -469,6 +525,7 @@ async function main() {
     for (const [k, v] of Object.entries(processCpu(server))) console.log(`${k.padEnd(28)} ${v === null ? "n/a" : (v / TICKS).toFixed(2)}`);
   }
 
+  if (SAVE_STATE) await saveState(server, user.id, SAVE_STATE);
   const world = await snapshot(server, user.id);
   const memory = await readMemory(user);
   const stats = memory.stats;

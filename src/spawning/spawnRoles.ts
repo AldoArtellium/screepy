@@ -9,13 +9,16 @@ import { Option } from "../core/options";
 import {
     activeParts,
     controllerContainer,
+    controllerLink,
     controllerRefillPathLength,
     creepsByRole,
     effectiveEnergy,
     harvestSpots,
     hasEnemies,
+    linkNetwork,
     mySpawns,
     sourceContainer,
+    sourceLink,
     storageLocation
 } from "../core/roomState";
 import { roomPlanner } from "../planner/RoomPlanner";
@@ -173,7 +176,10 @@ function transporterBaseAmount(room: Room): number {
     if (rcl < 3) return 1;
     if (rcl < 4) return 2;
     if (!room.storage && !room.terminal) return effectiveEnergy(room) > 1000 ? 2 : 1;
-    let amount = 2 + 2 * room.find(FIND_SOURCES).length;
+    const sources = room.find(FIND_SOURCES);
+    let amount = 2 + 2 * sources.length;
+    // Links beam energy around: fewer transporters
+    if (controllerLink(room)) amount -= 1 + sources.filter(s => sourceLink(s)).length;
     if (rcl === 5) amount++;
     if (rcl === 6) amount++;
     return amount;
@@ -193,12 +199,12 @@ function extraUpgraderTransporters(room: Room, size: number): number {
  * estimateNeededCarryParts is a TODO): its fixed 3 transporters left most of W9N5's energy rotting
  * by far swampy sources.
  */
-const haulTrips: Map<string, { until: number; roundTrip: number; swampShare: number }> = new Map();
-function haulPaths(room: Room): { roundTrip: number; swampShare: number } {
+const haulTrips: Map<string, { until: number; roundTrips: { [source: string]: number }; swampShare: number }> = new Map();
+function haulPaths(room: Room): { roundTrips: { [source: string]: number }; swampShare: number } {
     let cached = haulTrips.get(room.name);
     if (!cached || cached.until < Game.time) {
         const from = storageLocation(room);
-        let roundTrip = 0;
+        const roundTrips: { [source: string]: number } = {};
         let tiles = 0;
         let swamps = 0;
         const terrain = room.getTerrain();
@@ -210,12 +216,12 @@ function haulPaths(room: Room): { roundTrip: number; swampShare: number } {
                     swampCost: 10
                 });
                 if (result.incomplete) continue;
-                roundTrip += result.cost + result.path.length;
+                roundTrips[source.id] = result.cost + result.path.length;
                 tiles += result.path.length;
                 swamps += result.path.filter(p => terrain.get(p.x, p.y) === TERRAIN_MASK_SWAMP).length;
             }
         }
-        cached = { until: Game.time + CREEP_LIFE_TIME, roundTrip, swampShare: tiles ? swamps / tiles : 0 };
+        cached = { until: Game.time + CREEP_LIFE_TIME, roundTrips, swampShare: tiles ? swamps / tiles : 0 };
         haulTrips.set(room.name, cached);
     }
     return cached;
@@ -232,12 +238,34 @@ function moverMode(room: Room): MoveMode {
     return roads >= 20 ? MoveMode.ROAD : MoveMode.PLAINS;
 }
 
+/**
+ * Source output the links carry instead of transporters (Hivemind's TODO: exclude sources with links
+ * once the controller link exists): all of it with a neutral (storage) link to absorb the surplus,
+ * else what the upgraders draw from the controller link, farthest linked sources first.
+ */
+function linkedShares(room: Room, energyPerTick: number): Map<string, number> {
+    const shares: Map<string, number> = new Map();
+    const network = linkNetwork(room);
+    if (!network || !controllerLink(room)) return shares;
+    let capacity = network.neutral.length > 0 ? Infinity : activeParts(creepsByRole(room.name, "upgrader"), WORK) * UPGRADE_CONTROLLER_POWER;
+    const controller = room.controller!.pos;
+    const linked = _.sortBy(room.find(FIND_SOURCES).filter(s => sourceLink(s)), s => -s.pos.getRangeTo(controller));
+    for (const source of linked) {
+        const covered = Math.min(energyPerTick, capacity);
+        shares.set(source.id, covered / energyPerTick);
+        capacity -= covered;
+    }
+    return shares;
+}
+
 function haulTransporters(room: Room, size: number): number {
     const cached = haulPaths(room);
     const carry = transporter.body(room, { role: "transporter", priority: 0, weight: 0, size }).filter(p => p === CARRY).length;
     if (carry === 0) return 0;
     const energyPerTick = SOURCE_ENERGY_CAPACITY / ENERGY_REGEN_TIME;
-    return (energyPerTick * cached.roundTrip) / (carry * CARRY_CAPACITY);
+    const linked = linkedShares(room, energyPerTick);
+    const roundTrip = _.sum(Object.keys(cached.roundTrips), id => cached.roundTrips[id] * (1 - (linked.get(id) ?? 0)));
+    return (energyPerTick * roundTrip) / (carry * CARRY_CAPACITY);
 }
 
 function transporterAmount(room: Room, size: number): number {
@@ -410,7 +438,7 @@ const upgrader: SpawnRole = {
     },
 
     body(room, option) {
-        const easy = !!controllerContainer(room);
+        const easy = !!controllerContainer(room) || !!controllerLink(room);
         return buildBody({
             weights: { [CARRY]: 1, [WORK]: easy ? 10 : 1 },
             partLimits: { [WORK]: option.mini ? 2 : room.controller?.level === 8 ? 15 : 50 },
