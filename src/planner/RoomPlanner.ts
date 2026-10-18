@@ -4,16 +4,15 @@
  * Ported from Hivemind (MIT), src/room/planner/room-planner.ts, variation-generator.ts,
  * variation-builder.ts and variation-builder-base.ts.
  *
- * Simplified (see docs/hivemind/hivemind-construction.md §2.8): a single "weighted" variation
- * (no spawn in source bays), computed in one tick, no scoring. Skipped steps: helper parking,
- * labs, high level structures, quad breaker, decorative walls. Ramparts on the min cut around the
- * important structures, safe area, towers by rampart coverage, roads to the ramparts and on-ramps
- * follow Hivemind. No exit direction is considered safe (Hivemind: exits towards rooms enemies
- * can't reach). The controller link is not planned (links are not used yet).
+ * Steps follow Hivemind's variation builder (helper parking, labs, bays, high level structures,
+ * ramparts on the min cut, safe area, towers, roads to the ramparts, on-ramps). Skipped: quad
+ * breaker, decorative walls. No exit direction is considered safe (Hivemind: exits towards rooms
+ * enemies can't reach). Plans of PLAN_VERSION 3 (before labs and high level structures) are
+ * extended in place inside their safe area (extendRoomPlan) instead of replanned: nothing built moves.
  */
 
 import { log } from "../utils/logger";
-import { PLAN_VERSION, RoomPlan } from "./RoomPlan";
+import { EXTENDABLE_PLAN_VERSION, PLAN_VERSION, RoomPlan } from "./RoomPlan";
 import { ROAD_POSITION, PlacementManager } from "./PlacementManager";
 import { chebyshev, forEachInArea, generateDistanceMatrices, getExitCenters, idx } from "./matrices";
 import { getCutTiles, MinCutRect } from "./minCut";
@@ -30,6 +29,8 @@ export interface PlannerInput {
     spawn?: { x: number; y: number };
     /** Variation to build (default: the first of listVariations) */
     variation?: PlanVariation;
+    /** Tests only: skip the PLAN_VERSION 4 steps (helper parking, labs, high level structures) */
+    legacy?: boolean;
 }
 
 /** Hivemind variation: a base center (none = chosen like "weighted") and the sources whose bay holds a spawn */
@@ -57,6 +58,21 @@ const TOWER_CORE_WEIGHT = 0.5;
 /** Planned structures the ramparts enclose with RAMPART_DISTANCE around them (Hivemind: every
  * CONTROLLER_STRUCTURES type but extension, road, container, extractor and link) */
 const PROTECTED_STRUCTURES = ["spawn", "storage", "terminal", "factory", "tower", "lab", "nuker", "powerSpawn", "observer"];
+
+/** Plan types that block a tile for new structures (structures, containers, creep spots) */
+const BLOCKING_TYPES = [
+    ...PROTECTED_STRUCTURES,
+    "extension",
+    "link",
+    "extractor",
+    "container",
+    "harvester",
+    "upgrader",
+    "bay_center",
+    "helper_parking",
+    "rampart",
+    "exit"
+];
 
 /** Safety matrix values (Hivemind TILE_IS_*): endangered = safe but within range 3 of an unsafe tile */
 export const TILE_ENDANGERED = 0;
@@ -104,7 +120,12 @@ class PlanBuilder {
         this.placeRoadNetwork();
         this.placeRoomCore();
         this.placeHarvestBayStructures();
+        if (!this.input.legacy) {
+            this.placeHelperParkingLot();
+            this.placeLabs();
+        }
         this.placeBays();
+        if (!this.input.legacy) this.placeHighLevelStructures();
         this.placeRamparts();
         this.sealRoom();
         this.placeTowers();
@@ -168,6 +189,13 @@ class PlanBuilder {
     }
 
     private determineCorePosition(center: RoomPosition): void {
+        this.determineEntrances(center);
+        // Not in Hivemind: the center stays free (towers by coverage could land on it, blocking the
+        // energy drop point and every path to it); road cost keeps it walkable but not buildable
+        this.pm.planLocation(center, "center", ROAD_POSITION);
+    }
+
+    private determineEntrances(center: RoomPosition): void {
         this.center = center;
         // Center is reached through the 4 cardinal directions
         this.entrances = [
@@ -176,9 +204,6 @@ class PlanBuilder {
             this.pm.pos(center.x, center.y + 2),
             this.pm.pos(center.x, center.y - 2),
         ];
-        // Not in Hivemind: the center stays free (towers by coverage could land on it, blocking the
-        // energy drop point and every path to it); road cost keeps it walkable but not buildable
-        this.pm.planLocation(center, "center", ROAD_POSITION);
     }
 
     private determineHarvesterPositions(): void {
@@ -380,6 +405,129 @@ class PlanBuilder {
             this.pm.planLocation(hp, "container", null);
             this.placeBayStructures(hp, { spawn: withSpawn, source: true });
         }
+    }
+
+    /** Parking spot of the helper creep (a blocked road), first flood spot from the center */
+    private placeHelperParkingLot(): void {
+        this.pm.startBuildingPlacement(this.center, this.entrances);
+        const pos = this.pm.getNextAvailableBuildSpot();
+        if (!pos) return;
+        this.pm.planLocation(pos, "road");
+        this.pm.planLocation(pos, "helper_parking");
+        this.pm.placeAccessRoad(pos);
+        this.pm.filterOpenList(pos);
+    }
+
+    /**
+     * 10 labs on a stamp: 2 roads and the 2 source labs ("lab.source", not in Hivemind) on a 2x2
+     * square, up to 8 more labs around them, each within range 2 of both source labs. Not in
+     * Hivemind (the variation fails): fewer labs are kept when no stamp fits.
+     */
+    private placeLabs(): void {
+        this.pm.startBuildingPlacement();
+        while (this.pm.canPlaceMore("lab")) {
+            const pos = this.pm.getNextAvailableBuildSpot();
+            if (!pos) break;
+            if (this.pm.getExitDistance(pos.x, pos.y) < 8) continue;
+
+            const { x, y } = pos;
+            for (const [dx, dy] of [
+                [1, 1],
+                [-1, 1],
+                [1, -1],
+                [-1, -1],
+            ]) {
+                const tiles = [
+                    [x - dx, y + dy],
+                    [x - dx, y],
+                    [x - dx, y - dy],
+                    [x, y - dy],
+                    [x + dx, y - dy],
+                    [x, y + 2 * dy],
+                    [x + dx, y + 2 * dy],
+                    [x + 2 * dx, y + 2 * dy],
+                    [x + 2 * dx, y + dy],
+                    [x + 2 * dx, y],
+                ];
+                if (!this.canFitLabStamp(pos, dx, dy, tiles)) continue;
+
+                this.pm.planLocation(pos, "road", ROAD_POSITION);
+                for (const lab of [
+                    { x: x + dx, y },
+                    { x, y: y + dy },
+                ]) {
+                    this.pm.planLocation(lab, "lab");
+                    this.pm.planLocation(lab, "lab.reaction");
+                    this.pm.planLocation(lab, "lab.source");
+                }
+                this.pm.planLocation({ x: x + dx, y: y + dy }, "road", ROAD_POSITION);
+                this.pm.placeAccessRoad(pos);
+
+                for (const [lx, ly] of tiles) {
+                    if (!this.pm.canPlaceMore("lab")) break;
+                    if (!this.pm.isBuildableTile(lx, ly)) continue;
+                    this.pm.planLocation({ x: lx, y: ly }, "lab");
+                    this.pm.planLocation({ x: lx, y: ly }, "lab.reaction");
+                }
+                break;
+            }
+        }
+        this.pm.startBuildingPlacement();
+    }
+
+    /** The 2x2 center (2 labs, 2 roads) is free and at least 9 of the 10 tiles around it */
+    private canFitLabStamp(pos: { x: number; y: number }, dx: number, dy: number, tiles: number[][]): boolean {
+        if (!this.pm.isBuildableTile(pos.x, pos.y)) return false;
+        if (!this.pm.isBuildableTile(pos.x + dx, pos.y)) return false;
+        if (!this.pm.isBuildableTile(pos.x, pos.y + dy)) return false;
+        if (!this.pm.isBuildableTile(pos.x + dx, pos.y + dy)) return false;
+        return tiles.filter(([tx, ty]) => this.pm.isBuildableTile(tx, ty)).length > 8;
+    }
+
+    /** Power spawn and nuker with an access road, observer without, on the next flood spots */
+    private placeHighLevelStructures(): void {
+        this.pm.startBuildingPlacement(this.center, this.entrances);
+        this.pm.placeAll("powerSpawn", true);
+        this.pm.placeAll("nuker", true);
+        this.pm.placeAll("observer", false);
+    }
+
+    /**
+     * Rebuilds the placement state of a stored plan: its structures and roads block or cost like when
+     * it was built, every tile outside its safe area is blocked (new structures stay inside the ramparts).
+     */
+    private loadPlan(plan: RoomPlan): boolean {
+        const center = plan.getCenter();
+        if (!center) return false;
+        for (const type of plan.types()) {
+            for (const pos of plan.getLocations(type)) this.plan.add(type, pos.x, pos.y);
+        }
+        this.determineEntrances(center);
+        for (let x = 0; x < 50; x++) {
+            for (let y = 0; y < 50; y++) {
+                if (x === 0 || y === 0 || x === 49 || y === 49 || !plan.has({ x, y }, "safe")) this.pm.blockPosition(x, y);
+            }
+        }
+        for (const type of plan.types()) {
+            if (type === "road") {
+                for (const pos of plan.getLocations(type)) {
+                    if (!this.pm.isBlockedTile(pos.x, pos.y)) this.pm.matrix.set(pos.x, pos.y, ROAD_POSITION);
+                }
+            } else if (BLOCKING_TYPES.includes(type.split(".")[0])) {
+                for (const pos of plan.getLocations(type)) this.pm.blockPosition(pos.x, pos.y);
+            }
+        }
+        this.pm.blockPosition(center.x, center.y);
+        return true;
+    }
+
+    /** Adds the PLAN_VERSION 4 structures missing from a stored plan */
+    extend(plan: RoomPlan): RoomPlan | null {
+        if (!this.loadPlan(plan)) return null;
+        if (this.plan.count("helper_parking") === 0) this.placeHelperParkingLot();
+        this.placeLabs();
+        this.placeHighLevelStructures();
+        return this.plan;
     }
 
     /** Extension bays: 3x3 squares around a free center, closest to the base center first */
@@ -719,6 +867,14 @@ export function generateRoomPlan(input: PlannerInput): { plan: RoomPlan | null; 
 }
 
 /**
+ * Adds helper parking, labs, power spawn, nuker and observer to a PLAN_VERSION 3 plan without
+ * moving anything: only on free tiles of its safe area. Returns null if the plan has no center.
+ */
+export function extendRoomPlan(input: PlannerInput, plan: RoomPlan): RoomPlan | null {
+    return new PlanBuilder(input).extend(plan);
+}
+
+/**
  * Variations to try (Hivemind variation-generator): base centers x every combination of sources with
  * or without a spawn in their bay ("-" / "+", "-" first). Centers: "weighted", then the tile farthest
  * from walls in each cell of a 3x3 grid. Not in Hivemind: a room with a spawn keeps its center next
@@ -772,10 +928,13 @@ class RoomPlanner {
     private readonly failedAt: Map<string, number> = new Map();
     private readonly searches: Map<string, VariationSearch> = new Map();
 
-    /** Plan of an owned room (heap cache, else Memory.rooms[r].plan if version matches), null if not planned yet */
+    /**
+     * Plan of an owned room (heap cache, else Memory.rooms[r].plan if version matches), null if not planned yet.
+     * A PLAN_VERSION 3 plan is used as is until run() extends it.
+     */
     getPlan(roomName: string): RoomPlan | null {
         const memory = Memory.rooms?.[roomName]?.plan;
-        if (!memory || memory.v !== PLAN_VERSION) {
+        if (!memory || (memory.v !== PLAN_VERSION && memory.v !== EXTENDABLE_PLAN_VERSION)) {
             // Deleted or outdated in Memory: replan
             this.cache.delete(roomName);
             return null;
@@ -842,6 +1001,29 @@ class RoomPlanner {
         return plan;
     }
 
+    /** Adds the structures of PLAN_VERSION 4 to an older plan, without moving anything (built structures stay valid) */
+    private extendPlan(room: Room): void {
+        const memory = Memory.rooms[room.name].plan!;
+        const input = this.input(room);
+        const old = this.getPlan(room.name);
+        if (!input || !old) return;
+        const plan = extendRoomPlan(input, old);
+        if (!plan) {
+            // No center: replan from scratch
+            delete Memory.rooms[room.name].plan;
+            this.cache.delete(room.name);
+            return;
+        }
+        const { exit } = generateDistanceMatrices(input.terrain);
+        const score = scoreRoomPlan(plan, input, exit).total;
+        this.store(room, plan, memory.k ?? "extended", score, !!memory.done);
+        log.info(
+            "RoomPlanner",
+            `${room.name}: plan extended to version ${PLAN_VERSION}: ${plan.count("lab")} labs, ${plan.count("powerSpawn")} power spawn,`,
+            `${plan.count("nuker")} nuker, ${plan.count("observer")} observer, score ${score.toFixed(3)}`
+        );
+    }
+
     /** Nothing was built from the plan yet (besides the first spawn): it can still be swapped */
     private canReplace(room: Room): boolean {
         if (room.find(FIND_MY_CONSTRUCTION_SITES).length > 0) return false;
@@ -888,6 +1070,10 @@ class RoomPlanner {
             const room = Game.rooms[name];
             if (!room.controller?.my) continue;
             if (this.getPlan(name)) {
+                if (Memory.rooms[name].plan!.v !== PLAN_VERSION) {
+                    this.extendPlan(room);
+                    return;
+                }
                 if (!this.isFinal(name)) {
                     this.searchVariations(room);
                     return;

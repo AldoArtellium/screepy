@@ -7,7 +7,10 @@
  */
 
 /** Bump to replan every room (format or algorithm change) */
-export const PLAN_VERSION = 3;
+export const PLAN_VERSION = 4;
+/** Older version still used as is, then extended in place (RoomPlanner extendRoomPlan): 3 = no labs,
+ * power spawn, nuker, observer nor helper parking */
+export const EXTENDABLE_PLAN_VERSION = 3;
 
 export interface PlanMemory {
     /** Plan version (PLAN_VERSION) */
