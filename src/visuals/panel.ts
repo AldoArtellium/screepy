@@ -17,17 +17,23 @@ const MAX_SAMPLES = 11;
 const STRENGTH_NAMES = ["NONE", "WEAK", "NORMAL", "STRONG", "DEADLY"];
 
 const FONT = 0.5;
-const ROW = 0.7;
+/** Values are a bit bigger than the labels */
+const VALUE_FONT = 0.55;
+const ROW = 0.75;
 const LEFT = 0.4;
 const TOP = 0.4;
-const WIDTH = 13;
+const WIDTH = 14.5;
 /** x of the value column, relative to LEFT */
-const VALUE_X = 3.2;
+const VALUE_X = 3.4;
 const BAR_WIDTH = 4;
 const BAR_HEIGHT = 0.3;
+/** Harvest share shown above a source only below this (it then signals a problem) */
+const SOURCE_SHOWN_BELOW = 0.9;
 
-const TEXT = "#d8d8d8";
-const DIM = "#8a8a8a";
+const TEXT = "#e8e8e8";
+const LABEL = "#b0b0b0";
+/** Secondary rows (creeps by role, remote rooms) */
+const DIM = "#a8a8a8";
 const TITLE = "#ffffff";
 const OK = "#5fbf6f";
 const WARN = "#e8a23a";
@@ -244,18 +250,21 @@ export function drawPanel(visual: RoomVisual, room: Room): void {
     const entries: Entry[] = [...economyRows(room), "separator", ...creepRows(room), "separator", ...infoRows(room)];
     const height = 1.1 + entries.reduce((h, e) => h + (e === "separator" ? 0.3 : ROW), 0);
 
-    visual.rect(LEFT, TOP, WIDTH, height, { fill: "#101010", opacity: 0.7, stroke: "#444444", strokeWidth: 0.04 });
+    visual.rect(LEFT, TOP, WIDTH, height, { fill: "#101010", opacity: 0.8, stroke: "#444444", strokeWidth: 0.04 });
     const rcl = controller.level < 8 ? `RCL ${controller.level} → ${controller.level + 1}` : "RCL 8";
     visual.text(room.name, LEFT + 0.3, TOP + 0.7, { align: "left", font: `bold ${FONT + 0.1}`, color: TITLE });
-    visual.text(rcl, LEFT + WIDTH - 0.3, TOP + 0.7, { align: "right", font: FONT, color: DIM });
+    visual.text(rcl, LEFT + WIDTH - 0.3, TOP + 0.7, { align: "right", font: FONT, color: LABEL });
 
-    // Harvest share next to each source of the room
+    // Harvest share above each source of the room, only when it signals a problem
     for (const { id, efficiency } of miningEfficiency(room.name).sources) {
+        if (efficiency >= SOURCE_SHOWN_BELOW) continue;
         const source = Game.getObjectById(id);
         if (!source) continue;
-        visual.text(`${Math.round(100 * efficiency)}%`, source.pos.x, source.pos.y - 0.7, {
-            font: FONT - 0.1,
+        visual.text(`${Math.round(100 * efficiency)}%`, source.pos.x, source.pos.y - 0.8, {
+            font: FONT,
             color: level(efficiency, 0.8, 0.6, true),
+            backgroundColor: "#101010",
+            backgroundPadding: 0.1,
             opacity: 0.9
         });
     }
@@ -268,7 +277,7 @@ export function drawPanel(visual: RoomVisual, room: Room): void {
             continue;
         }
         const baseline = y + ROW * 0.65;
-        visual.text(entry.label, LEFT + 0.3, baseline, { align: "left", font: FONT, color: DIM });
+        visual.text(entry.label, LEFT + 0.3, baseline, { align: "left", font: FONT, color: LABEL });
         let x = LEFT + VALUE_X;
         if (entry.bar) {
             const fill = Math.max(0, Math.min(1, entry.bar.fill));
@@ -277,7 +286,7 @@ export function drawPanel(visual: RoomVisual, room: Room): void {
             if (fill > 0) visual.rect(x, top, BAR_WIDTH * fill, BAR_HEIGHT, { fill: entry.bar.color, opacity: 0.9 });
             x += BAR_WIDTH + 0.3;
         }
-        visual.text(entry.text, x, baseline, { align: "left", font: FONT, color: entry.color ?? TEXT });
+        visual.text(entry.text, x, baseline, { align: "left", font: VALUE_FONT, color: entry.color ?? TEXT });
         y += ROW;
     }
 }

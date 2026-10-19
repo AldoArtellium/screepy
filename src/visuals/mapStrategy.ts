@@ -2,16 +2,22 @@
  * World map layer: strategy - owned rooms (RCL), the expansion target with lines from its spawn room
  * (solid) and support rooms (dashed), past expansion failures (red circles), the attack target with a
  * line from each squad's spawn room, and the age of the intel of every known room (one dot per room).
+ * Texts sit on a dark backdrop; the expansion text goes under the RCL, clear of the remote summary.
  * Reads cached data only (Memory, intel store); the caller caches the export.
  */
 
 import { intelManager } from "../modules/IntelManager";
 
 const FONT = 7;
-const OK = "#5fbf6f";
+const OK = "#7ee08a";
 const WARN = "#e8a23a";
-const BAD = "#e05555";
+const BAD = "#ff5c5c";
 const EXPAND = "#4dd0ff";
+
+/** Text style on a dark backdrop, readable on any terrain */
+function textStyle(color: string): MapTextStyle {
+    return { color, fontSize: FONT, backgroundColor: "#101010", backgroundPadding: 0.8, opacity: 0.85 };
+}
 
 /** Intel age thresholds (ticks): green below FRESH, yellow below STALE, red above */
 const FRESH = 10000;
@@ -31,7 +37,7 @@ function drawOwnedRooms(visual: MapVisual): void {
     for (const name in Game.rooms) {
         const controller = Game.rooms[name].controller;
         if (!controller?.my) continue;
-        visual.text(`RCL ${controller.level}`, new RoomPosition(25, 7, name), { color: OK, fontSize: FONT, opacity: 0.9 });
+        visual.text(`RCL ${controller.level}`, new RoomPosition(25, 7, name), textStyle(OK));
     }
 }
 
@@ -55,7 +61,11 @@ function drawExpansion(visual: MapVisual): void {
     const current = expand.current;
     if (!current) return;
     const target = center(current.roomName);
-    visual.line(center(current.spawnRoom), target, { color: EXPAND, width: 1, opacity: 0.6 });
+    // Once claimed the room stands on its own: a faint dashed line is enough
+    const lineStyle: MapLineStyle = current.claimed
+        ? { color: EXPAND, width: 0.5, opacity: 0.3, lineStyle: "dashed" }
+        : { color: EXPAND, width: 1, opacity: 0.6 };
+    visual.line(center(current.spawnRoom), target, lineStyle);
     const supports = new Set<string>();
     for (const name in expand.squads ?? {}) {
         const squad = expand.squads[name];
@@ -66,7 +76,7 @@ function drawExpansion(visual: MapVisual): void {
     }
     const state = current.claimed ? `claimed ${ageText(Game.time - current.claimed)}` : ageText(Game.time - current.started);
     visual.circle(target, { radius: 6, fill: "transparent", stroke: EXPAND, strokeWidth: 1, opacity: 0.8 });
-    visual.text(`expand · ${state}`, new RoomPosition(25, 40, current.roomName), { color: EXPAND, fontSize: FONT, opacity: 0.9 });
+    visual.text(`expand · ${state}`, new RoomPosition(25, 14, current.roomName), textStyle(EXPAND));
 }
 
 function drawAttack(visual: MapVisual): void {
@@ -83,7 +93,7 @@ function drawAttack(visual: MapVisual): void {
     visual.circle(target, { radius: 6, fill: "transparent", stroke: BAD, strokeWidth: 1, opacity: 0.8 });
     const reason = military.attack ? "manual" : (military.target?.reason ?? "");
     const label = states.size > 0 ? `attack (${reason}) · ${[...states].join(", ")}` : `attack (${reason})`;
-    visual.text(label, new RoomPosition(25, 46, targetRoom), { color: BAD, fontSize: FONT, opacity: 0.9 });
+    visual.text(label, new RoomPosition(25, 40, targetRoom), textStyle(BAD));
 }
 
 /** Draws the strategy layer on the world map */

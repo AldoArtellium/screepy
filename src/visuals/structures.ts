@@ -164,8 +164,9 @@ const ROAD_DIRS: Point[] = [
 /**
  * Draws the roads of `tiles` the way the game connects them, also into the adjacent `joined` tiles
  * (built roads), as one line per straight run of tiles; a tile connected to nothing gets a dot.
+ * `style` overrides the game look (planned roads use their own tint so they don't pass for built ones).
  */
-export function drawRoads(visual: RoomVisual, tiles: Point[], joined: Point[] = [], opacity = 1): void {
+export function drawRoads(visual: RoomVisual, tiles: Point[], joined: Point[] = [], opacity = 1, style?: LineStyle): void {
     const road = new Uint8Array(2500);
     const other = new Uint8Array(2500);
     const inBounds = (x: number, y: number): boolean => x >= 0 && x < 50 && y >= 0 && y < 50;
@@ -174,7 +175,9 @@ export function drawRoads(visual: RoomVisual, tiles: Point[], joined: Point[] = 
     for (const [x, y] of tiles) road[x + 50 * y] = 1;
     for (const [x, y] of joined) other[x + 50 * y] = 1;
 
-    const style: LineStyle = { color: COLORS.road, width: 0.35, opacity };
+    const lineStyle: LineStyle = { color: COLORS.road, width: 0.35, opacity, ...style };
+    const dotColor = lineStyle.color ?? COLORS.road;
+    const dotRadius = (lineStyle.width ?? 0.35) / 2;
     const connected = new Uint8Array(2500);
     for (const [dx, dy] of ROAD_DIRS) {
         for (const [x, y] of tiles) {
@@ -198,10 +201,10 @@ export function drawRoads(visual: RoomVisual, tiles: Point[], joined: Point[] = 
             }
             if (startX === endX && startY === endY) continue;
             for (let cx = x, cy = y; isRoad(cx, cy); cx += dx, cy += dy) connected[cx + 50 * cy] = 1;
-            visual.line(startX, startY, endX, endY, style);
+            visual.line(startX, startY, endX, endY, lineStyle);
         }
     }
     for (const [x, y] of tiles) {
-        if (!connected[x + 50 * y]) visual.circle(x, y, { radius: 0.175, fill: COLORS.road, stroke: OFF, opacity });
+        if (!connected[x + 50 * y]) visual.circle(x, y, { radius: dotRadius, fill: dotColor, stroke: OFF, opacity: lineStyle.opacity });
     }
 }
