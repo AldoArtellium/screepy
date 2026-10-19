@@ -1,6 +1,7 @@
 /**
  * Room panel (top left): a two-column table with thin bars - controller progress and ETA, energy,
- * storage, income, CPU, bucket; creeps, spawning, construction; defense, remotes, expansion, attack.
+ * storage, income, CPU, bucket, the most expensive modules and roles; creeps, spawning, the spawn
+ * queue (best options of the last evaluation), construction; defense, remotes, expansion, attack.
  * Bars turn orange then red only when something needs attention; empty rows are left out.
  * Rates come from heap samples taken every SAMPLE_INTERVAL ticks over a 1000-tick sliding window.
  */
@@ -65,6 +66,11 @@ interface Sample {
 /** Controller progress by room (reset on level change) and empire-wide harvest counters */
 const progressSamples: Map<string, { level: number; samples: Sample[] }> = new Map();
 const incomeSamples: { local: Sample[]; remote: Sample[] } = { local: [], remote: [] };
+/** Cumulated CPU counters (`cpu:module:<name>`, `cpu:<role>`) */
+const cpuSamples: Map<string, Sample[]> = new Map();
+let lastCpuSample = -SAMPLE_INTERVAL;
+/** Entries in the CPU top rows */
+const CPU_TOP = 3;
 
 function pushSample(samples: Sample[], value: number): void {
     const last = samples[samples.length - 1];
@@ -86,6 +92,49 @@ export function sampleIncome(): void {
     const counters = Memory.stats?.counters ?? {};
     pushSample(incomeSamples.local, (counters["work:harvest"] ?? 0) * HARVEST_POWER);
     pushSample(incomeSamples.remote, (counters["work:remoteHarvest"] ?? 0) * HARVEST_POWER);
+    // CPU counters: one pass over the counters every SAMPLE_INTERVAL ticks
+    if (Game.time - lastCpuSample < SAMPLE_INTERVAL) return;
+    lastCpuSample = Game.time;
+    for (const key in counters) {
+        if (!key.startsWith("cpu:")) continue;
+        let samples = cpuSamples.get(key);
+        if (!samples) cpuSamples.set(key, (samples = []));
+        pushSample(samples, counters[key]);
+    }
+}
+
+/** The CPU_TOP biggest CPU users per tick among the counters with `prefix` (names without it) */
+function cpuTop(prefix: string, exclude?: string): { name: string; cpu: number }[] {
+    const top: { name: string; cpu: number }[] = [];
+    for (const [key, samples] of cpuSamples) {
+        if (!key.startsWith(prefix) || (exclude && key.startsWith(exclude))) continue;
+        const cpu = rate(samples);
+        if (cpu !== undefined) top.push({ name: key.slice(prefix.length), cpu });
+    }
+    return top.sort((a, b) => b.cpu - a.cpu).slice(0, CPU_TOP);
+}
+
+/** Module names without the usual suffixes, to fit the row */
+function moduleName(name: string): string {
+    return name.replace(/(Manager|Runner)$/, "") || name;
+}
+
+function cpuRows(): Entry[] {
+    const rows: Entry[] = [];
+    let modules = cpuTop("cpu:module:").map(m => `${moduleName(m.name)} ${m.cpu.toFixed(1)}`);
+    if (modules.length === 0) {
+        // Before two samples: the modules' recent average CPU per run
+        const state = Memory.moduleState ?? {};
+        modules = Object.keys(state)
+            .filter(name => state[name].avgCpu !== undefined)
+            .sort((a, b) => state[b].avgCpu! - state[a].avgCpu!)
+            .slice(0, CPU_TOP)
+            .map(name => `${moduleName(name)} ${state[name].avgCpu!.toFixed(1)}`);
+    }
+    if (modules.length > 0) rows.push({ label: "CPU top", text: modules.join(" · "), color: DIM });
+    const roles = cpuTop("cpu:", "cpu:module:").map(r => `${ROLE_NAMES[r.name] ?? r.name} ${r.cpu.toFixed(1)}`);
+    if (roles.length > 0) rows.push({ label: "", text: roles.join(" · "), color: DIM });
+    return rows;
 }
 
 function sampleProgress(controller: StructureController): number | undefined {
@@ -165,6 +214,7 @@ function economyRows(room: Room): Entry[] {
     rows.push({ label: "CPU", bar: { fill: cpuFill, color: level(cpuFill, 0.8, 0.95) }, text: `${cpu.toFixed(1)}/${Game.cpu.limit}` });
     const bucketFill = Game.cpu.bucket / 10000;
     rows.push({ label: "Bucket", bar: { fill: bucketFill, color: level(bucketFill, 0.5, 0.2, true) }, text: `${Game.cpu.bucket}` });
+    rows.push(...cpuRows());
     return rows;
 }
 
@@ -195,6 +245,14 @@ function creepRows(room: Room): Entry[] {
     const next = spawnManager.nextRole(room.name);
     if (next) spawning.push(`next ${ROLE_NAMES[next] ?? next}`);
     if (spawning.length > 0) rows.push({ label: "Spawn", text: spawning.join(" · ") });
+    const queue = spawnManager.queue(room.name);
+    if (queue.length > 0) {
+        const entries = queue.map((o, i) => `${i === 0 ? "▶ " : ""}${ROLE_NAMES[o.role] ?? o.role} p${o.priority} w${+o.weight.toFixed(2)}`);
+        // Two entries per row to stay within the panel width
+        for (let i = 0; i < entries.length; i += 2) {
+            rows.push({ label: i === 0 ? "Queue" : "", text: entries.slice(i, i + 2).join(" · "), color: DIM });
+        }
+    }
 
     const sites = room.find(FIND_MY_CONSTRUCTION_SITES);
     if (sites.length > 0) {

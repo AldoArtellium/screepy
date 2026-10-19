@@ -39,6 +39,24 @@ const IDLE_ROOM_TICKS = 10;
 /** Waiting this long for energy that doesn't rise: size bodies on the energy available */
 const STARVED_TICKS = 50;
 
+/** An option of the spawn queue shown by the room visuals */
+export interface SpawnQueueEntry {
+    role: string;
+    priority: number;
+    weight: number;
+}
+
+const QUEUE_SIZE = 3;
+
+/** The QUEUE_SIZE best options in getBestOption order (priority, then weight, then collection order) */
+function bestOptions(options: (SpawnOption & { spawnRole: SpawnRole })[]): SpawnQueueEntry[] {
+    return options
+        .filter(o => o.priority >= 0)
+        .sort((a, b) => b.priority - a.priority || b.weight - a.weight)
+        .slice(0, QUEUE_SIZE)
+        .map(o => ({ role: o.role, priority: o.priority, weight: o.weight }));
+}
+
 class SpawnManager {
     private readonly external: Map<string, ExternalSpawnRequest & { expiresAt: number }> = new Map();
     private readonly emptyUntil: Map<string, number> = new Map();
@@ -49,6 +67,8 @@ class SpawnManager {
     private readonly waitingRole: Map<string, string> = new Map();
     /** Priority and body cost of that option (cost unknown while no body can be built) */
     private readonly waitingOption: Map<string, { priority: number; cost?: number }> = new Map();
+    /** Best options of the room's last evaluation, best first (room visuals) */
+    private readonly lastQueue: Map<string, SpawnQueueEntry[]> = new Map();
     private readonly roles: SpawnRole[];
 
     constructor() {
@@ -88,6 +108,11 @@ class SpawnManager {
         const role = this.waitingRole.get(roomName);
         const option = this.waitingOption.get(roomName);
         return role && option ? { role, ...option } : undefined;
+    }
+
+    /** Up to QUEUE_SIZE best options of the room's last evaluation (while a spawn was free), best first */
+    queue(roomName: string): SpawnQueueEntry[] {
+        return this.lastQueue.get(roomName) ?? [];
     }
 
     run(): void {
@@ -150,6 +175,7 @@ class SpawnManager {
             return closest.pos.getRangeTo(option.preferClosestSpawn) >= 3 || available.includes(closest);
         });
         const option = getBestOption(options);
+        this.lastQueue.set(room.name, bestOptions(options));
         this.waitingRole.delete(room.name);
         this.waitingOption.delete(room.name);
         if (!option) return;
