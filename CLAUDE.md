@@ -110,7 +110,7 @@ Design: `docs/superpowers/specs/2026-10-17-hivemind-economy-rework-design.md`. E
 
 ### Game loop (`src/gameLoop.ts`, `src/ModuleManager.ts`)
 
-The ModuleManager runs modules in order with a CPU budget (80% of the limit): `mandatory` modules always run (errors logged in `Memory.moduleErrors`, never rerun in the same tick), others support `runEvery`, `disabled`, `maxSkips` (forced after N CPU skips) and bucket throttling by `priority` (see CPU throttling). Per-module average CPU in `Memory.moduleState`; the memory size (`RawMemory.get().length`) is checked every 100 ticks.
+The ModuleManager runs modules in order with a CPU budget (80% of the limit): `mandatory` modules always run (errors logged in `Memory.moduleErrors`, never rerun in the same tick), others support `runEvery`, `disabled`, `maxSkips` (forced after N CPU skips) and bucket throttling by `priority` (see CPU throttling). Per-module average CPU in `Memory.moduleState` (`avgCpu`, last ~10 runs: a snapshot, read spikes as spikes) and total CPU in the counter `cpu:module:<name>`; the memory size (`RawMemory.get().length`) is checked every 100 ticks.
 
 | Module | Frequency | Role |
 |---|---|---|
@@ -185,7 +185,7 @@ Deliberate deviations from Hivemind, each measured on the 3 benchmark rooms (moc
 - Measured (W7N3, `--preset rcl8 --labs`, base minerals + 3000 XUH2O / XLHO2 / XGHO2 seeded, `--enemy W8N3:3`, attack set at tick 1): the chain made 3000 KO (ticks 11-1250), then LO, OH, LHO2 and XLHO2 by tick 3600 (8 reactors); the duo was boosted (XLHO2, XUH2O) by tick 772, the forced quad (XGHO2, XUH2O, XLHO2, KO for the ranged parts) between ticks 747 and 926; the RCL 3 base fell without loss both times; no module error, code CPU 11.6-12.4 (helper ~0.8 per tick while alive).
 - Not done: squad sizing (`sizing.ts`) ignores boosts, MOVE boosts (needs bodies with fewer MOVE), upgrader / mineral harvester boosts, evacuation.
 
-Counters in `Memory.stats.counters`: `spawned:<role>`, `work:{harvest,mineral,build,repair,upgrade,builderUpgrade,builderFetch,remoteHarvest,remoteBuild,remoteRepair}`, `deliver:<order type>`, `idle:<role>`, `harvester:{walking,delivering}`, `spawn:starved`, `roleError:<role>`, `moveError:<code>:<role>`.
+Counters in `Memory.stats.counters`: `cpu:module:<name>`, `spawned:<role>`, `work:{harvest,mineral,build,repair,upgrade,builderUpgrade,builderFetch,remoteHarvest,remoteBuild,remoteRepair}`, `deliver:<order type>`, `idle:<role>`, `harvester:{walking,delivering}`, `spawn:starved`, `roleError:<role>`, `moveError:<code>:<role>`.
 
 ### Defense (`src/defense/`, Hivemind `room-defense.ts`, `manager.military.ts`, `process/rooms/owned/defense.ts`)
 
