@@ -526,6 +526,16 @@ export function isRemoteUnderAttack(source: RemoteSource): boolean {
     return false;
 }
 
+/**
+ * Room a defender of the source goes to: the first room on the way with hostiles, else the remote.
+ * Remotes behind a shared room under attack then get a single defense (W7N4 mockup: a pair for W7N4
+ * and another for W8N4, whose path crosses W7N4, against the same invader).
+ */
+export function remoteThreatRoom(source: RemoteSource): string {
+    for (const room of pathRooms(source)) if (room !== source.homeRoom && isRoomUnderAttack(room)) return room;
+    return source.room;
+}
+
 export function remoteHasInvaderCore(source: RemoteSource): boolean {
     return hasInvaderCore(source.room);
 }
@@ -534,12 +544,15 @@ export interface EnemyData {
     damage: number;
     heal: number;
     ranged: boolean;
+    rangedDamage: number;
+    hits: number;
+    fastMelee: boolean;
     hasInvaderCore: boolean;
 }
 
 /** Hostile strength in the remote and the rooms crossed on the way (Hivemind getTotalEnemyData) */
 export function remoteEnemyData(source: RemoteSource): EnemyData {
-    const total: EnemyData = { damage: 0, heal: 0, ranged: false, hasInvaderCore: false };
+    const total: EnemyData = { damage: 0, heal: 0, ranged: false, rangedDamage: 0, hits: 0, fastMelee: false, hasInvaderCore: false };
     for (const room of pathRooms(source)) {
         if (room === source.homeRoom) continue;
         const enemies = Memory.rooms?.[room]?.enemies;
@@ -549,6 +562,9 @@ export function remoteEnemyData(source: RemoteSource): EnemyData {
         total.damage += enemies.damage ?? 0;
         total.heal += enemies.heal ?? 0;
         total.ranged = total.ranged || !!enemies.ranged;
+        total.rangedDamage += enemies.rangedDamage ?? 0;
+        total.hits += enemies.hits ?? 0;
+        total.fastMelee = total.fastMelee || !!enemies.fastMelee;
     }
     return total;
 }
