@@ -28,8 +28,6 @@ const WIDTH = 14.5;
 const VALUE_X = 3.4;
 const BAR_WIDTH = 4;
 const BAR_HEIGHT = 0.3;
-/** Harvest share shown above a source only below this (it then signals a problem) */
-const SOURCE_SHOWN_BELOW = 0.9;
 
 const TEXT = "#e8e8e8";
 const LABEL = "#b0b0b0";
@@ -313,9 +311,8 @@ export function drawPanel(visual: RoomVisual, room: Room): void {
     visual.text(room.name, LEFT + 0.3, TOP + 0.7, { align: "left", font: `bold ${FONT + 0.1}`, color: TITLE });
     visual.text(rcl, LEFT + WIDTH - 0.3, TOP + 0.7, { align: "right", font: FONT, color: LABEL });
 
-    // Harvest share above each source of the room, only when it signals a problem
+    // Harvest share above each source of the room
     for (const { id, efficiency } of miningEfficiency(room.name).sources) {
-        if (efficiency >= SOURCE_SHOWN_BELOW) continue;
         const source = Game.getObjectById(id);
         if (!source) continue;
         visual.text(`${Math.round(100 * efficiency)}%`, source.pos.x, source.pos.y - 0.8, {
