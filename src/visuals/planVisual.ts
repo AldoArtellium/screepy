@@ -7,8 +7,12 @@ import { RoomPlan } from "../planner/RoomPlan";
 import { drawRoads, drawStructure } from "./structures";
 
 const OPACITY = 0.3;
+/** Planned roads: blue-grey, thin and dashed, so they never pass for built roads */
+const PLANNED_ROAD: LineStyle = { color: "#6f8fb0", width: 0.2, opacity: 0.5, lineStyle: "dashed" };
+/** Planned ramparts: outline only, the quietest layer on top */
+const PLANNED_RAMPART: CircleStyle = { radius: 0.6, fill: "transparent", stroke: "#5fbf6f", strokeWidth: 0.06, opacity: 0.35 };
 
-/** Drawing order after the roads: ramparts on top, as in the game */
+/** Drawing order after the roads; ramparts are drawn last, on top, as in the game */
 const TYPES: StructureConstant[] = [
     STRUCTURE_CONTAINER,
     STRUCTURE_EXTENSION,
@@ -22,8 +26,7 @@ const TYPES: StructureConstant[] = [
     STRUCTURE_EXTRACTOR,
     STRUCTURE_POWER_SPAWN,
     STRUCTURE_NUKER,
-    STRUCTURE_OBSERVER,
-    STRUCTURE_RAMPART
+    STRUCTURE_OBSERVER
 ];
 
 const SAFE_STYLE: LineStyle = { color: "#4dd0ff", width: 0.06, opacity: 0.35, lineStyle: "dashed" };
@@ -41,10 +44,11 @@ export function drawPlan(visual: RoomVisual, room: Room, plan: RoomPlan): void {
 
     // Planned roads joined to the built ones next to them, so a road under construction reads as one
     const roads = unbuilt(STRUCTURE_ROAD).map((pos): [number, number] => [pos.x, pos.y]);
-    drawRoads(visual, roads, builtRoads, OPACITY);
+    drawRoads(visual, roads, builtRoads, OPACITY, PLANNED_ROAD);
     for (const type of TYPES) {
         for (const pos of unbuilt(type)) drawStructure(visual, pos.x, pos.y, type, OPACITY);
     }
+    for (const pos of unbuilt(STRUCTURE_RAMPART)) visual.circle(pos.x, pos.y, PLANNED_RAMPART);
     drawSafeOutline(visual, plan);
 }
 
