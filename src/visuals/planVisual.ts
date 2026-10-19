@@ -1,55 +1,29 @@
 /**
- * Planned structures not built yet (faded shapes, one per structure type) and the outline of the
- * planner's safe area. Drawn on a RoomVisual; the caller caches the export.
+ * Planned structures not built yet (faded, drawn like the game's structures, `structures.ts`) and
+ * the outline of the planner's safe area. Drawn on a RoomVisual; the caller caches the export.
  */
 
 import { RoomPlan } from "../planner/RoomPlan";
+import { drawRoads, drawStructure } from "./structures";
 
-const OPACITY = 0.2;
+const OPACITY = 0.3;
 
-type Shape = (visual: RoomVisual, x: number, y: number) => void;
-
-const circle =
-    (radius: number, fill: string, stroke?: string): Shape =>
-    (visual, x, y) =>
-        visual.circle(x, y, { radius, fill, stroke, strokeWidth: 0.08, opacity: OPACITY });
-
-const square =
-    (size: number, fill: string, stroke?: string): Shape =>
-    (visual, x, y) =>
-        visual.rect(x - size / 2, y - size / 2, size, size, { fill, stroke, strokeWidth: 0.08, opacity: OPACITY });
-
-const diamond =
-    (size: number, fill: string): Shape =>
-    (visual, x, y) =>
-        visual.poly(
-            [
-                [x, y - size],
-                [x + size, y],
-                [x, y + size],
-                [x - size, y],
-                [x, y - size]
-            ],
-            { fill, stroke: fill, opacity: OPACITY }
-        );
-
-/** Drawing order: roads under everything, ramparts on top */
-const SHAPES: [StructureConstant, Shape][] = [
-    [STRUCTURE_ROAD, circle(0.15, "#aaaaaa")],
-    [STRUCTURE_CONTAINER, square(0.6, "#b97a3c", "#6b4a2a")],
-    [STRUCTURE_EXTENSION, circle(0.3, "#ffe56d", "#7a6a2a")],
-    [STRUCTURE_SPAWN, circle(0.6, "#ffe56d", "#ffffff")],
-    [STRUCTURE_TOWER, circle(0.45, "#e05050", "#ffffff")],
-    [STRUCTURE_STORAGE, square(0.9, "#f5a623", "#ffffff")],
-    [STRUCTURE_TERMINAL, diamond(0.55, "#bbbbbb")],
-    [STRUCTURE_FACTORY, square(0.8, "#c8a0ff", "#ffffff")],
-    [STRUCTURE_LINK, diamond(0.35, "#8cc8ff")],
-    [STRUCTURE_LAB, circle(0.4, "#5bd65b", "#ffffff")],
-    [STRUCTURE_EXTRACTOR, circle(0.6, "transparent", "#ff8800")],
-    [STRUCTURE_POWER_SPAWN, circle(0.55, "#ff3c3c", "#ffffff")],
-    [STRUCTURE_NUKER, square(0.8, "#555555", "#ff3c3c")],
-    [STRUCTURE_OBSERVER, circle(0.3, "#8cc8ff", "#ffffff")],
-    [STRUCTURE_RAMPART, square(0.95, "transparent", "#43c443")]
+/** Drawing order after the roads: ramparts on top, as in the game */
+const TYPES: StructureConstant[] = [
+    STRUCTURE_CONTAINER,
+    STRUCTURE_EXTENSION,
+    STRUCTURE_SPAWN,
+    STRUCTURE_TOWER,
+    STRUCTURE_STORAGE,
+    STRUCTURE_TERMINAL,
+    STRUCTURE_FACTORY,
+    STRUCTURE_LINK,
+    STRUCTURE_LAB,
+    STRUCTURE_EXTRACTOR,
+    STRUCTURE_POWER_SPAWN,
+    STRUCTURE_NUKER,
+    STRUCTURE_OBSERVER,
+    STRUCTURE_RAMPART
 ];
 
 const SAFE_STYLE: LineStyle = { color: "#4dd0ff", width: 0.06, opacity: 0.35, lineStyle: "dashed" };
@@ -57,15 +31,19 @@ const SAFE_STYLE: LineStyle = { color: "#4dd0ff", width: 0.06, opacity: 0.35, li
 /** Draws the unbuilt part of the plan */
 export function drawPlan(visual: RoomVisual, room: Room, plan: RoomPlan): void {
     const built = new Set<string>();
+    const builtRoads: [number, number][] = [];
     for (const structure of room.find(FIND_STRUCTURES)) {
         built.add(`${structure.structureType}:${structure.pos.x + 50 * structure.pos.y}`);
+        if (structure.structureType === STRUCTURE_ROAD) builtRoads.push([structure.pos.x, structure.pos.y]);
     }
-    for (const [type, shape] of SHAPES) {
-        if (plan.count(type) === 0) continue;
-        for (const pos of plan.getLocations(type)) {
-            if (built.has(`${type}:${pos.x + 50 * pos.y}`)) continue;
-            shape(visual, pos.x, pos.y);
-        }
+    const unbuilt = (type: StructureConstant): RoomPosition[] =>
+        plan.count(type) === 0 ? [] : plan.getLocations(type).filter(pos => !built.has(`${type}:${pos.x + 50 * pos.y}`));
+
+    // Planned roads joined to the built ones next to them, so a road under construction reads as one
+    const roads = unbuilt(STRUCTURE_ROAD).map((pos): [number, number] => [pos.x, pos.y]);
+    drawRoads(visual, roads, builtRoads, OPACITY);
+    for (const type of TYPES) {
+        for (const pos of unbuilt(type)) drawStructure(visual, pos.x, pos.y, type, OPACITY);
     }
     drawSafeOutline(visual, plan);
 }
