@@ -39,6 +39,24 @@ const IDLE_ROOM_TICKS = 10;
 /** Waiting this long for energy that doesn't rise: size bodies on the energy available */
 const STARVED_TICKS = 50;
 
+/** An option of the spawn queue shown by the room visuals */
+export interface SpawnQueueEntry {
+    role: string;
+    priority: number;
+    weight: number;
+}
+
+const QUEUE_SIZE = 3;
+
+/** The QUEUE_SIZE best options in getBestOption order (priority, then weight, then collection order) */
+function bestOptions(options: (SpawnOption & { spawnRole: SpawnRole })[]): SpawnQueueEntry[] {
+    return options
+        .filter(o => o.priority >= 0)
+        .sort((a, b) => b.priority - a.priority || b.weight - a.weight)
+        .slice(0, QUEUE_SIZE)
+        .map(o => ({ role: o.role, priority: o.priority, weight: o.weight }));
+}
+
 class SpawnManager {
     private readonly external: Map<string, ExternalSpawnRequest & { expiresAt: number }> = new Map();
     private readonly emptyUntil: Map<string, number> = new Map();
@@ -47,6 +65,10 @@ class SpawnManager {
     private readonly waiting: Map<string, { energy: number; since: number }> = new Map();
     /** Role of the best option a room is waiting to pay for (room visuals) */
     private readonly waitingRole: Map<string, string> = new Map();
+    /** Priority and body cost of that option (cost unknown while no body can be built) */
+    private readonly waitingOption: Map<string, { priority: number; cost?: number }> = new Map();
+    /** Best options of the room's last evaluation, best first (room visuals) */
+    private readonly lastQueue: Map<string, SpawnQueueEntry[]> = new Map();
     private readonly roles: SpawnRole[];
 
     constructor() {
@@ -79,6 +101,18 @@ class SpawnManager {
     /** Role the room will spawn next once it has the energy, if it is waiting */
     nextRole(roomName: string): string | undefined {
         return this.waitingRole.get(roomName);
+    }
+
+    /** Role, priority and body cost of the option the room waits for, if it is waiting */
+    nextSpawn(roomName: string): { role: string; priority: number; cost?: number } | undefined {
+        const role = this.waitingRole.get(roomName);
+        const option = this.waitingOption.get(roomName);
+        return role && option ? { role, ...option } : undefined;
+    }
+
+    /** Up to QUEUE_SIZE best options of the room's last evaluation (while a spawn was free), best first */
+    queue(roomName: string): SpawnQueueEntry[] {
+        return this.lastQueue.get(roomName) ?? [];
     }
 
     run(): void {
@@ -141,7 +175,9 @@ class SpawnManager {
             return closest.pos.getRangeTo(option.preferClosestSpawn) >= 3 || available.includes(closest);
         });
         const option = getBestOption(options);
+        this.lastQueue.set(room.name, bestOptions(options));
         this.waitingRole.delete(room.name);
+        this.waitingOption.delete(room.name);
         if (!option) return;
 
         let spawn = _.sample(available);
@@ -172,8 +208,10 @@ class SpawnManager {
 
     private trySpawn(room: Room, spawn: StructureSpawn, option: SpawnOption & { spawnRole: SpawnRole }): boolean {
         const body = option.spawnRole.body(room, option);
+        this.waitingOption.set(room.name, { priority: option.priority });
         if (body.length === 0) return false;
         const cost = bodyCost(body);
+        this.waitingOption.set(room.name, { priority: option.priority, cost });
         if (cost > room.energyAvailable) return false; // wait for energy
 
         const memory = { room: room.name, ...option.spawnRole.memory(room, option), role: option.role } as CreepMemory;

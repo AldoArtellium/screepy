@@ -311,14 +311,27 @@ function linkedShares(room: Room, energyPerTick: number): Map<string, number> {
     return shares;
 }
 
+/**
+ * Energy per tick the source's harvesters actually extract. Small early harvesters (2 WORK at 300
+ * capacity, few harvest spots) leave most of a source untouched: sizing the haul on the full source
+ * spawned 11 transporters for ~12 energy/tick in a new room (W27N5), most of them idle.
+ */
+function harvestRate(room: Room, source: Source): number {
+    const full = source.energyCapacity / ENERGY_REGEN_TIME;
+    return Math.min(full, activeParts(sourceHarvesters(room, source), WORK) * HARVEST_POWER);
+}
+
 function haulTransporters(room: Room, size: number): number {
     const cached = haulPaths(room);
     const carry = transporter.body(room, { role: "transporter", priority: 0, weight: 0, size }).filter(p => p === CARRY).length;
     if (carry === 0) return 0;
-    const energyPerTick = SOURCE_ENERGY_CAPACITY / ENERGY_REGEN_TIME;
-    const linked = linkedShares(room, energyPerTick);
-    const roundTrip = _.sum(Object.keys(cached.roundTrips), id => cached.roundTrips[id] * (1 - (linked.get(id) ?? 0)));
-    return (energyPerTick * roundTrip) / (carry * CARRY_CAPACITY);
+    const linked = linkedShares(room, SOURCE_ENERGY_CAPACITY / ENERGY_REGEN_TIME);
+    const energy = _.sum(Object.keys(cached.roundTrips), id => {
+        const source = Game.getObjectById(id as Id<Source>);
+        if (!source) return 0;
+        return harvestRate(room, source) * cached.roundTrips[id] * (1 - (linked.get(id) ?? 0));
+    });
+    return energy / (carry * CARRY_CAPACITY);
 }
 
 function transporterAmount(room: Room, size: number): number {

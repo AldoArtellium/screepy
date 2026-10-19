@@ -98,11 +98,26 @@ class TrafficManager {
         const stuck = this.getStuckTicks(creep) >= 2;
         const avoidCreepsWhenStuck = !(stuck && goalHeldByCreeps(creep, targetPos, range));
         const goal = { pos: targetPos, range };
-        let result = moveTo(creep, goal, moveOpts, { avoidCreeps: avoidCreepsWhenStuck });
-        if (result === ERR_NO_PATH && stuck && avoidCreepsWhenStuck && !moveOpts.avoidCreeps) {
-            // Creeps closed every way to the goal: the failed fallback reset the cached path, repath through them
-            countStat("moveRetry");
-            result = moveTo(creep, goal, moveOpts, { avoidCreeps: false });
+        const attempt = (maxRooms?: number): ScreepsReturnCode => {
+            const opts = maxRooms ? { ...moveOpts, maxRooms } : moveOpts;
+            let result = moveTo(creep, goal, opts, { avoidCreeps: avoidCreepsWhenStuck });
+            if (result === ERR_NO_PATH && stuck && avoidCreepsWhenStuck && !moveOpts.avoidCreeps) {
+                // Creeps closed every way to the goal: the failed fallback reset the cached path, repath through them
+                countStat("moveRetry");
+                result = moveTo(creep, goal, opts, { avoidCreeps: false });
+            }
+            return result;
+        };
+        // A goal in the creep's room is searched inside that room first: cartographer opens every
+        // neighbour room for it, and a cheaper path along the border of the next room (W27N5's walled
+        // southern pocket, swamps inside, plains on W27N4's top rows) took the creep out of the room,
+        // where room-based role logic (pioneers, harvesters) sent it back: a bounce every tick.
+        // Neighbour rooms only when the room has no path (a pocket only reachable from outside).
+        const sameRoom = creep.pos.roomName === targetPos.roomName;
+        let result = attempt(sameRoom ? 1 : undefined);
+        if (result === ERR_NO_PATH && sameRoom) {
+            countStat("moveOutOfRoom");
+            result = attempt();
         }
         if (result !== OK && result !== ERR_TIRED) {
             const what = "body" in creep ? creep.memory.role ?? "idle" : "powerCreep";

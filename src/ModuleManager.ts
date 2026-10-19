@@ -1,5 +1,6 @@
 import { log } from "utils/logger";
 import { throttleMultiplier } from "utils/throttle";
+import { countStat } from "utils/stats";
 
 export interface Module {
   name: string;
@@ -103,6 +104,8 @@ export function runModuleManager(modules: Module[], cpuLimit: number) {
       recordError(module.name, error);
     }
     const cpu = Game.cpu.getUsed() - before;
+    // Total CPU per module (avgCpu only reflects the last ~10 runs)
+    countStat(`cpu:module:${module.name}`, cpu);
     // 4 decimals: full doubles cost ~12 chars of Memory per module
     state.avgCpu = Math.round((state.avgCpu === undefined ? cpu : state.avgCpu * 0.9 + cpu * 0.1) * 10000) / 10000;
     state.lastRun = Game.time;
