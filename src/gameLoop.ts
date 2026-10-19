@@ -62,7 +62,7 @@ export const gameLoop = () => {
     // Memory of dead creeps (every 100 ticks) and unused rooms (every 1000)
     { name: "MemoryCleanup", fn: memoryCleanupModule },
 
-    // Plan overlay and economy panel on owned rooms (every tick: visuals last one tick; Memory.visuals = false)
+    // Room and map visuals (every tick: visuals last one tick; Memory.visuals = false or per layer)
     // Share of the source energy harvested (read on each source's last regeneration tick)
     { name: "MiningStats", fn: miningStatsModule },
     // Every tick (a skipped tick blanks the visuals); the module throttles its own redraws
