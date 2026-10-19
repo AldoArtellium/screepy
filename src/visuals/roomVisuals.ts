@@ -12,8 +12,10 @@
 import { roomPlanner } from "../planner/RoomPlanner";
 import { RoomPlan } from "../planner/RoomPlan";
 import { log } from "../utils/logger";
+import { drawMapCreeps } from "./mapCreeps";
 import { drawMapRemotes } from "./mapRemotes";
 import { drawMapStrategy } from "./mapStrategy";
+import { drawMapThreats } from "./mapThreats";
 import { drawPanel, sampleIncome } from "./panel";
 import { drawPlan } from "./planVisual";
 import { layerEnabled, visualsEnabled } from "./settings";
@@ -102,7 +104,9 @@ function drawRoom(room: Room): void {
 function drawMap(): void {
     const remotes = layerEnabled("mapRemotes");
     const strategy = layerEnabled("mapStrategy");
-    if (!remotes && !strategy) {
+    const creeps = layerEnabled("mapCreeps");
+    const threats = layerEnabled("mapThreats");
+    if (!remotes && !strategy && !creeps && !threats) {
         mapCache = undefined;
         return;
     }
@@ -112,6 +116,8 @@ function drawMap(): void {
         visual.clear();
         if (remotes) drawMapRemotes(visual);
         if (strategy) drawMapStrategy(visual);
+        if (threats) drawMapThreats(visual);
+        if (creeps) drawMapCreeps(visual);
         mapCache = { tick: Game.time, data: visual.export() ?? "" };
     } else if (mapCache.data) {
         Game.map.visual.import(mapCache.data);
