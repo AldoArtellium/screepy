@@ -1,8 +1,10 @@
 /**
  * RoomVisuals - draws on every owned room: the unbuilt part of the plan (refreshed every
- * PLAN_INTERVAL ticks or when the plan changes) and the economy / room info panel (every
- * PANEL_INTERVAL ticks). Both are cached in the heap as RoomVisual exports and imported on the
- * other ticks, so a tick costs one import per layer. `Memory.visuals = false` turns it off.
+ * PLAN_INTERVAL ticks or when the plan changes), the economy / room info panel (every
+ * PANEL_INTERVAL ticks) and the spawn overlay (every tick); on the world map the remote mining and
+ * strategy layers (every MAP_INTERVAL ticks). Cached layers are kept in the heap as exports and
+ * imported on the other ticks, so a tick costs one import per layer. `Memory.visuals = false` turns
+ * it off, `Memory.visuals = { mapRemotes: false, ... }` single layers (`settings.ts`).
  * Runs every tick (visuals last one tick): only the redraws wait while the bucket is low, the cached
  * layers are still imported; below STOP_BUCKET nothing is drawn.
  */
@@ -10,18 +12,16 @@
 import { roomPlanner } from "../planner/RoomPlanner";
 import { RoomPlan } from "../planner/RoomPlan";
 import { log } from "../utils/logger";
+import { drawMapRemotes } from "./mapRemotes";
+import { drawMapStrategy } from "./mapStrategy";
 import { drawPanel, sampleIncome } from "./panel";
 import { drawPlan } from "./planVisual";
-
-declare global {
-    interface Memory {
-        /** false: no room visuals */
-        visuals?: boolean;
-    }
-}
+import { layerEnabled, visualsEnabled } from "./settings";
+import { drawSpawns } from "./spawnVisual";
 
 const PLAN_INTERVAL = 100;
 const PANEL_INTERVAL = 5;
+const MAP_INTERVAL = 20;
 const LOG_INTERVAL = 1000;
 /** Below this bucket the layers are no longer redrawn (kept as they are) */
 const REDRAW_BUCKET = 5000;
@@ -38,6 +38,7 @@ interface RoomCache {
 }
 
 const cache: Map<string, RoomCache> = new Map();
+let mapCache: Layer | undefined;
 /** CPU used since the last log, for the average in the log line */
 let cpuUsed = 0;
 let cpuTicks = 0;
@@ -68,31 +69,60 @@ function drawRoom(room: Room): void {
 
     const redraw = Game.cpu.bucket >= REDRAW_BUCKET;
     const plan = roomPlanner.getPlan(room.name);
-    if (!state.plan || (redraw && (state.plan.source !== plan || Game.time - state.plan.tick >= PLAN_INTERVAL))) {
+    if (!layerEnabled("plan")) {
+        state.plan = undefined;
+    } else if (!state.plan || (redraw && (state.plan.source !== plan || Game.time - state.plan.tick >= PLAN_INTERVAL))) {
         const data = plan ? capture(room.name, visual => drawPlan(visual, room, plan)) : "";
         state.plan = { tick: Game.time, data, source: plan };
     } else if (state.plan.data) {
         room.visual.import(state.plan.data);
     }
 
-    if (!state.panel || (redraw && Game.time - state.panel.tick >= PANEL_INTERVAL)) {
+    if (!layerEnabled("panel")) {
+        state.panel = undefined;
+    } else if (!state.panel || (redraw && Game.time - state.panel.tick >= PANEL_INTERVAL)) {
         state.panel = { tick: Game.time, data: capture(room.name, visual => drawPanel(visual, room)) };
     } else {
         room.visual.import(state.panel.data);
     }
 
+    if (layerEnabled("spawn")) drawSpawns(room.visual, room);
+
     if (Game.time % LOG_INTERVAL === 0) {
         const all = exported(room.visual);
         log.info(
             "Visuals",
-            `${room.name}: plan ${elements(state.plan.data)} elements, panel ${elements(state.panel.data)}, ` +
+            `${room.name}: plan ${elements(state.plan?.data ?? "")} elements, panel ${elements(state.panel?.data ?? "")}, ` +
                 `room visual ${elements(all)} elements / ${all.length} chars`
         );
     }
 }
 
+/** World map layers, cached together (Game.map.visual holds nothing else) */
+function drawMap(): void {
+    const remotes = layerEnabled("mapRemotes");
+    const strategy = layerEnabled("mapStrategy");
+    if (!remotes && !strategy) {
+        mapCache = undefined;
+        return;
+    }
+    const redraw = Game.cpu.bucket >= REDRAW_BUCKET;
+    if (!mapCache || (redraw && Game.time - mapCache.tick >= MAP_INTERVAL)) {
+        const visual = Game.map.visual;
+        visual.clear();
+        if (remotes) drawMapRemotes(visual);
+        if (strategy) drawMapStrategy(visual);
+        mapCache = { tick: Game.time, data: visual.export() ?? "" };
+    } else if (mapCache.data) {
+        Game.map.visual.import(mapCache.data);
+    }
+    if (Game.time % LOG_INTERVAL === 0) {
+        log.info("Visuals", `map ${elements(mapCache.data)} elements / ${mapCache.data.length} chars`);
+    }
+}
+
 export const roomVisualsModule = (): void => {
-    if (Memory.visuals === false || Game.cpu.bucket < STOP_BUCKET) return;
+    if (!visualsEnabled() || Game.cpu.bucket < STOP_BUCKET) return;
     const start = Game.cpu.getUsed();
     sampleIncome();
     for (const name in Game.rooms) {
@@ -101,6 +131,7 @@ export const roomVisualsModule = (): void => {
     }
     // Rooms lost or no longer visible
     for (const name of cache.keys()) if (!Game.rooms[name]?.controller?.my) cache.delete(name);
+    drawMap();
 
     cpuUsed += Game.cpu.getUsed() - start;
     cpuTicks++;

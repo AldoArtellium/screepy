@@ -47,6 +47,8 @@ class SpawnManager {
     private readonly waiting: Map<string, { energy: number; since: number }> = new Map();
     /** Role of the best option a room is waiting to pay for (room visuals) */
     private readonly waitingRole: Map<string, string> = new Map();
+    /** Priority and body cost of that option (cost unknown while no body can be built) */
+    private readonly waitingOption: Map<string, { priority: number; cost?: number }> = new Map();
     private readonly roles: SpawnRole[];
 
     constructor() {
@@ -79,6 +81,13 @@ class SpawnManager {
     /** Role the room will spawn next once it has the energy, if it is waiting */
     nextRole(roomName: string): string | undefined {
         return this.waitingRole.get(roomName);
+    }
+
+    /** Role, priority and body cost of the option the room waits for, if it is waiting */
+    nextSpawn(roomName: string): { role: string; priority: number; cost?: number } | undefined {
+        const role = this.waitingRole.get(roomName);
+        const option = this.waitingOption.get(roomName);
+        return role && option ? { role, ...option } : undefined;
     }
 
     run(): void {
@@ -142,6 +151,7 @@ class SpawnManager {
         });
         const option = getBestOption(options);
         this.waitingRole.delete(room.name);
+        this.waitingOption.delete(room.name);
         if (!option) return;
 
         let spawn = _.sample(available);
@@ -172,8 +182,10 @@ class SpawnManager {
 
     private trySpawn(room: Room, spawn: StructureSpawn, option: SpawnOption & { spawnRole: SpawnRole }): boolean {
         const body = option.spawnRole.body(room, option);
+        this.waitingOption.set(room.name, { priority: option.priority });
         if (body.length === 0) return false;
         const cost = bodyCost(body);
+        this.waitingOption.set(room.name, { priority: option.priority, cost });
         if (cost > room.energyAvailable) return false; // wait for energy
 
         const memory = { room: room.name, ...option.spawnRole.memory(room, option), role: option.role } as CreepMemory;

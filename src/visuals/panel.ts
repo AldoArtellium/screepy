@@ -35,7 +35,7 @@ const BAD = "#e05555";
 const BAR_BACK = "#3a3a3a";
 
 /** Short role names for the creeps row */
-const ROLE_NAMES: { [role: string]: string } = {
+export const ROLE_NAMES: { [role: string]: string } = {
     harvester: "harv",
     mineralHarvester: "mHarv",
     transporter: "tran",

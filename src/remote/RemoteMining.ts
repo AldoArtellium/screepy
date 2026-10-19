@@ -271,7 +271,7 @@ const KEEP_BONUS = 1.1;
  * A static spawn-time budget (500 parts per spawn and 1500 ticks minus the home's creeps) kept W7N3
  * at 5-6 of its 8 sources (-10%): a spawn short of time still gains from a source it serves late.
  */
-const STARVED_TICKS = 1500;
+export const STARVED_TICKS = 1500;
 const SOURCE_CAP_STEP = 1000;
 const SOURCE_CAP_PROBE = 5000;
 const SPAWN_BUSY = 0.8;
