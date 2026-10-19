@@ -150,6 +150,7 @@ Convention everywhere (`src/core/options.ts` `getBestOption`): **higher priority
 
 Deliberate deviations from Hivemind, each measured on the 3 benchmark rooms (mockup, 8000 ticks):
 - Transporter count also covers the loaded round trip from each source to the storage location (Hivemind: fixed 3) — W1N3 12.9k -> 24.6k.
+- That haul estimate uses each source's real harvest rate, min(10, harvester WORK x 2) energy/tick, instead of a full source: the new room W27N5 (RCL 2, 2-WORK harvesters, few harvest spots) had 11 transporters for ~12 energy/tick, 7 of them idle. Mockup 8000 ticks: W7N3 119.9k -> 132.1k, W1N3 35.0k -> 36.9k, W9N5 4.6k (7 runs) -> 3.9k (8 runs; energy rots by its swampy sources).
 - Builders/transporters get 1 MOVE per part while the haul paths are mostly swamp and the room has < 20 roads (Hivemind: road bodies) — W9N5 700 -> 4.2k with the early upgrader.
 - One upgrader from RCL 2 before the storage, spawned at priority 4 (Hivemind: 0, builders upgrade once construction is done; W9N5's swamp construction never ended). Two upgraders were worse on W9N5.
 - With at least one transporter, missing transporters weigh 0.6 instead of 0 so they beat builders (energy rotting by the sources inflated the builder quota and choked W9N5).
