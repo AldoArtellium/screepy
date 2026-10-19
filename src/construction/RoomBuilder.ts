@@ -23,6 +23,16 @@ const MAX_GLOBAL_SITES = MAX_CONSTRUCTION_SITES * 0.9;
  * (Hivemind checkWallIntegrity with minWallIntegrity 500k: 12.5k hits at RCL 5, 50k at RCL 6, 75k at RCL 7) */
 const MIN_WALL_INTEGRITY = 500000;
 
+function builtKey(type: StructureConstant, pos: RoomPosition): string {
+    return `${type}:${pos.x}:${pos.y}`;
+}
+
+/** A structure or construction site of this type on a tile outside the room being built */
+function isBuiltAt(pos: RoomPosition, type: StructureConstant): boolean {
+    if (pos.lookFor(LOOK_STRUCTURES).some(s => s.structureType === type)) return true;
+    return pos.lookFor(LOOK_CONSTRUCTION_SITES).some(s => s.structureType === type);
+}
+
 /** Below this capacity extensions come before everything else (MAX_CREEP_SIZE * (WORK + MOVE) / 2) */
 const EXTENSIONS_FIRST_CAPACITY = (MAX_CREEP_SIZE * (BODYPART_COST[WORK] + BODYPART_COST[MOVE])) / 2;
 
@@ -31,11 +41,21 @@ class RoomContext {
     readonly siteCount: number;
     readonly rcl: number;
     readonly terrain: RoomTerrain;
+    /**
+     * Structures and construction sites of the room by type and tile, built once per run: two lookFor
+     * per planned tile (hundreds of roads, extensions checked by several location types) cost ~6 CPU
+     */
+    private readonly built: Set<string> = new Set();
 
     constructor(readonly room: Room, readonly plan: RoomPlan) {
-        this.siteCount = room.find(FIND_MY_CONSTRUCTION_SITES).length;
+        const sites = room.find(FIND_MY_CONSTRUCTION_SITES);
+        this.siteCount = sites.length;
         this.rcl = room.controller?.level ?? 0;
         this.terrain = room.getTerrain();
+        for (const site of sites) this.built.add(builtKey(site.structureType, site.pos));
+        for (const structure of room.find(FIND_STRUCTURES)) {
+            this.built.add(builtKey(structure.structureType, structure.pos));
+        }
     }
 
     canCreate(): boolean {
@@ -44,12 +64,15 @@ class RoomContext {
 
     /** True to keep going (built, already there, or failed for a reason that shouldn't stop the loop) */
     tryBuild(pos: RoomPosition, type: BuildableStructureConstant): boolean {
-        if (pos.lookFor(LOOK_STRUCTURES).some(s => s.structureType === type)) return true;
-        if (pos.lookFor(LOOK_CONSTRUCTION_SITES).some(s => s.structureType === type)) return true;
+        const key = builtKey(type, pos);
+        if (pos.roomName === this.room.name ? this.built.has(key) : isBuiltAt(pos, type)) return true;
         if (!this.canCreate() || _.size(Game.constructionSites) >= MAX_GLOBAL_SITES) return false;
         const isObstacle = (OBSTACLE_OBJECT_TYPES as string[]).includes(type);
         if (isObstacle && pos.lookFor(LOOK_CREEPS).length > 0) return true;
-        if (pos.createConstructionSite(type) === OK) this.newSites++;
+        if (pos.createConstructionSite(type) === OK) {
+            this.newSites++;
+            this.built.add(key);
+        }
         return true;
     }
 
