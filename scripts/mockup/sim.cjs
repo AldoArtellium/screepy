@@ -36,7 +36,8 @@ const MEMORY_INIT = (() => {
  * Invader raids: "tick:body+body,tick:body" with the backend's raid bodies (smallMelee, smallRanged,
  * smallHealer, bigMelee, bigRanged, bigHealer), e.g. --raid 12000:bigMelee+bigRanged. The creeps
  * appear on the first exit tiles of the room and run the engine's invader AI. "@ROOM" after the bodies
- * puts them in another room of the fixture (a remote), e.g. --raid 12000:smallMelee@W7N4.
+ * puts them in another room of the fixture (a remote), e.g. --raid 12000:smallMelee@W7N4. A "*" after a body
+ * boosts it like the backend's boosted invaders (RAID_BOOSTS), e.g. --raid 12000:smallMelee*@W7N4.
  */
 const RAIDS = (opt("raid", "") || "")
   .split(",")
@@ -55,6 +56,8 @@ const RAID_BODIES = {
   smallRanged: ["tough", "tough", "move", "move", "move", "move", "ranged_attack", "ranged_attack", "ranged_attack", "move"],
   smallMelee: ["tough", "tough", "move", "move", "move", "move", "ranged_attack", "work", "attack", "move"]
 };
+/** Boosts of backend/lib/cronjobs.js createCreep for boosted invaders */
+const RAID_BOOSTS = { tough: "GO", ranged_attack: "KO", work: "ZH", attack: "UH", heal: "LO" };
 /**
  * Enemy player (offense tests): "ROOM:RCL[:defenders[:ringHits]]", e.g. --enemy W8N3:3 or W8N3:5:2:100000.
  * A base around a spawn (no safe mode: a new player starts with one, where attacks fail with
@@ -743,11 +746,12 @@ async function main() {
       const exitTiles = exitTilesOf(raidRoom);
       for (const [i, type] of raid.bodies.entries()) {
         const [x, y] = exitTiles[(i * 3) % exitTiles.length];
-        const body = RAID_BODIES[type];
+        const boosted = type.endsWith("*");
+        const body = RAID_BODIES[boosted ? type.slice(0, -1) : type];
         if (!body) throw new Error(`Unknown raid body ${type}`);
         const name = `invader_${raidRoom}_${tick}_${i}`;
         await db["rooms.objects"].insert({
-          type: "creep", user: "2", body: body.map((t) => ({ type: t, hits: 100 })), hits: body.length * 100,
+          type: "creep", user: "2", body: body.map((t) => (boosted && RAID_BOOSTS[t] ? { type: t, hits: 100, boost: RAID_BOOSTS[t] } : { type: t, hits: 100 })), hits: body.length * 100,
           hitsMax: body.length * 100, ticksToLive: 1500, x, y, room: raidRoom, fatigue: 0, store: {}, storeCapacity: 0, name
         });
         names.push(name);

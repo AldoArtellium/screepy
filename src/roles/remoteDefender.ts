@@ -14,6 +14,8 @@ import { registerRole } from "./registry";
 
 /** Hostiles closer than this interrupt the trip */
 const ENGAGE_RANGE = 5;
+/** Ranged defenders keep melee hostiles at this range */
+const KITE_RANGE = 3;
 
 export function runRemoteDefender(creep: Creep): void {
     const targetRoom = creep.memory.targetRoom;
@@ -59,10 +61,50 @@ function engage(creep: Creep, target: Creep | Structure): void {
         return;
     }
     if (creep.getActiveBodyparts(RANGED_ATTACK) > 0) {
+        // Kite melee hostiles: holding still once in range let a boosted invader walk up and strip
+        // the RANGED parts first (W29N8, a mini blinky out-healed 24 vs 80 at range 1)
+        if (kite(creep)) {
+            if (creep.pos.inRangeTo(target, 3)) creep.rangedAttack(target);
+            return;
+        }
         whenInRange(creep, 3, target, () => creep.rangedAttack(target));
         return;
     }
     stayInPlace(creep);
+}
+
+/** Steps away from melee hostiles closer than KITE_RANGE; false when none or no way out */
+function kite(creep: Creep): boolean {
+    const melee = creep.pos.findInRange(FIND_HOSTILE_CREEPS, KITE_RANGE - 1, {
+        filter: c => c.getActiveBodyparts(ATTACK) > 0
+    });
+    if (melee.length === 0) return false;
+    const result = PathFinder.search(
+        creep.pos,
+        melee.map(c => ({ pos: c.pos, range: KITE_RANGE })),
+        { flee: true, maxRooms: 1, roomCallback: exitCosts }
+    );
+    const next = result.path[0];
+    if (!next) return false;
+    trafficManager.requestMove(creep, next, { range: 0, priority: 5 });
+    return true;
+}
+
+/** Exit tiles are a last resort: they carry the creep out of the room it defends */
+function exitCosts(roomName: string): CostMatrix {
+    const matrix = new PathFinder.CostMatrix();
+    const terrain = Game.map.getRoomTerrain(roomName);
+    for (let i = 0; i < 50; i++) {
+        for (const [x, y] of [
+            [i, 0],
+            [i, 49],
+            [0, i],
+            [49, i]
+        ]) {
+            if (terrain.get(x, y) !== TERRAIN_MASK_WALL) matrix.set(x, y, 20);
+        }
+    }
+    return matrix;
 }
 
 registerRole(REMOTE_DEFENDER, runRemoteDefender);

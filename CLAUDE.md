@@ -74,6 +74,7 @@ npm run test:mockup -- --profile                       # + wall ms/tick per main
 npm run test:mockup -- --cpu-limit 13                  # lower the bot's CPU limit (13 code CPU ~ 20 official CPU with intents)
 npm run test:mockup -- --raid 9000:smallMelee+smallRanged,15000:bigMelee+bigRanged   # invader raids (backend bodies), outcome in the report
 npm run test:mockup -- --raid 13500:smallMelee@W7N4   # raid in another room of the fixture (a remote)
+npm run test:mockup -- --raid '13500:smallMelee*@W7N4'   # "*": boosted like the backend's invaders (GO, UH, KO, ZH, LO); quote it in zsh
 npm run test:mockup -- --preset rcl4 --enemy W8N3:5   # quick fast-forward at tick 1 (rcl4/rcl5/rcl7: storage, checkerboard extensions, containers) against an enemy base
 npm run test:mockup -- --preset rcl4 --stronghold W7N4:1   # invader stronghold (bunker template, deploys at tick 5)
 npm run test:mockup -- --preset rcl6 --ticks 4000      # plan-based fast-forward (rcl6, rcl8, plan5..plan8): built from the bot's plan once stored (terminal, minerals, labs)
