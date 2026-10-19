@@ -221,7 +221,8 @@ export const remoteSpawnRole: SpawnRole = {
         const reserved = new Set<string>();
         for (const source of remoteSources(home.name)) {
             if (isRemoteUnderAttack(source)) continue;
-            if (hasRemoteContainer(source)) haulerDemand += requiredCarry(home, source);
+            // Haulers only for a mined source: a container left without harvester has nothing to carry
+            if (hasRemoteContainer(source) && hasRemoteHarvesters(home, source)) haulerDemand += requiredCarry(home, source);
             const hauler = haulerOption(home, haulerDemand);
             if (hauler) return [hauler];
             buildDemand += builderDemand(home, source);

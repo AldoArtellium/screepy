@@ -3,11 +3,14 @@
  * Ported from Hivemind (MIT): src/process/strategy/mining.ts, empire/remote-mine-prioritizer.ts,
  * empire/remote-path-manager.ts, operation/remote-mining.ts. See docs/hivemind/hivemind-remote.md.
  *
- * Every 20 ticks each owned room with a plan keeps its 5 best remote rooms (4 from RCL 4) within
- * 3 rooms. Not Hivemind (3000 / shortest path): rooms are scored by net energy per tick once their
- * creeps are paid (remoteIncome.ts, Harabi). No RCL or storage gate.
+ * Every 20 ticks each owned room with a plan keeps at most 5 remote rooms (4 from RCL 4) within
+ * 3 rooms. Not Hivemind (3000 / shortest path): sources are ranked by net energy per tick once their
+ * creeps are paid (remoteIncome.ts, Harabi) per body part they keep the spawn busy with; a home whose
+ * spawn leaves a selected source without harvester mines one source less (updateSourceCap).
+ * No RCL or storage gate.
  */
 
+import { creepsByRole } from "../core/roomState";
 import { squadsOf } from "../expansion/Expansion";
 import { intelManager } from "../modules/IntelManager";
 import { hasInvaderCore, isRoomUnderAttack } from "../modules/RoomIntel";
@@ -18,7 +21,7 @@ import { roomsInRange } from "../utils/rooms";
 import { segmentStore } from "../utils/segments";
 import { countStat } from "../utils/stats";
 import { jitter, jitterFor } from "../utils/jitter";
-import { reserverCost, sourceNet } from "./remoteIncome";
+import { reserverCost, sourceNet, sourceParts } from "./remoteIncome";
 
 export interface RemoteSource {
     /** `${room}:${x}:${y}` */
@@ -30,6 +33,8 @@ export interface RemoteSource {
     travelTime: number;
     free: number;
     containerId?: Id<StructureContainer>;
+    /** Last selection tick the source had a remote harvester (or a reason to have none) */
+    servedAt?: number;
 }
 
 interface PathCache {
@@ -57,6 +62,10 @@ declare global {
             cpuAvg?: number;
             maxRooms?: number;
             budgetChanged?: number;
+            /** Sources a home's spawn can keep harvested (none = no cap yet), by home room */
+            sourceCaps?: { [home: string]: { max: number; changed: number } };
+            /** Share of the ticks every spawn of a home was spawning, ~400 ticks average, by home room */
+            spawnBusy?: { [home: string]: number };
         };
     }
     interface RoomMemory {
@@ -249,8 +258,80 @@ function candidateRooms(home: Room): string[] {
 
 /** Net energy per tick under which a remote source is not worth its creeps */
 const MIN_SOURCE_NET = 1;
-/** Rooms already mined keep their place unless another one scores 10% more */
+/** Sources already mined keep their place unless another one scores 10% more */
 const KEEP_BONUS = 1.1;
+
+/**
+ * Not in Hivemind: a cap on the sources of a home, from what its spawn actually serves. A selected
+ * source without remote harvester for STARVED_TICKS (not under attack, no invader core) means the
+ * spawn can't keep up: the home mines one source less (the worst per spawn part), at most once per
+ * SOURCE_CAP_STEP ticks; after SOURCE_CAP_PROBE ticks without starving source it tries one more.
+ * Only while the spawns are busy (SPAWN_BUSY of the time): a spawn waiting for energy (before the
+ * storage) leaves harvesters unspawned too, and fewer remotes only made it poorer (W9N5 -45%).
+ * A static spawn-time budget (500 parts per spawn and 1500 ticks minus the home's creeps) kept W7N3
+ * at 5-6 of its 8 sources (-10%): a spawn short of time still gains from a source it serves late.
+ */
+const STARVED_TICKS = 1500;
+const SOURCE_CAP_STEP = 1000;
+const SOURCE_CAP_PROBE = 5000;
+const SPAWN_BUSY = 0.8;
+
+/** Ticks every spawn of a home was spawning since the last selection (heap) */
+const spawnSamples: Map<string, { busy: number; total: number }> = new Map();
+
+function sampleSpawns(): void {
+    for (const name in Game.rooms) {
+        const room = Game.rooms[name];
+        if (!room.controller?.my) continue;
+        const spawns = room.find(FIND_MY_SPAWNS);
+        if (spawns.length === 0) continue;
+        let sample = spawnSamples.get(name);
+        if (!sample) spawnSamples.set(name, (sample = { busy: 0, total: 0 }));
+        sample.total++;
+        if (spawns.every(spawn => spawn.spawning)) sample.busy++;
+    }
+}
+
+/** Slow average of the busy share of a home's spawns, updated from the samples since the last call */
+function spawnBusy(home: string): number {
+    const busy = (memory().spawnBusy ??= {});
+    const sample = spawnSamples.get(home);
+    if (sample && sample.total > 0) {
+        const share = sample.busy / sample.total;
+        // ~400 ticks with a call every SELECT_INTERVAL ticks
+        busy[home] = busy[home] === undefined ? share : busy[home] * 0.95 + share * 0.05;
+        spawnSamples.delete(home);
+    }
+    return busy[home] ?? 0;
+}
+
+function updateSourceCap(home: Room): number | undefined {
+    const mem = memory();
+    const caps = (mem.sourceCaps ??= {});
+    const mine = Object.values(mem.sources).filter(s => s.homeRoom === home.name);
+    const harvested = new Set(creepsByRole(home.name, "remoteHarvester").map(c => c.memory.source));
+    let starved = false;
+    const idle = spawnBusy(home.name) < SPAWN_BUSY;
+    for (const source of mine) {
+        const excused = idle || isRoomUnderAttack(home.name) || isRemoteUnderAttack(source) || hasInvaderCore(source.room);
+        if (excused || harvested.has(source.key) || source.servedAt === undefined) source.servedAt = Game.time;
+        else if (Game.time - source.servedAt > STARVED_TICKS) starved = true;
+    }
+    const cap = caps[home.name];
+    if (starved && Game.time - (cap?.changed ?? 0) >= SOURCE_CAP_STEP) {
+        caps[home.name] = { max: Math.max(1, mine.length - 1), changed: Game.time };
+    } else if (cap && !starved && Game.time - cap.changed >= SOURCE_CAP_PROBE) {
+        // Back to uncapped once the cap no longer holds anything back
+        if (cap.max > mine.length) delete caps[home.name];
+        else caps[home.name] = { max: cap.max + 1, changed: Game.time };
+    } else {
+        return cap?.max;
+    }
+    countStat("remote:sourceCapChange");
+    const next = caps[home.name]?.max;
+    log.info("RemoteMining", `${home.name}: ${starved ? "a remote source starved" : "no starved source"}, sources ${next === undefined ? "uncapped" : `capped at ${next}`}`);
+    return next;
+}
 
 function maxRemotes(home: Room): number {
     const spawns = Math.max(1, home.find(FIND_MY_SPAWNS).length);
@@ -302,49 +383,77 @@ function selectRemotes(): void {
         if (!home.controller?.my || !roomPlanner.getPlan(home.name)) continue;
         // A room without spawn (new expansion) mines nothing yet
         if (home.find(FIND_MY_SPAWNS).length === 0) continue;
-        const scored: { room: string; score: number; sources: RemoteSource[] }[] = [];
+        const cap = updateSourceCap(home);
+        type Candidate = { source: RemoteSource; net: number; parts: number };
+        const rooms: { [room: string]: { candidates: Candidate[]; reserverCost: number } } = {};
         const reserved = (roomName: string) => canReserveFrom(home, roomName);
         const roads = home.controller!.level > 3 && !!(home.storage || home.terminal);
         for (const roomName of candidateRooms(home)) {
             const intel = intelManager.getIntel(roomName)!;
-            const sources: RemoteSource[] = [];
+            const candidates: Candidate[] = [];
             const capacity = reserved(roomName) ? SOURCE_ENERGY_CAPACITY : SOURCE_ENERGY_NEUTRAL_CAPACITY;
             const generation = capacity / ENERGY_REGEN_TIME;
             let net = 0;
             for (const source of intel.sources!) {
                 const path = pathFor(home, new RoomPosition(source.x, source.y, roomName));
                 if (!path || path.length === 0) continue;
-                const sourceIncome = sourceNet({
+                const economy = {
                     generation,
                     distance: path.length,
                     roads,
                     // maintenanceWork() for a path not selected yet
                     maintenanceWork: roads ? Math.ceil(0.7 + 0.03 * path.filter(p => !isOwnedRoom(p.roomName)).length) : 0
-                });
+                };
+                const sourceIncome = sourceNet(economy);
                 // A source that barely pays for its creeps is left out
                 if (sourceIncome < MIN_SOURCE_NET) continue;
                 net += sourceIncome;
                 const key = sourceKey(roomName, source.x, source.y);
-                sources.push({
-                    key,
-                    room: roomName,
-                    x: source.x,
-                    y: source.y,
-                    homeRoom: home.name,
-                    travelTime: path.length,
-                    free: source.free || 1,
-                    containerId: memory().sources[key]?.containerId
+                const previous = memory().sources[key];
+                candidates.push({
+                    source: {
+                        key,
+                        room: roomName,
+                        x: source.x,
+                        y: source.y,
+                        homeRoom: home.name,
+                        travelTime: path.length,
+                        free: source.free || 1,
+                        containerId: previous?.containerId,
+                        servedAt: previous?.homeRoom === home.name ? previous.servedAt : Game.time
+                    },
+                    net: sourceIncome,
+                    parts: sourceParts(economy)
                 });
             }
             // Hivemind scored a room without any path 3000/500: such a room is skipped here
-            if (sources.length === 0) continue;
-            if (reserved(roomName)) net -= reserverCost(_.min(sources.map(s => s.travelTime)));
-            if (net <= 0) continue;
-            scored.push({ room: roomName, score: net, sources });
+            if (candidates.length === 0) continue;
+            const reserver = reserved(roomName) ? reserverCost(_.min(candidates.map(c => c.source.travelTime))) : 0;
+            if (net - reserver <= 0) continue;
+            rooms[roomName] = { candidates, reserverCost: reserver };
         }
-        const current = new Set(Object.values(memory().sources).filter(s => s.homeRoom === home.name).map(s => s.room));
-        const ranked = _.sortBy(scored, entry => -entry.score * (current.has(entry.room) ? KEEP_BONUS : 1));
-        picked.push(...ranked.slice(0, maxRemotes(home)));
+        // Best net energy per spawn part first: the room-level net income kept two far sources over
+        // a close one, and the spawn never got to the far ones' harvesters
+        const current = memory().sources;
+        const ranked = _.sortBy(
+            _.flatten(Object.values(rooms).map(r => r.candidates)),
+            c => (-c.net / c.parts) * (current[c.source.key]?.homeRoom === home.name ? KEEP_BONUS : 1)
+        );
+        const chosen: { [room: string]: RemoteSource[] } = {};
+        let count = 0;
+        for (const candidate of ranked) {
+            if (cap !== undefined && count >= cap) break;
+            const opening = !chosen[candidate.source.room];
+            if (opening && Object.keys(chosen).length >= maxRemotes(home)) continue;
+            (chosen[candidate.source.room] ??= []).push(candidate.source);
+            count++;
+        }
+        for (const roomName in chosen) {
+            const sources = chosen[roomName];
+            const room = rooms[roomName];
+            const score = _.sum(sources, s => room.candidates.find(c => c.source === s)!.net) - room.reserverCost;
+            picked.push({ score, sources });
+        }
     }
     // CPU budget: the closest rooms of the whole empire (Hivemind's order). The net income order
     // kept farther two-source rooms, more creeps per CPU: W9N5 at 13 CPU lost 15%
@@ -517,6 +626,7 @@ export function sourceEnergyCapacity(home: Room, source: RemoteSource): number {
 }
 
 export const remoteMiningModule = () => {
+    sampleSpawns();
     // Paths not loaded yet (first tick after requesting the segment): don't recompute them all
     if (!pathStore.ready) return;
     const mem = memory();
