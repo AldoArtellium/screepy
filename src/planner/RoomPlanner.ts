@@ -14,6 +14,7 @@
  */
 
 import { log } from "../utils/logger";
+import { decisionBucket } from "../utils/throttle";
 import { segmentStore } from "../utils/segments";
 import { EXTENDABLE_PLAN_VERSION, PLAN_VERSION, PlanMemory, RoomPlan } from "./RoomPlan";
 import { ROAD_POSITION, PlacementManager } from "./PlacementManager";
@@ -1168,7 +1169,7 @@ class RoomPlanner {
 
     /** Plans the first owned room without a valid plan, else tries variations of an unfinished plan */
     run(): void {
-        if ((Game.cpu.bucket ?? 10000) < MIN_BUCKET) return;
+        if (decisionBucket() < MIN_BUCKET) return;
         // Plans not loaded yet (first tick after the segments were requested): never replan on partial data
         if (!plans.ready) return;
         for (const name in Game.rooms) {

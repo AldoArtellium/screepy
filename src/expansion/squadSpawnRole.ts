@@ -9,6 +9,7 @@ import { buildBody, MoveMode } from "../core/bodyBuilder";
 import { effectiveEnergy, squadCreeps } from "../core/roomState";
 import { remoteDefenderBody, DefenseResponse } from "../remote/remoteDefense";
 import type { SpawnOption, SpawnRole } from "../spawning/spawnRoles";
+import { decisionBucket } from "../utils/throttle";
 import { roomsNeedingReclaim, SquadUnit, squadsOf } from "./Expansion";
 
 export const CLAIMER = "claimer";
@@ -75,7 +76,7 @@ export const reclaimSpawnRole: SpawnRole = {
     emptyTimeout: 100,
 
     options(room) {
-        if (effectiveEnergy(room) < RECLAIM_ENERGY || Game.cpu.bucket < RECLAIM_BUCKET) return [];
+        if (effectiveEnergy(room) < RECLAIM_ENERGY || decisionBucket() < RECLAIM_BUCKET) return [];
         const options: SpawnOption[] = [];
         for (const target of roomsNeedingReclaim()) {
             if (target === room.name) continue;

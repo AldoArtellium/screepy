@@ -8,6 +8,17 @@
  * - `throttleMultiplier(stopAt, throttleAt)`: factor applied to a periodic module's interval.
  */
 
+/**
+ * Bucket for CPU decisions (throttling, remote budget, upgraders, visuals, planner, reclaim): a bucket drained by
+ * pixel generation (modules/Pixels.ts) counts as full while it refills, else every pixel would stop or throttle the
+ * economy for the ~1000 ticks it takes to refill. The Pixels module clears the flag once the bucket is full again or
+ * the CPU average rises above 80% of the limit: the real bucket applies again. Displays keep the real bucket.
+ */
+export function decisionBucket(): number {
+    // No bucket in the simulation room: full
+    return Memory.pixelState?.refilling ? 10000 : (Game.cpu.bucket ?? 10000);
+}
+
 const throttleNumbers: number[] = [];
 let nextOffset = 0;
 
@@ -50,7 +61,7 @@ export function throttleOffset(): number {
 /** True when the operation should be skipped this tick */
 export function throttle(offset: number, stopAt = 2000, throttleAt = 8000): boolean {
     init();
-    const bucket = Game.cpu.bucket;
+    const bucket = decisionBucket();
     if (bucket >= throttleAt) return false;
     if (bucket < stopAt) return true;
     const ratio = (bucket - stopAt) / (throttleAt - stopAt);
@@ -65,7 +76,7 @@ export function throttleMultiplier(stopAt = 0, throttleAt = 5000): number {
     const maxThrottle = Game.cpu.tickLimit;
     const used = Game.cpu.getUsed();
     if (used > minThrottle) multiplier /= Math.max(0.01, 1 - (used - minThrottle) / (maxThrottle - minThrottle));
-    const bucket = Game.cpu.bucket;
+    const bucket = decisionBucket();
     if (bucket <= stopAt) return 99999;
     if (bucket < throttleAt) multiplier *= (throttleAt - stopAt) / (bucket - stopAt);
     return multiplier;
