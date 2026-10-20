@@ -128,6 +128,8 @@ const MIN_RCL = Number(opt("min-rcl", TICKS >= 2000 ? 2 : 1));
 const MAX_CPU = Number(opt("max-cpu", 20));
 const MIN_CREEPS = Number(opt("min-creeps", 3));
 const MAX_FAIL_RATIO = Number(opt("max-fail-ratio", 0.1));
+// Regression gate (CI): minimum world.points at the end, only checked when given
+const MIN_POINTS = opt("min-points") === undefined ? null : Number(opt("min-points"));
 const USERNAME = "screepy";
 
 /** RCL threshold sums, to express controller progress as a single number (same as pserver-test.mjs) */
@@ -884,6 +886,7 @@ async function main() {
       `${failed} failed / ${completed} completed (${(failRatio * 100).toFixed(1)}%)`
     ]
   ];
+  if (MIN_POINTS !== null) checks.push([`Points >= ${MIN_POINTS}`, world.points >= MIN_POINTS, `${world.points} points`]);
   console.log("");
   for (const [name, ok, detail] of checks) console.log(`${ok ? "PASS" : "FAIL"}  ${name.padEnd(32)} ${detail}`);
   for (const e of moduleErrors.slice(-5))

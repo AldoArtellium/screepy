@@ -6,6 +6,7 @@
  *
  * Usage: npm run test:mockup -- [--ticks 3000] [--room W7N3] [--code path/to/main.js] [--no-build]
  *                               [--memory '<json>' | @file.json] [--min-rcl 2] [--max-cpu 20] [--log-every 500]
+ *                               [--min-points <n>] (regression gate: fail below n world points)
  *                               [--verbose]       (print the bot console)
  *                               [--dump-memory]   (Memory and segments at the end, <report>-memory.json)
  *                               [--processors 2]  (engine processor processes, 1 with --no-fast)
@@ -13,6 +14,7 @@
  *                               [--profile]       (wall time per main loop stage, CPU per process)
  *                               [--list-rooms]    (rooms with a fixture)
  *                               [--rebuild-image] (force a docker build)
+ *                               [--image-hash]    (print the image label hash and exit, see CI)
  *                               [--native]        (no Docker: needs `npm install` in scripts/mockup,
  *                                                  i.e. a C++ toolchain for @screeps/driver)
  *
@@ -22,7 +24,7 @@
  */
 
 import { execFileSync, spawnSync } from "node:child_process";
-import { createHash } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -46,6 +48,12 @@ if (flag("list-rooms")) {
       `${fx.room.padEnd(8)} sources ${objs.filter((o) => o.type === "source").length}, neighbours ${Object.keys(fx.rooms).length - 1}, extracted ${fx.extractedAt}`
     );
   }
+  process.exit(0);
+}
+// Hash of the image inputs, for CI: build the image with this screepy.hash label (cached) and
+// ensureImage() then reuses it instead of rebuilding
+if (flag("image-hash")) {
+  console.log(imageHash());
   process.exit(0);
 }
 
@@ -100,7 +108,8 @@ for (let i = 0; i < args.length; i++) {
   else if (["--no-build", "--native", "--rebuild-image"].includes(a)) continue;
   else passthrough.push(a);
 }
-const stamp = Date.now();
+// Random suffix: two runs started in the same millisecond must not share a container name or report
+const stamp = `${Date.now()}-${randomBytes(3).toString("hex")}`;
 const outHost = join(ROOT, "test-results", `mockup-${stamp}.json`);
 
 let status;
