@@ -11,7 +11,7 @@
  */
 
 import { creepsByRole } from "../core/roomState";
-import { squadsOf } from "../expansion/Expansion";
+import { claimingSquadsOf } from "../expansion/Expansion";
 import { intelManager } from "../modules/IntelManager";
 import { hasInvaderCore, isRoomUnderAttack } from "../modules/RoomIntel";
 import { roomPlanner } from "../planner/RoomPlanner";
@@ -446,8 +446,9 @@ function updateSourceCap(home: Room): number | undefined {
 
 function maxRemotes(home: Room): number {
     const spawns = Math.max(1, home.find(FIND_MY_SPAWNS).length);
-    // An expansion squad spawned here takes a remote's place (Hivemind roomNeeds counts squads)
-    const squads = squadsOf(home.name).length;
+    // An expansion squad spawned here takes a remote's place until its target is claimed (Hivemind
+    // roomNeeds counts every squad, pioneers-only ones after the claim included)
+    const squads = claimingSquadsOf(home.name).length;
     const needs = (home.controller!.level >= 4 ? 1 : 0) + (home.controller!.level >= 6 ? 1 : 0) + squads;
     return Math.floor(spawns * 5 - needs);
 }
