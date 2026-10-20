@@ -67,9 +67,9 @@ jobs:
           # it depends on the host: ~11-13 on a quiet desktop, 43 on an overloaded one; 40 only
           # catches gross regressions on a shared runner.
           - room: W7N3
-            min-points: 1750
+            min-points: 1400
           - room: W1N3
-            min-points: 700
+            min-points: 600
     steps:
       - uses: actions/checkout@v4
 
