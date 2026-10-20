@@ -18,6 +18,7 @@ import { spawnManagerModule } from "modules/SpawnManager";
 import { trafficManagerModule } from "modules/TrafficManager";
 import { roomPlannerModule } from "planner/RoomPlanner";
 import { remoteMiningModule } from "remote/RemoteMining";
+import { reportsModule } from "modules/Reports";
 import { log } from "utils/logger";
 import { roomVisualsModule } from "visuals/roomVisuals";
 
@@ -67,6 +68,8 @@ export const gameLoop = () => {
     { name: "MiningStats", fn: miningStatsModule },
     // Every tick (a skipped tick blanks the visuals); the module throttles its own redraws
     { name: "RoomVisuals", fn: roomVisualsModule, priority: "always" },
+    // Periodic report (Game.notify, Memory.reports) and immediate alerts; samples CPU and bucket every tick
+    { name: "Reports", fn: reportsModule, priority: "always" },
 
     // Resolves all movement requests issued above (must run after every creep-moving module)
     { name: "TrafficManager", fn: trafficManagerModule, mandatory: true }
