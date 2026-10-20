@@ -165,6 +165,24 @@ function effectiveDamage(creep: Creep, potential: number): number {
     return total + potential - taken;
 }
 
+/** Hits once boosted TOUGH parts absorb their share (Hivemind getEffectiveHealth) */
+export function effectiveHits(creep: Creep): number {
+    let total = 0;
+    for (const part of creep.body) {
+        const effect = part.type === TOUGH && part.boost
+            ? (BOOSTS as unknown as Record<string, Record<string, Record<string, number>>>)[TOUGH]?.[part.boost as string]
+            : undefined;
+        total += part.hits / (effect?.damage ?? 1);
+    }
+    return total;
+}
+
+/** Moves at full speed on plains: a melee creep this fast can't be kited (fatigue = 2 per part, MOVE boosts included) */
+export function isFast(creep: Creep): boolean {
+    const others = creep.body.filter(p => p.type !== MOVE && p.type !== CARRY).length;
+    return activePower(creep, MOVE, "fatigue") >= others;
+}
+
 const PART_VALUE: Partial<Record<BodyPartConstant, number>> = { [ATTACK]: 1, [CLAIM]: 10, [HEAL]: 5, [RANGED_ATTACK]: 2, [WORK]: 1 };
 
 function militaryValue(creep: Creep): number {
@@ -172,7 +190,7 @@ function militaryValue(creep: Creep): number {
 }
 
 /** Active parts of a creep, boosts included */
-function activePower(creep: Creep, type: BodyPartConstant, attribute: string): number {
+export function activePower(creep: Creep, type: BodyPartConstant, attribute: string): number {
     let total = 0;
     for (const part of creep.body) {
         if (part.type !== type || part.hits === 0) continue;

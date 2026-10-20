@@ -38,6 +38,12 @@ declare global {
             heal?: number;
             /** The dangerous hostiles have RANGED_ATTACK */
             ranged?: boolean;
+            /** Their RANGED_ATTACK damage per tick (boosts included): what still reaches a kiting defender */
+            rangedDamage?: number;
+            /** Their hits, boosted TOUGH included */
+            hits?: number;
+            /** A melee hostile moves at full speed on plains: kiting can't keep it away */
+            fastMelee?: boolean;
         };
     }
 }
