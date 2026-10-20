@@ -33,6 +33,7 @@ import {
 import { reclaimSpawnRole, squadSpawnRole } from "../expansion/squadSpawnRole";
 import { militarySpawnRole } from "../military/military";
 import { remoteSpawnRole } from "../remote/remoteSpawnRole";
+import { dismantlerSpawnRole } from "../remote/dismantle";
 import { ENEMY_STRENGTH_NORMAL, enemyStrength } from "../defense/RoomDefense";
 import { GUARDIAN } from "../roles/guardian";
 import { isFullOn } from "../core/resources";
@@ -652,6 +653,7 @@ function maxEnemyBoostTier(room: Room): number {
 export const ECONOMY_SPAWN_ROLES: SpawnRole[] = [
     remoteDefense,
     builder,
+    dismantlerSpawnRole,
     harvester,
     helper,
     mineralHarvester,

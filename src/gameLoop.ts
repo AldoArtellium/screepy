@@ -1,6 +1,7 @@
 import { Module, runModuleManager } from "./ModuleManager";
 
 import { roomBuilderModule } from "construction/RoomBuilder";
+import { roomCleanupModule } from "construction/RoomCleanup";
 import { creepRunnerModule } from "modules/CreepRunner";
 import { defenseModule } from "defense/defenseModule";
 import { expansionModule } from "expansion/Expansion";
@@ -39,6 +40,8 @@ export const gameLoop = () => {
 
     // Construction sites from the plan
     { name: "RoomBuilder", fn: roomBuilderModule, runEvery: 20 },
+    // Others' structures and sites, walls and misplaced structures on planned tiles (Hivemind cleanRoom)
+    { name: "RoomCleanup", fn: roomCleanupModule, runEvery: 100 },
 
     // Labs: boost labs for the creeps to boost, reactions (military compounds first)
     { name: "Labs", fn: labsModule },

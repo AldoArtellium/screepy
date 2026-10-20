@@ -22,6 +22,7 @@ import { segmentStore } from "../utils/segments";
 import { countStat } from "../utils/stats";
 import { jitter, jitterFor } from "../utils/jitter";
 import { reserverCost, sourceNet, sourceParts } from "./remoteIncome";
+import { blockerCost } from "./blockers";
 
 export interface RemoteSource {
     /** `${room}:${x}:${y}` */
@@ -202,9 +203,7 @@ function remoteCostMatrix(roomName: string): CostMatrix | false {
         const plan = roomPlanner.getPlan(roomName);
         for (const structure of room.find(FIND_STRUCTURES)) {
             if (structure.structureType === STRUCTURE_ROAD) matrix.set(structure.pos.x, structure.pos.y, 1);
-            else if ((OBSTACLE_OBJECT_TYPES as string[]).includes(structure.structureType)) {
-                matrix.set(structure.pos.x, structure.pos.y, 255);
-            }
+            else setObstacleCost(matrix, room, structure);
         }
         if (plan) {
             for (const pos of plan.getLocations("road")) if (matrix.get(pos.x, pos.y) === 0) matrix.set(pos.x, pos.y, 1);
@@ -215,6 +214,28 @@ function remoteCostMatrix(roomName: string): CostMatrix | false {
     }
     matrixCache.set(roomName, { until: Game.time + jitter(1000), matrix });
     return matrix;
+}
+
+/**
+ * Obstacles: 255 in our rooms (RoomCleanup destroys what is in the way); elsewhere a blocker a
+ * dismantler can open costs by its hits (blockers.ts), others' ramparts included
+ */
+function setObstacleCost(matrix: CostMatrix, room: Room, structure: Structure): void {
+    let cost: number;
+    if (room.controller?.my) cost = (OBSTACLE_OBJECT_TYPES as string[]).includes(structure.structureType) ? 255 : 0;
+    else cost = blockerCost(structure);
+    if (cost > matrix.get(structure.pos.x, structure.pos.y)) matrix.set(structure.pos.x, structure.pos.y, cost);
+}
+
+/**
+ * A source's path is blocked by something no dismantler can remove (seen once the room is visible):
+ * forget the path and the room's cost matrix so the next selection searches around it
+ */
+export function forgetRemotePath(source: RemoteSource, roomName: string): void {
+    matrixCache.delete(roomName);
+    delete paths()[source.key];
+    pathStore.touch();
+    log.info("RemoteMining", `${source.key}: path blocked in ${roomName}, searching again`);
 }
 
 /** Path from a remote source to its home's planned storage, cached (Hivemind getPathFor) */
