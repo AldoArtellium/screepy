@@ -3,9 +3,10 @@
  * Ported from Hivemind (MIT), src/role/claimer.ts (mission "reserve").
  */
 
-import { whenInRange } from "../core/movement";
+import { followPath, whenInRange } from "../core/movement";
 import { intelManager } from "../modules/IntelManager";
 import { trafficManager } from "../modules/TrafficManager";
+import { remotePath, remoteSources } from "../remote/RemoteMining";
 import { RESERVER } from "../remote/remoteSpawnRole";
 import { fleeIfThreatened } from "./flee";
 import { registerRole } from "./registry";
@@ -18,6 +19,9 @@ export function runReserver(creep: Creep): void {
     const target = new RoomPosition(controllerPos.x, controllerPos.y, roomName);
     if (fleeIfThreatened(creep, target)) return;
     if (creep.room.name !== roomName) {
+        // The stored path of one of the room's sources up to the room, then the controller
+        const source = remoteSources(creep.memory.room ?? "").find(s => s.room === roomName);
+        if (source && followPath(creep, remotePath(source), true, 40)) return;
         trafficManager.requestMove(creep, target, { range: 1, priority: 40 });
         return;
     }

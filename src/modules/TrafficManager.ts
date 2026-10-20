@@ -12,7 +12,7 @@
  * "stay in range" intent so the reconciler doesn't shove it away.
  */
 
-import { moveTo, preTick, reconcileTraffic } from "screeps-cartographer";
+import { move, moveTo, preTick, reconcileTraffic } from "screeps-cartographer";
 import { countStat, recordSample } from "../utils/stats";
 import { jitter } from "../utils/jitter";
 
@@ -128,8 +128,20 @@ class TrafficManager {
     }
 
     /**
-     * Number of consecutive ticks the creep wanted to move but didn't
+     * Step onto an adjacent tile (a tile of a stored path): registered with the reconciler like any
+     * other move, so shoves and swaps still work, but without a path search.
      */
+    requestStep(creep: Creep, pos: RoomPosition, priority?: number): ScreepsReturnCode {
+        if (this.requestsTick !== Game.time) {
+            this.requestsTick = Game.time;
+            this.requestsThisTick = 0;
+        }
+        this.requestsThisTick++;
+        this.trackStuck(creep, false);
+        const p = priority ?? this.getCreepPriority(creep);
+        return move(creep, [pos], 101 - Math.min(100, Math.max(0, p)));
+    }
+
     /**
      * Move a creep towards another room (cartographer paths across rooms; arrives when inside the room)
      */
