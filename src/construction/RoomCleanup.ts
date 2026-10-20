@@ -5,9 +5,10 @@
  * cleanWalls) and dismantleUnwantedDefenses (:504-525, walls).
  *
  * - Construction sites of other players: removed.
- * - Structures of other players: destroyed, except stores holding resources (storage, terminal,
- *   labs...): looted first by the dispatcher (grave source), destroyed once nearly empty or after
- *   LOOT_TICKS (destroy() leaves a ruin, also looted).
+ * - Structures of other players: destroyed at once, stores included (destroy() leaves a ruin with
+ *   their content, looted by the dispatcher's grave source). Waiting to loot a previous owner's
+ *   storage first stalled the room: room.storage is set whoever owns it (mockup, a 20k storage left
+ *   in W7N3: still RCL 1 at tick 3000).
  * - Once the plan is final: walls not planned (novice walls can't be destroyed and are left), and our
  *   extensions, labs, links and containers on a tile planned for another structure (or an extension,
  *   lab or link on a planned road). Our spawns, towers, storage, terminal and ramparts are never
@@ -21,12 +22,6 @@ import { RoomPlan } from "../planner/RoomPlan";
 import { roomPlanner } from "../planner/RoomPlanner";
 import { log } from "../utils/logger";
 import { countStat } from "../utils/stats";
-
-/** Others' stores holding at least this much are looted before being destroyed */
-const LOOT_MIN = 1000;
-/** ...for at most this long after first seen (heap) */
-const LOOT_TICKS = 5000;
-const lootSeen: Map<string, number> = new Map();
 
 /** Our structures destroyed when they block a planned tile of another type (Hivemind clean*) */
 const MOVABLE: StructureConstant[] = [STRUCTURE_EXTENSION, STRUCTURE_LAB, STRUCTURE_LINK, STRUCTURE_CONTAINER];
@@ -60,20 +55,9 @@ function removeHostileSites(room: Room): void {
     }
 }
 
-/** Loot first: a store with resources waits until nearly empty, at most LOOT_TICKS */
-function waitsForLoot(structure: Structure): boolean {
-    const store = (structure as AnyStoreStructure).store as Store<ResourceConstant, false> | undefined;
-    if (!store || store.getUsedCapacity() < LOOT_MIN) return false;
-    const seen = lootSeen.get(structure.id) ?? Game.time;
-    lootSeen.set(structure.id, seen);
-    return Game.time - seen < LOOT_TICKS;
-}
-
 function removeHostileStructures(room: Room): void {
     for (const structure of room.find(FIND_HOSTILE_STRUCTURES)) {
         if (!(structure.structureType in CONSTRUCTION_COST)) continue;
-        if (waitsForLoot(structure)) continue;
-        lootSeen.delete(structure.id);
         destroy(structure, `owned by ${structure.owner?.username}`);
     }
 }

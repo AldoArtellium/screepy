@@ -213,19 +213,7 @@ class DropSource implements TaskProvider {
     }
 }
 
-/**
- * Stores of other players in our rooms (a claimed room's previous owner): looted like ruins until
- * RoomCleanup destroys them (Hivemind destroys them at once)
- */
-function lootStores(room: Room): AnyStoreStructure[] {
-    if (!room.controller?.my) return [];
-    // Not under one of their ramparts: withdraw() fails there until RoomCleanup destroys it
-    const covered = (s: Structure) =>
-        s.pos.lookFor(LOOK_STRUCTURES).some(r => r.structureType === STRUCTURE_RAMPART && !(r as StructureRampart).my);
-    return room.find(FIND_HOSTILE_STRUCTURES).filter(s => "store" in s && !covered(s)) as AnyStoreStructure[];
-}
-
-/** Tombstones, ruins and others' stores in our rooms */
+/** Tombstones and ruins */
 class GraveSource extends StoreSource {
     readonly type = "grave";
 
@@ -238,9 +226,9 @@ class GraveSource extends StoreSource {
         const room = creep.room;
         const isTransporter = creep.memory.role === "transporter";
         const tasks: Order[] = [];
-        const graves: (Tombstone | Ruin | AnyStoreStructure)[] = [...room.find(FIND_TOMBSTONES), ...room.find(FIND_RUINS), ...lootStores(room)];
+        const graves: (Tombstone | Ruin)[] = [...room.find(FIND_TOMBSTONES), ...room.find(FIND_RUINS)];
         for (const grave of graves) {
-            if ((grave.store.getUsedCapacity() ?? 0) <= 10) continue;
+            if (grave.store.getUsedCapacity() <= 10) continue;
             for (const resourceType in grave.store) {
                 const amount = grave.store[resourceType as ResourceConstant];
                 if (!amount) continue;
@@ -255,7 +243,7 @@ class GraveSource extends StoreSource {
                     if (room.storage && freeStorage(room) < amount && effectiveEnergy(room) > 20000) priority -= 2;
                 }
                 if (freeStorage(room) < amount) continue;
-                if ((grave.store.getUsedCapacity() ?? 0) < creep.store.getCapacity() * 2) {
+                if (grave.store.getUsedCapacity() < creep.store.getCapacity() * 2) {
                     priority -= creepsWithOrder(room, this.type, grave.id).length * 2;
                 }
                 tasks.push({
