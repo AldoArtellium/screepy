@@ -501,6 +501,11 @@ async function snapshot(server, userId) {
     extensions: mine.filter((o) => o.type === "extension").length,
     containers: objects.filter((o) => o.type === "container").length,
     roads: objects.filter((o) => o.type === "road").length,
+    // Our ramparts in the room: count, lowest and average hits
+    ramparts: (() => {
+      const hits = mine.filter((o) => o.type === "rampart").map((o) => o.hits);
+      return { n: hits.length, min: hits.length ? Math.min(...hits) : 0, avg: hits.length ? Math.round(hits.reduce((a, b) => a + b, 0) / hits.length) : 0 };
+    })(),
     sites: objects.filter((o) => o.type === "constructionSite" && o.user === userId).length,
     storage: mine.filter((o) => o.type === "storage").reduce((sum, o) => sum + ((o.store && o.store.energy) || 0), 0),
     remoteRoads: (await db["rooms.objects"].find({ type: "road" })).filter((o) => o.room !== ROOM).length,
@@ -783,7 +788,7 @@ async function main() {
       log(
         `tick ${tick}/${TICKS}`,
         `RCL ${w.rcl} (${w.progress}) | creeps ${w.creeps} | energy ${w.energy}/${w.energyCapacity}`,
-        `| ext ${w.extensions} cont ${w.containers} roads ${w.roads}+${w.remoteRoads} sites ${w.sites} storage ${w.storage}`,
+        `| ext ${w.extensions} cont ${w.containers} roads ${w.roads}+${w.remoteRoads} sites ${w.sites} storage ${w.storage} ramparts ${w.ramparts.n} (min ${w.ramparts.min}, avg ${w.ramparts.avg})`,
         `| cpu avg ${(cpuSum / Math.max(1, cpuSamples)).toFixed(2)}`,
         PRESET ? `| endgame ${JSON.stringify(w.endgame)} sites ${JSON.stringify(w.siteTypes)} terminal ${w.terminalEnergy} minerals ${JSON.stringify(w.minerals)} boosted ${JSON.stringify(w.boostedParts)}` : "",
         Object.keys(w.ownedRooms).length > 1 ? `| rooms ${JSON.stringify(w.ownedRooms)}` : "",

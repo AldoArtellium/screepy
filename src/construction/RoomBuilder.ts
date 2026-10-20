@@ -95,15 +95,22 @@ function manageSpawns(ctx: RoomContext): void {
     ctx.buildPlanned("spawn", STRUCTURE_SPAWN);
 }
 
+/** Ramparts wait for the storage (The International placeRamparts `needsStoringStructure`) */
+const RAMPARTS_NEED_STORAGE = false;
+
 /** RCL 3+, unless a long safe mode runs: main ramparts first, then the on-ramps (Hivemind manageRamparts) */
 function manageRamparts(ctx: RoomContext): void {
     const controller = ctx.room.controller!;
     if (ctx.rcl < 3 || ((controller.safeMode ?? 0) >= 2000 && !controller.safeModeCooldown)) return;
+    if (RAMPARTS_NEED_STORAGE && !ctx.room.storage) return;
     ctx.buildPlanned("rampart", STRUCTURE_RAMPART, pos => !ctx.plan.has(pos, "rampart.ramp"));
     ctx.buildPlanned("rampart", STRUCTURE_RAMPART);
 }
 
-/** Every planned main rampart holds MIN_WALL_INTEGRITY scaled to the RCL (Hivemind checkWallIntegrity) */
+/**
+ * Every planned main rampart holds MIN_WALL_INTEGRITY scaled to the RCL (Hivemind checkWallIntegrity). Always
+ * below the threat-free rampart target (`wallTarget`: 100k at RCL 5, 276k at 6, 566k at 7, 988k at 8).
+ */
 function checkWallIntegrity(ctx: RoomContext): boolean {
     if (ctx.plan.count("rampart") === 0) return true;
     return lowestWallStrength(ctx.room) >= (MIN_WALL_INTEGRITY * MAX_WALL_HEALTH[ctx.rcl]) / MAX_WALL_HEALTH[8];
