@@ -44,6 +44,8 @@ declare global {
             hits?: number;
             /** A melee hostile moves at full speed on plains: kiting can't keep it away */
             fastMelee?: boolean;
+            /** A dangerous hostile belongs to a player (not "Invader") */
+            players?: boolean;
         };
     }
 }

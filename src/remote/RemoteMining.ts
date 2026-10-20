@@ -676,11 +676,13 @@ export interface EnemyData {
     hits: number;
     fastMelee: boolean;
     hasInvaderCore: boolean;
+    /** A hostile belongs to a player */
+    players: boolean;
 }
 
 /** Hostile strength in the remote and the rooms crossed on the way (Hivemind getTotalEnemyData) */
 export function remoteEnemyData(source: RemoteSource): EnemyData {
-    const total: EnemyData = { damage: 0, heal: 0, ranged: false, rangedDamage: 0, hits: 0, fastMelee: false, hasInvaderCore: false };
+    const total: EnemyData = { damage: 0, heal: 0, ranged: false, rangedDamage: 0, hits: 0, fastMelee: false, hasInvaderCore: false, players: false };
     for (const room of pathRooms(source)) {
         if (room === source.homeRoom) continue;
         const enemies = Memory.rooms?.[room]?.enemies;
@@ -693,6 +695,7 @@ export function remoteEnemyData(source: RemoteSource): EnemyData {
         total.rangedDamage += enemies.rangedDamage ?? 0;
         total.hits += enemies.hits ?? 0;
         total.fastMelee = total.fastMelee || !!enemies.fastMelee;
+        total.players = total.players || !!enemies.players;
     }
     return total;
 }
