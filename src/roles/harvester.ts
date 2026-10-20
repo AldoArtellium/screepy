@@ -64,7 +64,8 @@ function performHarvest(creep: Creep): void {
     let target = source.pos;
     let range = 1;
     const harvestPos = harvestPosition(creep, source);
-    if (harvestPos && !harvestPos.lookFor(LOOK_CREEPS).some(c => c !== creep)) {
+    // On its spot no other creep can hold it: skip the look
+    if (harvestPos && (creep.pos.isEqualTo(harvestPos) || !harvestPos.lookFor(LOOK_CREEPS).some(c => c !== creep))) {
         target = harvestPos;
         range = 0;
     }
@@ -75,7 +76,8 @@ function performHarvest(creep: Creep): void {
     }
 
     const arrived = whenInRange(creep, range, target, () => {
-        if (creep.harvest(source) === OK) countStat("work:harvest", creep.getActiveBodyparts(WORK));
+        // An empty source would only fail the call (Overmind miner: harvest only with energy left)
+        if (source.energy > 0 && creep.harvest(source) === OK) countStat("work:harvest", creep.getActiveBodyparts(WORK));
         if (depositInBay(creep)) return;
         depositResources(creep, source);
     });

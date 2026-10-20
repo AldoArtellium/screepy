@@ -384,22 +384,10 @@ export class Bay {
     readonly energy: number;
     readonly energyCapacity: number;
 
-    constructor(readonly pos: RoomPosition, readonly isHarvesterBay: boolean) {
+    /** `structures`: the bay's structures when already known (see roomBays), else looked up around `pos` */
+    constructor(readonly pos: RoomPosition, readonly isHarvesterBay: boolean, structures?: BayStructure[]) {
         this.name = `${pos.x},${pos.y}`;
-        const room = Game.rooms[pos.roomName];
-        const blocked =
-            pos.lookFor(LOOK_STRUCTURES).some(s => (OBSTACLE_OBJECT_TYPES as string[]).includes(s.structureType)) ||
-            room.lookForAtArea(LOOK_STRUCTURES, pos.y - 1, pos.x - 1, pos.y + 1, pos.x + 1, true).some(
-                r => BAY_BLOCKERS.includes(r.structure.structureType)
-            );
-        this.structures = blocked
-            ? []
-            : (room
-                  .lookForAtArea(LOOK_STRUCTURES, pos.y - 1, pos.x - 1, pos.y + 1, pos.x + 1, true)
-                  .map(r => r.structure)
-                  .filter(
-                      s => BAY_FILL_ORDER.includes(s.structureType) && (!("my" in s) || (s as OwnedStructure).my || s.structureType === STRUCTURE_CONTAINER)
-                  ) as BayStructure[]);
+        this.structures = structures ?? lookUpBayStructures(pos);
         const fillable = this.structures.filter(
             s => s.structureType === STRUCTURE_SPAWN || s.structureType === STRUCTURE_EXTENSION
         ) as (StructureSpawn | StructureExtension)[];
@@ -448,11 +436,57 @@ export class Bay {
     }
 }
 
+function lookUpBayStructures(pos: RoomPosition): BayStructure[] {
+    const room = Game.rooms[pos.roomName];
+    const blocked =
+        pos.lookFor(LOOK_STRUCTURES).some(s => (OBSTACLE_OBJECT_TYPES as string[]).includes(s.structureType)) ||
+        room.lookForAtArea(LOOK_STRUCTURES, pos.y - 1, pos.x - 1, pos.y + 1, pos.x + 1, true).some(
+            r => BAY_BLOCKERS.includes(r.structure.structureType)
+        );
+    return blocked
+        ? []
+        : (room
+              .lookForAtArea(LOOK_STRUCTURES, pos.y - 1, pos.x - 1, pos.y + 1, pos.x + 1, true)
+              .map(r => r.structure)
+              .filter(
+                  s => BAY_FILL_ORDER.includes(s.structureType) && (!("my" in s) || (s as OwnedStructure).my || s.structureType === STRUCTURE_CONTAINER)
+              ) as BayStructure[]);
+}
+
+/** Heap only: each room's bays with their structure ids, until the room's structures change */
+interface BayLayout {
+    plan: object;
+    structureCount: number;
+    until: number;
+    bays: { pos: RoomPosition; isHarvesterBay: boolean; ids: Id<BayStructure>[] }[];
+}
+const bayLayouts: Map<string, BayLayout> = new Map();
+
+/** Bays of the room's plan; their structures are looked up again when the room's structure count or plan changes, or every ~100 ticks */
 export function roomBays(room: Room): Bay[] {
     return tickCache(`bays:${room.name}`, () => {
         const plan = roomPlanner.getPlan(room.name);
         if (!plan) return [];
-        return plan.getLocations("bay_center").map(pos => new Bay(pos, plan.has(pos, "harvester")));
+        const structureCount = room.find(FIND_STRUCTURES).length;
+        const layout = bayLayouts.get(room.name);
+        if (layout && layout.plan === plan && layout.structureCount === structureCount && layout.until > Game.time) {
+            return layout.bays.map(b => {
+                const structures: BayStructure[] = [];
+                for (const id of b.ids) {
+                    const s = Game.getObjectById(id);
+                    if (s) structures.push(s);
+                }
+                return new Bay(b.pos, b.isHarvesterBay, structures);
+            });
+        }
+        const bays = plan.getLocations("bay_center").map(pos => new Bay(pos, plan.has(pos, "harvester")));
+        bayLayouts.set(room.name, {
+            plan,
+            structureCount,
+            until: Game.time + jitter(100),
+            bays: bays.map(b => ({ pos: b.pos, isHarvesterBay: b.isHarvesterBay, ids: b.structures.map(s => s.id) }))
+        });
+        return bays;
     });
 }
 
