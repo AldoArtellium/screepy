@@ -18,7 +18,8 @@ import {
     isWallIntact,
     myRooms,
     towerPowerAtRange,
-    towerTarget
+    towerTarget,
+    updateThreat
 } from "./RoomDefense";
 
 const IMPORTANT_STRUCTURES: StructureConstant[] = [
@@ -130,6 +131,7 @@ function isEnemyCloseToImportantStructures(room: Room): boolean {
 
 export const defenseModule = (): void => {
     for (const room of myRooms()) {
+        updateThreat(room);
         manageTowers(room);
         manageSafeMode(room);
     }

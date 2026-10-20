@@ -4,8 +4,9 @@
  * See docs/hivemind/hivemind-construction.md §1.
  *
  * RCL 1: spawns. RCL 2+: extensions bay by bay, source and controller containers, roads on swamps
- * towards sources and controller. RCL 3: extensions around sources, towers, ramparts. RCL 4: storage, then every
- * planned road once the storage is built, and the roads of the remote mining paths in the room. RCL 5+: links.
+ * towards sources and controller. RCL 3: extensions around sources, towers, ramparts (once a storage exists).
+ * RCL 4: storage, then every planned road once the storage is built, and the roads of the remote mining paths in
+ * the room. RCL 5+: links.
  * RCL 6+: terminal, extractor and mineral container; once the ramparts hold, labs, then nuker, power spawn,
  * observer and factory when enabled (Hivemind buildEndgameStructures and its construct* settings, see
  * docs/hivemind/hivemind-endgame.md and ./settings.ts).
@@ -114,15 +115,22 @@ function manageSpawns(ctx: RoomContext): void {
     ctx.buildPlanned("spawn", STRUCTURE_SPAWN);
 }
 
-/** RCL 3+, unless a long safe mode runs: main ramparts first, then the on-ramps (Hivemind manageRamparts) */
+/**
+ * RCL 3+ with a storage (The International placeRamparts `needsStoringStructure`; Hivemind: from RCL 3),
+ * unless a long safe mode runs: main ramparts first, then the on-ramps (Hivemind manageRamparts)
+ */
 function manageRamparts(ctx: RoomContext): void {
     const controller = ctx.room.controller!;
     if (ctx.rcl < 3 || ((controller.safeMode ?? 0) >= 2000 && !controller.safeModeCooldown)) return;
+    if (!ctx.room.storage) return;
     ctx.buildPlanned("rampart", STRUCTURE_RAMPART, pos => !ctx.plan.has(pos, "rampart.ramp"));
     ctx.buildPlanned("rampart", STRUCTURE_RAMPART);
 }
 
-/** Every planned main rampart holds MIN_WALL_INTEGRITY scaled to the RCL (Hivemind checkWallIntegrity) */
+/**
+ * Every planned main rampart holds MIN_WALL_INTEGRITY scaled to the RCL (Hivemind checkWallIntegrity). Always
+ * below the threat-free rampart target (`wallTarget`: 100k at RCL 5, 276k at 6, 566k at 7, 988k at 8).
+ */
 function checkWallIntegrity(ctx: RoomContext): boolean {
     return wallsHold(ctx.room, ctx.plan);
 }

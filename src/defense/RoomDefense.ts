@@ -8,6 +8,13 @@
 import { tickCache } from "../core/roomState";
 import { roomPlanner } from "../planner/RoomPlanner";
 
+declare global {
+    interface RoomMemory {
+        /** Threat level (The International `threatened`): rises with serious player attacks, decays over time */
+        threat?: number;
+    }
+}
+
 export const ENEMY_STRENGTH_NONE = 0;
 /** Towers can take them out */
 export const ENEMY_STRENGTH_WEAK = 1;
@@ -131,13 +138,70 @@ export function enemyStrength(room: Room): EnemyStrength {
     }) as EnemyStrength;
 }
 
+/** Threat decay per tick without a serious attack (half-life ~6900 ticks; TI: 0.99999) */
+const THREAT_DECAY = 0.9999;
+/** Threat per infamy point (energy value of a player's creeps seen in our rooms and remotes) */
+const INFAMY_THREAT = 0.1;
+/** Lowest rampart target from RCL 3 (TI minRampartHits fallback) */
+const MIN_WALL_TARGET = 20000;
+
+/**
+ * Threat of the player creeps in the room (TI findPresentThreat): dismantle + melee x 1.2 + ranged x 3.5
+ * + heal, boosts included. NPC invaders never count.
+ */
+export function presentThreat(room: Room): number {
+    let threat = 0;
+    for (const creep of hostileCreeps(room)) {
+        if (creep.owner.username === "Invader" || creep.owner.username === "Source Keeper") continue;
+        threat += DISMANTLE_POWER * activePower(creep, WORK, "dismantle");
+        threat += ATTACK_POWER * activePower(creep, ATTACK, "attack") * 1.2;
+        threat += RANGED_ATTACK_POWER * activePower(creep, RANGED_ATTACK, "rangedAttack") * 3.5;
+        threat += HEAL_POWER * activePower(creep, HEAL, "heal");
+    }
+    return Math.floor(threat);
+}
+
+/**
+ * Every tick (TI manageThreat): a player attack the towers alone can't handle (NORMAL or stronger)
+ * raises the room's threat to its strength, otherwise it decays.
+ */
+export function updateThreat(room: Room): void {
+    const memory = room.memory;
+    if (enemyStrength(room) >= ENEMY_STRENGTH_NORMAL) {
+        const present = presentThreat(room);
+        if (present > (memory.threat ?? 0)) memory.threat = present;
+        return;
+    }
+    if (memory.threat === undefined) return;
+    memory.threat *= THREAT_DECAY;
+    if (memory.threat < 1) delete memory.threat;
+}
+
+/** Room threat, at least the infamy of the worst player who came into our rooms or remotes */
+export function roomThreat(room: Room): number {
+    let infamy = 0;
+    const players = Memory.military?.infamy ?? {};
+    for (const player in players) infamy = Math.max(infamy, players[player]);
+    return Math.max(room.memory.threat ?? 0, infamy * INFAMY_THREAT);
+}
+
+/**
+ * Rampart hits wanted for an RCL and a threat (TI minRampartHits): ((rcl - 3) x 50)^2.5 + threat x 5 x rcl^2,
+ * at least 20k, never above Hivemind's maxWallHealth: RCL 4 20k, 5 100k, 6 276k, 7 566k, 8 988k without threat.
+ */
+export function wallTarget(rcl: number, threat: number): number {
+    const max = MAX_WALL_HEALTH[rcl] ?? 0;
+    const base = Math.max(MIN_WALL_TARGET, Math.pow(Math.max(0, rcl - 3) * 50, 2.5));
+    return Math.min(max, Math.floor(base + threat * 5 * rcl * rcl));
+}
+
 /** Rampart hits builders aim for: x2 during the safe mode cooldown, x1.5 while one of our rooms is safe-moded */
 export function desiredWallStrength(room: Room): number {
     const rcl = room.controller?.level ?? 0;
     let multiplier = 1;
     if (room.controller?.safeModeCooldown) multiplier = 2;
     else if (myRooms().some(r => r.controller?.safeMode)) multiplier = 1.5;
-    return (MAX_WALL_HEALTH[rcl] ?? 0) * multiplier;
+    return tickCache(`wallTarget:${room.name}`, () => wallTarget(rcl, roomThreat(room))) * multiplier;
 }
 
 /** Tower power at a range: 1 up to TOWER_OPTIMAL_RANGE, 1 - TOWER_FALLOFF at TOWER_FALLOFF_RANGE */
