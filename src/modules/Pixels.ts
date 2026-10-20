@@ -3,11 +3,14 @@
  * Not in Hivemind's trade process (pixels not ported) nor in the other bots we port from.
  *
  * - Generation (every tick): one pixel when the bucket is full (PIXEL_CPU_COST), the CPU average stays below
- *   `maxCpuRatio` of the limit (the bucket must refill quickly: below 8000 the default modules stop) and no owned
- *   room has a hostile not yet expected dead (RoomIntel `enemies.expires`). While the bucket refills, the CPU
- *   decisions (throttling, remote budget, visuals...) see it full (`decisionBucket`, utils/throttle.ts) until it is
- *   full again or the CPU average rises above 80% of the limit: the bot runs as before, the pixel only costs the
- *   bucket's burst margin.
+ *   `maxCpuRatio` of the limit (default 0.8, a `Memory.pixels` setting), the remote CPU budget is not capping the
+ *   remote rooms (`Memory.remoteMining.maxRooms` undefined) and no owned room has a hostile not yet expected dead
+ *   (RoomIntel `enemies.expires`). Energy first: while the budget caps the remotes, a full bucket is the budget's
+ *   signal to add a remote room, not spare CPU. While the bucket refills, the CPU decisions (throttling, remote
+ *   budget, visuals...) see it full (`decisionBucket`, utils/throttle.ts) until it is full again, the CPU average
+ *   rises above 80% of the limit or the remote budget gets capped: the bot runs as before, the pixel only costs the
+ *   bucket's burst margin. Clearing it once capped keeps the budget from adding a room on a bucket that is not full
+ *   (it only raises a cap that exists, so it never sees the refill bucket while it could raise it).
  * - Market (every 100 ticks): use a CPU unlock when full CPU is not unlocked or ends within an hour (never with a
  *   subscription; not twice within 10 minutes, `Game.cpu.unlock` can take 5 minutes to apply); buy one from the
  *   cheapest sell order while the stock is below `unlockStock`, at most 105% of the history average, keeping the
@@ -33,7 +36,7 @@ export interface PixelSettings {
     unlock: boolean;
     keepPixels: number;
     unlockStock: number;
-    /** Highest CPU average (share of the limit) at which a pixel is generated */
+    /** Highest CPU average (share of the limit) at which a pixel is generated (`Memory.pixels.maxCpuRatio`) */
     maxCpuRatio: number;
 }
 
@@ -56,7 +59,7 @@ const DEFAULTS: PixelSettings = {
     unlock: true,
     keepPixels: 0,
     unlockStock: 1,
-    maxCpuRatio: 0.6
+    maxCpuRatio: 0.8
 };
 
 /** Ticks between two market runs */
@@ -81,6 +84,11 @@ export function pixelSettings(): PixelSettings | null {
     return { ...DEFAULTS, ...value };
 }
 
+/** The remote CPU budget holds remote rooms back: its full bucket goes to a new remote room, not to pixels */
+function remoteBudgetCapped(): boolean {
+    return Memory.remoteMining?.maxRooms !== undefined;
+}
+
 function ownedRoomWithHostiles(): boolean {
     return _.some(Game.rooms, room => room.controller?.my && (Memory.rooms?.[room.name]?.enemies?.expires ?? 0) > Game.time);
 }
@@ -89,18 +97,22 @@ function generatePixel(settings: PixelSettings): void {
     if (typeof Game.cpu.generatePixel !== "function" || Game.cpu.bucket < PIXEL_CPU_COST) return;
     const cpuAvg = Memory.stats?.cpuAvg;
     if (cpuAvg === undefined || cpuAvg >= Game.cpu.limit * settings.maxCpuRatio) return;
-    if (ownedRoomWithHostiles()) return;
+    if (remoteBudgetCapped() || ownedRoomWithHostiles()) return;
     if (Game.cpu.generatePixel() !== OK) return;
     countStat("pixels:generated");
     (Memory.pixelState ??= {}).refilling = true;
 }
 
-/** The bucket counts as full for CPU decisions until it refilled, while the CPU use stays low */
+/**
+ * The bucket counts as full for CPU decisions until it refilled, while the CPU use stays low and the remote budget
+ * is uncapped (a capped budget reads the bucket to add rooms: it must see the real one)
+ */
 function updateRefilling(settings: PixelSettings | null): void {
     const state = Memory.pixelState;
     if (!state?.refilling) return;
     const cpuAvg = Memory.stats?.cpuAvg ?? 0;
-    if (!settings || Game.cpu.bucket >= FULL_BUCKET || cpuAvg >= Game.cpu.limit * REFILL_MAX_CPU_RATIO) {
+    const cpuHigh = cpuAvg >= Game.cpu.limit * REFILL_MAX_CPU_RATIO;
+    if (!settings || Game.cpu.bucket >= FULL_BUCKET || cpuHigh || remoteBudgetCapped()) {
         delete state.refilling;
     }
 }
