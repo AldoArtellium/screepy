@@ -21,7 +21,7 @@ import { parseRoomName, roomsInRange } from "../utils/rooms";
 import { segmentStore } from "../utils/segments";
 import { countStat } from "../utils/stats";
 import { jitter, jitterFor } from "../utils/jitter";
-import { reserverCost, sourceNet, sourceParts } from "./remoteIncome";
+import { reserverCost, roomEnergyPerCreep, SourceCrew, sourceCreeps, sourceNet, sourceParts } from "./remoteIncome";
 import { blockerCost } from "./blockers";
 
 export interface RemoteSource {
@@ -516,7 +516,7 @@ function updateBudget(currentRooms: number, possibleRooms: number): void {
     log.info("RemoteMining", `CPU ${mem.cpuAvg.toFixed(1)}/${limit}, bucket ${bucket}: remote rooms ${next === undefined ? "uncapped" : `capped at ${next}`}`);
 }
 
-type Candidate = { source: RemoteSource; net: number; parts: number };
+type Candidate = { source: RemoteSource; net: number; parts: number; crew: SourceCrew };
 type HomeSelection = {
     home: Room;
     cap: number | undefined;
@@ -550,7 +550,7 @@ function pickSources(entry: HomeSelection, owner: Record<string, string>, allowe
 
 function selectRemotes(): void {
     const selected: { [key: string]: RemoteSource } = {};
-    const picked: { score: number; sources: RemoteSource[] }[] = [];
+    const picked: { score: number; perCreep: number; travel: number; sources: RemoteSource[] }[] = [];
     const homes: HomeSelection[] = [];
     for (const name in Game.rooms) {
         const home = Game.rooms[name];
@@ -613,7 +613,8 @@ function selectRemotes(): void {
                         servedAt: previous?.homeRoom === home.name ? previous.servedAt : Game.time
                     },
                     net: sourceIncome,
-                    parts: sourceParts(economy)
+                    parts: sourceParts(economy),
+                    crew: sourceCreeps(economy, home.energyCapacityAvailable, source.free || 1)
                 });
             }
             // Hivemind scored a room without any path 3000/500: such a room is skipped here
@@ -654,14 +655,18 @@ function selectRemotes(): void {
         for (const roomName in entry.chosen) {
             const sources = entry.chosen[roomName];
             const room = entry.rooms[roomName];
-            const score = _.sum(sources, s => room.candidates.find(c => c.source === s)!.net) - room.reserverCost;
-            picked.push({ score, sources });
+            const chosen = sources.map(s => room.candidates.find(c => c.source === s)!);
+            const score = _.sum(chosen, c => c.net) - room.reserverCost;
+            const perCreep = roomEnergyPerCreep(chosen, room.reserverCost, room.reserverCost > 0 ? 1 : 0);
+            picked.push({ score, perCreep, travel: _.min(sources.map(s => s.travelTime)), sources });
         }
     }
-    // CPU budget: the closest rooms of the whole empire (Hivemind's order). The net income order
-    // kept farther two-source rooms, more creeps per CPU: W9N5 at 13 CPU lost 15%
+    // CPU budget: the rooms that pay the most energy per creep (CPU goes with creeps and their
+    // intents), closest first on ties. Hivemind keeps the closest rooms; the net income order kept
+    // farther two-source rooms, more creeps per CPU (W9N5 at 13 CPU lost 15%), and the closest order
+    // kept the remotes of a home at 450 capacity (shard0 W28N7: ~2x the creeps per energy of W29N7)
     updateBudget(new Set(Object.values(memory().sources).map(s => s.room)).size, picked.length);
-    picked.sort((a, b) => _.min(a.sources.map(s => s.travelTime)) - _.min(b.sources.map(s => s.travelTime)));
+    picked.sort((a, b) => b.perCreep - a.perCreep || a.travel - b.travel);
     const cap = memory().maxRooms ?? picked.length;
     for (const entry of picked.slice(0, cap)) {
         for (const source of entry.sources) selected[source.key] = source;
