@@ -1,0 +1,114 @@
+# Build checks and a mockup regression gate (idea from TooAngel's CI: run the bot in a real engine
+# and fail on regressions). Thresholds: below master d2de81b, see the mockup job.
+name: CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+    branches: [master]
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          # No lockfile (gitignored): key the npm cache on package.json
+          cache-dependency-path: package.json
+
+      # Reproducible without a lockfile: package.json pins the packages whose newer releases break the
+      # build (@types/lodash, @types/screeps, picomatch 2 through "overrides")
+      - name: Install
+        run: npm install --no-audit --no-fund
+
+      - name: Type check
+        run: npm run build
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Bundle
+        run: npm run compile
+
+      - name: Path codec check
+        run: node tests/pathCodec/run.mjs
+
+      - name: Planner check
+        run: node tests/planner/run.mjs
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: bundle
+          path: dist/main.js
+          retention-days: 7
+
+  mockup:
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # RCL, creeps, module errors and task failures: run.mjs defaults. Points ~13% below the mean
+          # of master d2de81b at 3000 ticks (W7N3 2184 / 2307, W1N3 947 / 860 / 893: identical runs
+          # differ by up to 9%, so ~10% below the worst run). CPU is wall-clock in the engine sandbox, so
+          # it depends on the host: ~11-13 on a quiet desktop, 43 on an overloaded one; 40 only
+          # catches gross regressions on a shared runner.
+          - room: W7N3
+            min-points: 1400
+          - room: W1N3
+            min-points: 600
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: bundle
+          path: dist
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      # Same tag and screepy.hash label as run.mjs ensureImage(), so the run reuses this image;
+      # layers cached in the GitHub Actions cache (the npm install of the engine is the slow part)
+      - name: Image hash
+        id: image
+        run: echo "hash=$(node scripts/mockup/run.mjs --image-hash)" >> "$GITHUB_OUTPUT"
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Build mockup image
+        uses: docker/build-push-action@v6
+        with:
+          context: scripts/mockup
+          tags: screepy-mockup
+          labels: screepy.hash=${{ steps.image.outputs.hash }}
+          load: true
+          cache-from: type=gha,scope=screepy-mockup
+          cache-to: type=gha,scope=screepy-mockup,mode=max
+
+      - name: Mockup ${{ matrix.room }}
+        run: >-
+          node scripts/mockup/run.mjs --code dist/main.js --room ${{ matrix.room }} --ticks 3000
+          --min-points ${{ matrix.min-points }} --max-cpu 40
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: mockup-${{ matrix.room }}
+          path: test-results/mockup-*.json
+          retention-days: 14
+          if-no-files-found: ignore

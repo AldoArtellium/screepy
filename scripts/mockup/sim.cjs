@@ -84,6 +84,19 @@ const PRESET = opt("preset", null);
  * defenders (level 2+) and refills its towers.
  */
 const STRONGHOLD = opt("stronghold", null);
+/**
+ * Leftover structures (room cleanup and dismantler tests): JSON array or "@file", each entry
+ * { type, room?, x, y | dx, dy (from our spawn spot) | line: "y=43" / "x=10", hits?, owner?: true,
+ *   store?, structureType? (construction sites) }. room defaults to the start room; a line covers every
+ * non-wall tile of that row or column (1..48) not taken by a natural object; owner puts the structure
+ * under the inactive player "Ruins" (an abandoned base), else it is unowned (walls).
+ * e.g. --structures '[{"type":"constructedWall","room":"W7N4","line":"y=43","hits":10000},{"type":"extension","dx":3,"dy":0,"owner":true}]'
+ */
+const STRUCTURES = (() => {
+  const value = opt("structures", null);
+  if (!value) return null;
+  return JSON.parse(value.startsWith("@") ? fs.readFileSync(value.slice(1), "utf-8") : value);
+})();
 /** CPU limit of the bot (default: the mockup's, 100), e.g. 8 to drain the bucket and test throttling */
 const CPU_LIMIT = opt("cpu-limit", null);
 /**
@@ -128,6 +141,8 @@ const MIN_RCL = Number(opt("min-rcl", TICKS >= 2000 ? 2 : 1));
 const MAX_CPU = Number(opt("max-cpu", 20));
 const MIN_CREEPS = Number(opt("min-creeps", 3));
 const MAX_FAIL_RATIO = Number(opt("max-fail-ratio", 0.1));
+// Regression gate (CI): minimum world.points at the end, only checked when given
+const MIN_POINTS = opt("min-points") === undefined ? null : Number(opt("min-points"));
 const USERNAME = "screepy";
 
 /** RCL threshold sums, to express controller progress as a single number (same as pserver-test.mjs) */
@@ -251,6 +266,66 @@ async function applyQuickPreset(server, fixture, spot, userId) {
     if (best) await insert({ type: "container", x: best.x, y: best.y, hits: 250000, hitsMax: 250000, store: {}, storeCapacity: 2000, nextDecayTime: time + 500 });
   }
   log(`Preset ${PRESET}: RCL ${preset.rcl}, ${preset.extensions} extensions, storage ${preset.storageEnergy}, source containers`);
+}
+
+/** Defaults of the structures --structures places (engine object fields) */
+const STRUCTURE_DEFAULTS = {
+  constructedWall: { hits: 10000, hitsMax: 300000000 },
+  rampart: { hits: 10000, hitsMax: 300000000, isPublic: false },
+  extension: { hits: 1000, hitsMax: 1000, store: { energy: 0 }, storeCapacityResource: { energy: 50 } },
+  spawn: { hits: 5000, hitsMax: 5000, store: { energy: 0 }, storeCapacityResource: { energy: 300 }, name: "RuinSpawn" },
+  tower: { hits: 3000, hitsMax: 3000, store: { energy: 0 }, storeCapacityResource: { energy: 1000 } },
+  storage: { hits: 10000, hitsMax: 10000, store: {}, storeCapacity: 1000000 },
+  container: { hits: 250000, hitsMax: 250000, store: {}, storeCapacity: 2000 },
+  link: { hits: 1000, hitsMax: 1000, store: { energy: 0 }, storeCapacityResource: { energy: 800 }, cooldown: 0 },
+  road: { hits: 5000, hitsMax: 5000 }
+};
+
+/** Leftover structures (see STRUCTURES); returns their ids, to follow what is left */
+async function setupStructures(server, fixture, spot, specs) {
+  const { db } = server.common.storage;
+  const time = await server.world.gameTime;
+  const ruinsUser = "ruins";
+  if (specs.some((s) => s.owner)) {
+    await db.users.insert({ _id: ruinsUser, username: "Ruins", cpu: 0, cpuAvailable: 0, gcl: 1, active: 0, badge: {} });
+  }
+  const ids = [];
+  for (const spec of specs) {
+    const room = spec.room || ROOM;
+    const r = fixture.rooms[room];
+    if (!r) throw new Error(`--structures: room ${room} is not in the fixture`);
+    const wall = (x, y) => (Number(r.terrain[y * 50 + x]) & 1) === 1;
+    const taken = new Set(r.objects.map((o) => o.y * 50 + o.x));
+    let tiles;
+    if (spec.line) {
+      const [axis, value] = spec.line.split("=");
+      tiles = Array.from({ length: 48 }, (_, i) => (axis === "y" ? { x: i + 1, y: Number(value) } : { x: Number(value), y: i + 1 }));
+      tiles = tiles.filter((t) => !wall(t.x, t.y) && !taken.has(t.y * 50 + t.x));
+    } else if (spec.dx !== undefined) tiles = [{ x: spot.x + spec.dx, y: spot.y + spec.dy }];
+    else tiles = [{ x: spec.x, y: spec.y }];
+    const { type, room: _r, x: _x, y: _y, dx: _dx, dy: _dy, line: _l, owner, ...fields } = spec;
+    for (const t of tiles) {
+      const doc =
+        type === "constructionSite"
+          ? { progress: 0, progressTotal: 1000, ...fields }
+          : { ...(STRUCTURE_DEFAULTS[type] || { hits: 1000, hitsMax: 1000 }), ...fields };
+      if (type === "rampart") doc.nextDecayTime = time + 1000000;
+      if (type === "road") doc.nextDecayTime = time + 1000000;
+      const inserted = await db["rooms.objects"].insert({ room, x: t.x, y: t.y, type, ...(owner ? { user: ruinsUser } : {}), ...doc });
+      ids.push(inserted._id);
+    }
+    await db.rooms.update({ _id: room }, { $set: { active: true } });
+  }
+  log(`Leftover structures: ${ids.length} placed`);
+  return ids;
+}
+
+/** Placed leftover structures still standing, by room and type */
+async function structuresLeft(server, ids) {
+  const objects = await server.common.storage.db["rooms.objects"].find({ _id: { $in: ids } });
+  const byType = {};
+  for (const o of objects) byType[`${o.room}:${o.type}`] = (byType[`${o.room}:${o.type}`] || 0) + 1;
+  return { placed: ids.length, left: objects.length, byType };
 }
 
 /** Invader stronghold (see STRONGHOLD) */
@@ -501,6 +576,11 @@ async function snapshot(server, userId) {
     extensions: mine.filter((o) => o.type === "extension").length,
     containers: objects.filter((o) => o.type === "container").length,
     roads: objects.filter((o) => o.type === "road").length,
+    // Our ramparts in the room: count, lowest and average hits
+    ramparts: (() => {
+      const hits = mine.filter((o) => o.type === "rampart").map((o) => o.hits);
+      return { n: hits.length, min: hits.length ? Math.min(...hits) : 0, avg: hits.length ? Math.round(hits.reduce((a, b) => a + b, 0) / hits.length) : 0 };
+    })(),
     sites: objects.filter((o) => o.type === "constructionSite" && o.user === userId).length,
     storage: mine.filter((o) => o.type === "storage").reduce((sum, o) => sum + ((o.store && o.store.energy) || 0), 0),
     remoteRoads: (await db["rooms.objects"].find({ type: "road" })).filter((o) => o.room !== ROOM).length,
@@ -665,6 +745,7 @@ async function main() {
   const enemy = ENEMY ? await setupEnemy(server, fixture, ENEMY) : null;
   if (QUICK_PRESET) await applyQuickPreset(server, fixture, spot, user.id);
   const stronghold = STRONGHOLD ? await setupStronghold(server, fixture, STRONGHOLD) : null;
+  const leftovers = STRUCTURES ? await setupStructures(server, fixture, spot, STRUCTURES) : null;
   await env.set(env.keys.MEMORY + user.id, MEMORY_INIT);
   if (LOAD_STATE) await loadState(server, user.id, LOAD_STATE);
   if (CPU_LIMIT !== null) {
@@ -783,12 +864,13 @@ async function main() {
       log(
         `tick ${tick}/${TICKS}`,
         `RCL ${w.rcl} (${w.progress}) | creeps ${w.creeps} | energy ${w.energy}/${w.energyCapacity}`,
-        `| ext ${w.extensions} cont ${w.containers} roads ${w.roads}+${w.remoteRoads} sites ${w.sites} storage ${w.storage}`,
+        `| ext ${w.extensions} cont ${w.containers} roads ${w.roads}+${w.remoteRoads} sites ${w.sites} storage ${w.storage} ramparts ${w.ramparts.n} (min ${w.ramparts.min}, avg ${w.ramparts.avg})`,
         `| cpu avg ${(cpuSum / Math.max(1, cpuSamples)).toFixed(2)}`,
         PRESET ? `| endgame ${JSON.stringify(w.endgame)} sites ${JSON.stringify(w.siteTypes)} terminal ${w.terminalEnergy} minerals ${JSON.stringify(w.minerals)} boosted ${JSON.stringify(w.boostedParts)}` : "",
         Object.keys(w.ownedRooms).length > 1 ? `| rooms ${JSON.stringify(w.ownedRooms)}` : "",
         enemy ? `| enemy ${JSON.stringify(await enemyStatus(server, enemy))}` : "",
         stronghold ? `| stronghold ${JSON.stringify(await strongholdStatus(server, stronghold))}` : "",
+        leftovers ? `| leftovers ${JSON.stringify(await structuresLeft(server, leftovers))}` : "",
         CPU_LIMIT !== null ? `| bucket ${(await server.common.storage.db.users.findOne({ _id: user.id })).cpuAvailable | 0}` : "",
         `| ${(tick / elapsed).toFixed(1)} ticks/s`,
         errorCount ? `| ${errorCount} console errors` : ""
@@ -884,6 +966,7 @@ async function main() {
       `${failed} failed / ${completed} completed (${(failRatio * 100).toFixed(1)}%)`
     ]
   ];
+  if (MIN_POINTS !== null) checks.push([`Points >= ${MIN_POINTS}`, world.points >= MIN_POINTS, `${world.points} points`]);
   console.log("");
   for (const [name, ok, detail] of checks) console.log(`${ok ? "PASS" : "FAIL"}  ${name.padEnd(32)} ${detail}`);
   for (const e of moduleErrors.slice(-5))
@@ -906,6 +989,7 @@ async function main() {
     raids: raidLog,
     enemy: enemy ? await enemyStatus(server, enemy) : null,
     stronghold: stronghold ? await strongholdStatus(server, stronghold) : null,
+    leftovers: leftovers ? await structuresLeft(server, leftovers) : null,
     stats,
     errors: moduleErrors,
     consoleErrors,

@@ -17,11 +17,12 @@ import { hasInvaderCore, isRoomUnderAttack } from "../modules/RoomIntel";
 import { roomPlanner } from "../planner/RoomPlanner";
 import { log } from "../utils/logger";
 import { decodePath, encodePath } from "../utils/pathCodec";
-import { roomsInRange } from "../utils/rooms";
+import { parseRoomName, roomsInRange } from "../utils/rooms";
 import { segmentStore } from "../utils/segments";
 import { countStat } from "../utils/stats";
 import { jitter, jitterFor } from "../utils/jitter";
 import { reserverCost, sourceNet, sourceParts } from "./remoteIncome";
+import { blockerCost } from "./blockers";
 
 export interface RemoteSource {
     /** `${room}:${x}:${y}` */
@@ -202,9 +203,7 @@ function remoteCostMatrix(roomName: string): CostMatrix | false {
         const plan = roomPlanner.getPlan(roomName);
         for (const structure of room.find(FIND_STRUCTURES)) {
             if (structure.structureType === STRUCTURE_ROAD) matrix.set(structure.pos.x, structure.pos.y, 1);
-            else if ((OBSTACLE_OBJECT_TYPES as string[]).includes(structure.structureType)) {
-                matrix.set(structure.pos.x, structure.pos.y, 255);
-            }
+            else setObstacleCost(matrix, room, structure);
         }
         if (plan) {
             for (const pos of plan.getLocations("road")) if (matrix.get(pos.x, pos.y) === 0) matrix.set(pos.x, pos.y, 1);
@@ -215,6 +214,108 @@ function remoteCostMatrix(roomName: string): CostMatrix | false {
     }
     matrixCache.set(roomName, { until: Game.time + jitter(1000), matrix });
     return matrix;
+}
+
+/** Other remotes' container tiles and the walkable tiles around a remote controller (TI weightCoords: 20) */
+const AVOID_COST = 20;
+
+/** Home room of a cached path: its last tile is next to the home's planned storage */
+function pathHome(packed: string): string | undefined {
+    const path = unpackPath(packed);
+    return path.length > 0 ? path[path.length - 1].roomName : undefined;
+}
+
+interface SharedTiles {
+    /** Tiles of the home's other remote paths, by room: they cost like roads */
+    roads: Map<string, RoomPosition[]>;
+    /** Container tiles of the home's other remote paths, by room */
+    avoid: Map<string, RoomPosition[]>;
+}
+
+/**
+ * Not in Hivemind (The International customPathFinder weightRemoteStructurePlans, Overmind RoadPlanner
+ * encourageRoadMerging): while a home's remote path is searched, the tiles of its other cached paths
+ * (the ones computed earlier in the same pass included) cost like roads, so sources in the same
+ * direction share one trunk of roads instead of parallel strands. Other remotes' container tiles
+ * and the tiles around remote controllers cost AVOID_COST: harvesters and reservers stand there.
+ */
+function sharedTiles(home: string, except: string): SharedTiles {
+    const shared: SharedTiles = { roads: new Map(), avoid: new Map() };
+    const all = paths();
+    for (const key in all) {
+        const packed = all[key].path;
+        if (key === except || !packed || pathHome(packed) !== home) continue;
+        unpackPath(packed).forEach((pos, i) => {
+            const map = i === 0 ? shared.avoid : shared.roads;
+            let list = map.get(pos.roomName);
+            if (!list) map.set(pos.roomName, (list = []));
+            list.push(pos);
+        });
+    }
+    return shared;
+}
+
+function sharedCostMatrix(roomName: string, shared: SharedTiles): CostMatrix | false {
+    const base = remoteCostMatrix(roomName);
+    if (!base) return false;
+    const roads = shared.roads.get(roomName);
+    const avoid = shared.avoid.get(roomName);
+    const controller = isOwnedRoom(roomName) ? undefined : intelManager.getIntel(roomName)?.controllerPos;
+    if (!roads && !avoid && !controller) return base;
+    const matrix = base.clone();
+    for (const pos of roads ?? []) if (matrix.get(pos.x, pos.y) === 0) matrix.set(pos.x, pos.y, 1);
+    const penalize = (x: number, y: number) => {
+        const cost = matrix.get(x, y);
+        if (cost < 255) matrix.set(x, y, Math.max(AVOID_COST, cost));
+    };
+    for (const pos of avoid ?? []) penalize(pos.x, pos.y);
+    if (controller) {
+        const terrain = Game.map.getRoomTerrain(roomName);
+        for (let dx = -1; dx <= 1; dx++) {
+            for (let dy = -1; dy <= 1; dy++) {
+                const x = controller.x + dx;
+                const y = controller.y + dy;
+                if (x < 1 || x > 48 || y < 1 || y > 48 || terrain.get(x, y) === TERRAIN_MASK_WALL) continue;
+                penalize(x, y);
+            }
+        }
+    }
+    return matrix;
+}
+
+/**
+ * The container tile of a recomputed path stays where it was (cheaper roads elsewhere must not move a
+ * built container): kept while out of sight or while a container (or its site) stands there
+ */
+function keepsContainerTile(pos: RoomPosition): boolean {
+    const room = Game.rooms[pos.roomName];
+    if (!room) return true;
+    return (
+        pos.lookFor(LOOK_STRUCTURES).some(s => s.structureType === STRUCTURE_CONTAINER) ||
+        pos.lookFor(LOOK_CONSTRUCTION_SITES).some(s => s.structureType === STRUCTURE_CONTAINER)
+    );
+}
+
+/**
+ * Obstacles: 255 in our rooms (RoomCleanup destroys what is in the way); elsewhere a blocker a
+ * dismantler can open costs by its hits (blockers.ts), others' ramparts included
+ */
+function setObstacleCost(matrix: CostMatrix, room: Room, structure: Structure): void {
+    let cost: number;
+    if (room.controller?.my) cost = (OBSTACLE_OBJECT_TYPES as string[]).includes(structure.structureType) ? 255 : 0;
+    else cost = blockerCost(structure);
+    if (cost > matrix.get(structure.pos.x, structure.pos.y)) matrix.set(structure.pos.x, structure.pos.y, cost);
+}
+
+/**
+ * A source's path is blocked by something no dismantler can remove (seen once the room is visible):
+ * forget the path and the room's cost matrix so the next selection searches around it
+ */
+export function forgetRemotePath(source: RemoteSource, roomName: string): void {
+    matrixCache.delete(roomName);
+    delete paths()[source.key];
+    pathStore.touch();
+    log.info("RemoteMining", `${source.key}: path blocked in ${roomName}, searching again`);
 }
 
 /** Path from a remote source to its home's planned storage, cached (Hivemind getPathFor) */
@@ -231,18 +332,28 @@ function pathFor(home: Room, sourcePos: RoomPosition): RoomPosition[] | null {
     const storagePos = roomPlanner.getPlan(home.name)?.getLocations("storage")[0];
     // No plan yet: don't cache the failure (Hivemind cached null for 5000 ticks)
     if (!storagePos) return null;
-    const result = PathFinder.search(sourcePos, { pos: storagePos, range: 1 }, {
+    const shared = sharedTiles(home.name, key);
+    const previous = cache?.path ? unpackPath(cache.path)[0] : undefined;
+    const start = previous && keepsContainerTile(previous) ? previous : undefined;
+    const result = PathFinder.search(start ?? sourcePos, { pos: storagePos, range: 1 }, {
         plainCost: 2,
         swampCost: home.storage ? 3 : 10,
         maxOps: 10000,
         heuristicWeight: 1,
         roomCallback: roomName =>
-            roomName !== sourcePos.roomName && isForeignRoom(roomName) ? false : remoteCostMatrix(roomName)
+            roomName !== sourcePos.roomName && isForeignRoom(roomName) ? false : sharedCostMatrix(roomName, shared)
     });
-    const path = result.incomplete || result.path.length >= MAX_PATH_LENGTH ? null : result.path;
+    const found = start ? [start, ...result.path] : result.path;
+    const path = result.incomplete || found.length >= MAX_PATH_LENGTH ? null : found;
     paths()[key] = { generated: Game.time, path: path ? encodePath(path) : null };
     pathStore.touch();
     return path;
+}
+
+/** Tile coordinates over the whole world map */
+function worldTile(roomName: string, x: number, y: number): { x: number; y: number } {
+    const world = parseRoomName(roomName) ?? { wx: 0, wy: 0 };
+    return { x: world.wx * 50 + x, y: world.wy * 50 + y };
 }
 
 /** Remote room candidates of a home room: known, not owned, not source keeper, within 3 rooms */
@@ -388,7 +499,24 @@ function selectRemotes(): void {
         const rooms: { [room: string]: { candidates: Candidate[]; reserverCost: number } } = {};
         const reserved = (roomName: string) => canReserveFrom(home, roomName);
         const roads = home.controller!.level > 3 && !!(home.storage || home.terminal);
-        for (const roomName of candidateRooms(home)) {
+        const candidateNames = candidateRooms(home);
+        // Paths due are searched closest source first, so the farther ones merge into their trunk
+        // the same way on every pass
+        const storagePos = roomPlanner.getPlan(home.name)?.getLocations("storage")[0];
+        if (storagePos) {
+            const origin = worldTile(storagePos.roomName, storagePos.x, storagePos.y);
+            const sources = _.flatten(
+                candidateNames.map(r =>
+                    intelManager.getIntel(r)!.sources!.map(s => ({ tile: worldTile(r, s.x, s.y), roomName: r, x: s.x, y: s.y }))
+                )
+            );
+            const ordered = _.sortBy(
+                sources,
+                t => Math.max(Math.abs(t.tile.x - origin.x), Math.abs(t.tile.y - origin.y)) * 10000 + t.y * 50 + t.x
+            );
+            for (const t of ordered) pathFor(home, new RoomPosition(t.x, t.y, t.roomName));
+        }
+        for (const roomName of candidateNames) {
             const intel = intelManager.getIntel(roomName)!;
             const candidates: Candidate[] = [];
             const capacity = reserved(roomName) ? SOURCE_ENERGY_CAPACITY : SOURCE_ENERGY_NEUTRAL_CAPACITY;

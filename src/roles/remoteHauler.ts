@@ -5,7 +5,7 @@
  * Ported from Hivemind (MIT), src/role/hauler.relay.ts ("relay" is a historical name, there is none).
  */
 
-import { whenInRange } from "../core/movement";
+import { followPath, whenInRange } from "../core/movement";
 import { clearOrder, creepsByRole } from "../core/roomState";
 import { trafficManager } from "../modules/TrafficManager";
 import {
@@ -13,6 +13,7 @@ import {
     getRemoteSource,
     isRemoteUnderAttack,
     remoteContainer,
+    remotePath,
     RemoteSource,
     remoteSources,
     sourcePos
@@ -21,6 +22,9 @@ import { REMOTE_HARVESTER, REMOTE_HAULER } from "../remote/remoteSpawnRole";
 import { fleeIfThreatened } from "./flee";
 import { registerRole } from "./registry";
 import { performDeliver } from "./transporter";
+
+/** Source the hauler comes back from, for the stored path home (heap: a reset falls back to moveToRoom) */
+const returningFrom: Map<string, string> = new Map();
 
 export function runRemoteHauler(creep: Creep): void {
     const used = creep.store.getUsedCapacity();
@@ -33,6 +37,7 @@ export function runRemoteHauler(creep: Creep): void {
 
 function startPickup(creep: Creep): void {
     creep.memory.delivering = false;
+    returningFrom.delete(creep.name);
     clearOrder(creep);
     const home = Game.rooms[creep.memory.room ?? creep.room.name];
     const best = _.max(remoteSources(creep.memory.room ?? creep.room.name), s => score(creep, home, s));
@@ -41,6 +46,7 @@ function startPickup(creep: Creep): void {
 
 function startDelivering(creep: Creep): void {
     creep.memory.delivering = true;
+    if (creep.memory.source) returningFrom.set(creep.name, creep.memory.source);
     delete creep.memory.source;
     clearOrder(creep);
 }
@@ -80,7 +86,7 @@ function pickup(creep: Creep): void {
     if (fleeIfThreatened(creep, target)) return;
     if (pickupNearby(creep)) return;
     if (creep.room.name !== source.room || creep.pos.getRangeTo(target) > 3) {
-        trafficManager.requestMove(creep, target, { range: 2, priority: 45 });
+        if (!followPath(creep, remotePath(source), true, 45)) trafficManager.requestMove(creep, target, { range: 2, priority: 45 });
         return;
     }
     const container = remoteContainer(source);
@@ -124,6 +130,8 @@ function deliver(creep: Creep): void {
     const home = creep.memory.room ?? creep.room.name;
     if (fleeIfThreatened(creep)) return;
     if (creep.room.name !== home) {
+        const source = getRemoteSource(returningFrom.get(creep.name));
+        if (source && source.homeRoom === home && followPath(creep, remotePath(source), false, 45)) return;
         trafficManager.moveToRoom(creep, home, { priority: 45 });
         return;
     }

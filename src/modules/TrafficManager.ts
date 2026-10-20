@@ -12,7 +12,7 @@
  * "stay in range" intent so the reconciler doesn't shove it away.
  */
 
-import { moveTo, preTick, reconcileTraffic } from "screeps-cartographer";
+import { clearCachedPath, move, moveTo, preTick, reconcileTraffic } from "screeps-cartographer";
 import { countStat, recordSample } from "../utils/stats";
 import { jitter } from "../utils/jitter";
 
@@ -55,6 +55,10 @@ class TrafficManager {
     private idleClaimed: Map<string, Set<number>> = new Map();
     private idleClaimedTick = 0;
 
+    /** Tiles a creep holding its range can't step on, per room (this tick only) */
+    private obstacleTiles: Map<string, Set<number>> = new Map();
+    private obstacleTilesTick = 0;
+
     /**
      * Call once at the start of each tick
      */
@@ -84,6 +88,10 @@ class TrafficManager {
         this.trackStuck(creep, inRange);
 
         const priority = options.priority ?? this.getCreepPriority(creep);
+        if (inRange && !options.combat && this.canHoldCheaply(creep, targetPos)) {
+            this.holdRange(creep, targetPos, range, 101 - Math.min(100, Math.max(0, priority)));
+            return OK;
+        }
         const moveOpts = {
             // cartographer: higher value = more important
             priority: 101 - Math.min(100, Math.max(0, priority)),
@@ -128,8 +136,80 @@ class TrafficManager {
     }
 
     /**
-     * Number of consecutive ticks the creep wanted to move but didn't
+     * Step onto an adjacent tile (a tile of a stored path): registered with the reconciler like any
+     * other move, so shoves and swaps still work, but without a path search.
      */
+    requestStep(creep: Creep, pos: RoomPosition, priority?: number): ScreepsReturnCode {
+        if (this.requestsTick !== Game.time) {
+            this.requestsTick = Game.time;
+            this.requestsThisTick = 0;
+        }
+        this.requestsThisTick++;
+        this.trackStuck(creep, false);
+        const p = priority ?? this.getCreepPriority(creep);
+        return move(creep, [pos], 101 - Math.min(100, Math.max(0, p)));
+    }
+
+    /**
+     * Already in range in a room with a controller (no source keepers, no portals) and a target off the
+     * room edge: cartographer's in-range branch can be reproduced without its cost matrix.
+     */
+    private canHoldCheaply(creep: Creep | PowerCreep, targetPos: RoomPosition): boolean {
+        if (targetPos.x <= 0 || targetPos.x >= 49 || targetPos.y <= 0 || targetPos.y >= 49) return false;
+        return !!Game.rooms[creep.pos.roomName]?.controller;
+    }
+
+    /**
+     * Stay-in-range intent, same as cartographer moveTo once in range (the current tile first, then the
+     * walkable adjacent tiles still in range, so the reconciler may shove the creep there) without
+     * building a full cost matrix and looking at 8 tiles every tick: range 0 (harvesters, bay fillers,
+     * upgrader spot) registers the current tile only.
+     */
+    private holdRange(creep: Creep | PowerCreep, targetPos: RoomPosition, range: number, priority: number): void {
+        clearCachedPath(creep);
+        const targets = [creep.pos];
+        if (range > 0) {
+            const room = Game.rooms[creep.pos.roomName];
+            const terrain = room.getTerrain();
+            const obstacles = this.roomObstacles(room);
+            const { x: cx, y: cy, roomName } = creep.pos;
+            for (let dx = -1; dx <= 1; dx++) {
+                for (let dy = -1; dy <= 1; dy++) {
+                    if (!dx && !dy) continue;
+                    const x = cx + dx;
+                    const y = cy + dy;
+                    if (x < 0 || x > 49 || y < 0 || y > 49) continue;
+                    if (Math.max(Math.abs(x - targetPos.x), Math.abs(y - targetPos.y)) > range) continue;
+                    if (terrain.get(x, y) === TERRAIN_MASK_WALL || obstacles.has(y * 50 + x)) continue;
+                    targets.push(new RoomPosition(x, y, roomName));
+                }
+            }
+        }
+        move(creep, targets, priority);
+    }
+
+    /** Obstacle structures, ramparts not ours and our obstacle construction sites (cartographer's rules) */
+    private roomObstacles(room: Room): Set<number> {
+        if (this.obstacleTilesTick !== Game.time) {
+            this.obstacleTilesTick = Game.time;
+            this.obstacleTiles.clear();
+        }
+        let tiles = this.obstacleTiles.get(room.name);
+        if (tiles) return tiles;
+        tiles = new Set();
+        const obstacleTypes = OBSTACLE_OBJECT_TYPES as string[];
+        for (const s of room.find(FIND_STRUCTURES)) {
+            if (obstacleTypes.includes(s.structureType) || (s.structureType === STRUCTURE_RAMPART && !(s as StructureRampart).my)) {
+                tiles.add(s.pos.y * 50 + s.pos.x);
+            }
+        }
+        for (const site of room.find(FIND_MY_CONSTRUCTION_SITES)) {
+            if (obstacleTypes.includes(site.structureType)) tiles.add(site.pos.y * 50 + site.pos.x);
+        }
+        this.obstacleTiles.set(room.name, tiles);
+        return tiles;
+    }
+
     /**
      * Move a creep towards another room (cartographer paths across rooms; arrives when inside the room)
      */
@@ -137,6 +217,7 @@ class TrafficManager {
         return this.requestMove(creep, new RoomPosition(25, 25, roomName), { ...options, range: 20 });
     }
 
+    /** Number of consecutive ticks the creep wanted to move but didn't */
     getStuckTicks(creep: Creep | PowerCreep): number {
         const state = this.stuck.get(creep.name);
         if (!state || state.tick < Game.time - 1) return 0;

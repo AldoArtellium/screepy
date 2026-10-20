@@ -1,6 +1,7 @@
 import { Module, runModuleManager } from "./ModuleManager";
 
 import { roomBuilderModule } from "construction/RoomBuilder";
+import { roomCleanupModule } from "construction/RoomCleanup";
 import { creepRunnerModule } from "modules/CreepRunner";
 import { defenseModule } from "defense/defenseModule";
 import { expansionModule } from "expansion/Expansion";
@@ -18,6 +19,7 @@ import { spawnManagerModule } from "modules/SpawnManager";
 import { trafficManagerModule } from "modules/TrafficManager";
 import { roomPlannerModule } from "planner/RoomPlanner";
 import { remoteMiningModule } from "remote/RemoteMining";
+import { reportsModule } from "modules/Reports";
 import { log } from "utils/logger";
 import { roomVisualsModule } from "visuals/roomVisuals";
 
@@ -39,6 +41,8 @@ export const gameLoop = () => {
 
     // Construction sites from the plan
     { name: "RoomBuilder", fn: roomBuilderModule, runEvery: 20 },
+    // Others' structures and sites, walls and misplaced structures on planned tiles (Hivemind cleanRoom)
+    { name: "RoomCleanup", fn: roomCleanupModule, runEvery: 100 },
 
     // Labs: boost labs for the creeps to boost, reactions (military compounds first)
     { name: "Labs", fn: labsModule },
@@ -67,6 +71,8 @@ export const gameLoop = () => {
     { name: "MiningStats", fn: miningStatsModule },
     // Every tick (a skipped tick blanks the visuals); the module throttles its own redraws
     { name: "RoomVisuals", fn: roomVisualsModule, priority: "always" },
+    // Periodic report (Game.notify, Memory.reports) and immediate alerts; samples CPU and bucket every tick
+    { name: "Reports", fn: reportsModule, priority: "always" },
 
     // Resolves all movement requests issued above (must run after every creep-moving module)
     { name: "TrafficManager", fn: trafficManagerModule, mandatory: true }

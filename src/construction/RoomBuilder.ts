@@ -4,16 +4,25 @@
  * See docs/hivemind/hivemind-construction.md §1.
  *
  * RCL 1: spawns. RCL 2+: extensions bay by bay, source and controller containers, roads on swamps
- * towards sources and controller. RCL 3: extensions around sources, towers, ramparts. RCL 4: storage, then every
- * planned road once the storage is built, and the roads of the remote mining paths in the room. RCL 5+: links.
- * RCL 6+: terminal, extractor and mineral container; once the ramparts hold, labs, nuker, power spawn,
- * observer and factory (Hivemind buildEndgameStructures, see docs/hivemind/hivemind-endgame.md).
+ * towards sources and controller. RCL 3: extensions around sources, towers, ramparts (once a storage exists).
+ * RCL 4: storage, then every planned road once the storage is built, and the roads of the remote mining paths in
+ * the room. RCL 5+: links.
+ * RCL 6+: terminal, extractor and mineral container; once the ramparts hold, labs, then nuker, power spawn,
+ * observer and factory when enabled (Hivemind buildEndgameStructures and its construct* settings, see
+ * docs/hivemind/hivemind-endgame.md and ./settings.ts).
+ *
+ * A room with nothing left to build is idle (Hivemind room-manager builtAllStructures) until its RCL, plan,
+ * structures, remote roads, safe mode, wall integrity or settings change, or for ~1500 ticks (decay check).
  */
 
 import { RoomPlan } from "../planner/RoomPlan";
 import { roomPlanner } from "../planner/RoomPlanner";
 import { operationRoadPositions } from "../remote/RemoteMining";
 import { lowestWallStrength, MAX_WALL_HEALTH } from "../defense/RoomDefense";
+import { countStat } from "../utils/stats";
+import { jitter } from "../utils/jitter";
+import { constructionEnabled, constructionSettingsKey } from "./settings";
+import { cleanStaleSites } from "./siteCleanup";
 
 /** Construction sites per room, existing ones included */
 const MAX_ROOM_SITES = 5;
@@ -28,6 +37,10 @@ const EXTENSIONS_FIRST_CAPACITY = (MAX_CREEP_SIZE * (BODYPART_COST[WORK] + BODYP
 
 class RoomContext {
     newSites = 0;
+    /** Something buildable was left out for a passing reason (creep in the way, global site cap) */
+    deferred = false;
+    /** The endgame structures wait for the ramparts (checkWallIntegrity failed) */
+    wallsClosed = false;
     readonly siteCount: number;
     readonly rcl: number;
     readonly terrain: RoomTerrain;
@@ -46,9 +59,16 @@ class RoomContext {
     tryBuild(pos: RoomPosition, type: BuildableStructureConstant): boolean {
         if (pos.lookFor(LOOK_STRUCTURES).some(s => s.structureType === type)) return true;
         if (pos.lookFor(LOOK_CONSTRUCTION_SITES).some(s => s.structureType === type)) return true;
-        if (!this.canCreate() || _.size(Game.constructionSites) >= MAX_GLOBAL_SITES) return false;
+        if (!this.canCreate()) return false;
+        if (_.size(Game.constructionSites) >= MAX_GLOBAL_SITES) {
+            this.deferred = true;
+            return false;
+        }
         const isObstacle = (OBSTACLE_OBJECT_TYPES as string[]).includes(type);
-        if (isObstacle && pos.lookFor(LOOK_CREEPS).length > 0) return true;
+        if (isObstacle && pos.lookFor(LOOK_CREEPS).length > 0) {
+            this.deferred = true;
+            return true;
+        }
         if (pos.createConstructionSite(type) === OK) this.newSites++;
         return true;
     }
@@ -95,18 +115,30 @@ function manageSpawns(ctx: RoomContext): void {
     ctx.buildPlanned("spawn", STRUCTURE_SPAWN);
 }
 
-/** RCL 3+, unless a long safe mode runs: main ramparts first, then the on-ramps (Hivemind manageRamparts) */
+/**
+ * RCL 3+ with a storage (The International placeRamparts `needsStoringStructure`; Hivemind: from RCL 3),
+ * unless a long safe mode runs: main ramparts first, then the on-ramps (Hivemind manageRamparts)
+ */
 function manageRamparts(ctx: RoomContext): void {
     const controller = ctx.room.controller!;
     if (ctx.rcl < 3 || ((controller.safeMode ?? 0) >= 2000 && !controller.safeModeCooldown)) return;
+    if (!ctx.room.storage) return;
     ctx.buildPlanned("rampart", STRUCTURE_RAMPART, pos => !ctx.plan.has(pos, "rampart.ramp"));
     ctx.buildPlanned("rampart", STRUCTURE_RAMPART);
 }
 
-/** Every planned main rampart holds MIN_WALL_INTEGRITY scaled to the RCL (Hivemind checkWallIntegrity) */
+/**
+ * Every planned main rampart holds MIN_WALL_INTEGRITY scaled to the RCL (Hivemind checkWallIntegrity). Always
+ * below the threat-free rampart target (`wallTarget`: 100k at RCL 5, 276k at 6, 566k at 7, 988k at 8).
+ */
 function checkWallIntegrity(ctx: RoomContext): boolean {
-    if (ctx.plan.count("rampart") === 0) return true;
-    return lowestWallStrength(ctx.room) >= (MIN_WALL_INTEGRITY * MAX_WALL_HEALTH[ctx.rcl]) / MAX_WALL_HEALTH[8];
+    return wallsHold(ctx.room, ctx.plan);
+}
+
+function wallsHold(room: Room, plan: RoomPlan): boolean {
+    if (plan.count("rampart") === 0) return true;
+    const rcl = room.controller?.level ?? 0;
+    return lowestWallStrength(room) >= (MIN_WALL_INTEGRITY * MAX_WALL_HEALTH[rcl]) / MAX_WALL_HEALTH[8];
 }
 
 /** Planned structures of a type the RCL allows */
@@ -115,7 +147,7 @@ function buildAllowed(ctx: RoomContext, locationType: string, type: BuildableStr
     return ctx.buildPlanned(locationType, type);
 }
 
-/** Labs (reaction labs first while only 3 are allowed), nuker, power spawn, observer, factory */
+/** Labs (reaction labs first while only 3 are allowed), then nuker, power spawn, observer, factory when enabled */
 function buildEndgameStructures(ctx: RoomContext): void {
     if (CONTROLLER_STRUCTURES[STRUCTURE_LAB][ctx.rcl] === 3) {
         buildAllowed(ctx, "lab.reaction", STRUCTURE_LAB);
@@ -124,13 +156,13 @@ function buildEndgameStructures(ctx: RoomContext): void {
         buildAllowed(ctx, "lab", STRUCTURE_LAB);
     }
     if (!ctx.canCreate()) return;
-    buildAllowed(ctx, "nuker", STRUCTURE_NUKER);
+    if (constructionEnabled("nuker")) buildAllowed(ctx, "nuker", STRUCTURE_NUKER);
     if (!ctx.canCreate()) return;
-    buildAllowed(ctx, "powerSpawn", STRUCTURE_POWER_SPAWN);
+    if (constructionEnabled("powerSpawn")) buildAllowed(ctx, "powerSpawn", STRUCTURE_POWER_SPAWN);
     if (!ctx.canCreate()) return;
-    buildAllowed(ctx, "observer", STRUCTURE_OBSERVER);
+    if (constructionEnabled("observer")) buildAllowed(ctx, "observer", STRUCTURE_OBSERVER);
     if (!ctx.canCreate()) return;
-    buildAllowed(ctx, "factory", STRUCTURE_FACTORY);
+    if (constructionEnabled("factory")) buildAllowed(ctx, "factory", STRUCTURE_FACTORY);
 }
 
 /**
@@ -202,7 +234,11 @@ function manageStructures(ctx: RoomContext): void {
     manageExtensions(ctx);
 
     // Further constructions only once the ramparts hold
-    if (!ctx.canCreate() || !checkWallIntegrity(ctx)) return;
+    if (!ctx.canCreate()) return;
+    if (!checkWallIntegrity(ctx)) {
+        ctx.wallsClosed = true;
+        return;
+    }
     buildEndgameStructures(ctx);
 }
 
@@ -212,7 +248,71 @@ function underAttack(room: Room): boolean {
     return room.find(FIND_HOSTILE_CREEPS).some(c => c.owner.username !== "Invader" && c.body.some(p => p.type !== MOVE));
 }
 
+/** Full rescan of a complete room at least this often: decayed roads and containers (Hivemind: CREEP_LIFE_TIME) */
+const RECHECK_INTERVAL = CREEP_LIFE_TIME;
+
+interface CompleteRoom {
+    /** completionKey() when the room was found complete */
+    key: string;
+    /** Full rescan due */
+    recheckAt: number;
+    /** The endgame structures waited for the ramparts: rescan once they hold */
+    wallsClosed: boolean;
+}
+
+/** A long safe mode pauses the ramparts (same test as manageRamparts) */
+function rampartsPaused(room: Room): boolean {
+    const controller = room.controller!;
+    return (controller.safeMode ?? 0) >= 2000 && !controller.safeModeCooldown;
+}
+
+/** Heap: rooms with nothing left to build (a global reset only costs a rescan) */
+const completeRooms = new Map<string, CompleteRoom>();
+
+/**
+ * What decides what can be built: RCL, plan (version, variation; replans and extensions change it), structures
+ * (count and positions: a destroyed or decayed one changes it), the remote paths' roads in the room, a safe mode
+ * pausing the ramparts and the settings
+ */
+function completionKey(room: Room): string {
+    const plan = roomPlanner.planMemory(room.name);
+    let structureSum = 0;
+    const structures = room.find(FIND_STRUCTURES);
+    for (const s of structures) structureSum += s.pos.x + 50 * s.pos.y;
+    const roads = operationRoadPositions(room.name);
+    let roadSum = 0;
+    for (const pos of roads) roadSum += pos.x + 50 * pos.y;
+    return [
+        room.controller?.level ?? 0,
+        plan?.v,
+        plan?.k,
+        plan?.s,
+        structures.length,
+        structureSum,
+        roads.length,
+        roadSum,
+        rampartsPaused(room) ? 1 : 0,
+        constructionSettingsKey()
+    ].join("|");
+}
+
+/** The room was found complete and nothing changed since */
+function isStillComplete(room: Room, plan: RoomPlan): boolean {
+    const state = completeRooms.get(room.name);
+    if (!state) return false;
+    if (
+        Game.time < state.recheckAt &&
+        state.key === completionKey(room) &&
+        !(state.wallsClosed && wallsHold(room, plan))
+    ) {
+        return true;
+    }
+    completeRooms.delete(room.name);
+    return false;
+}
+
 export const roomBuilderModule = () => {
+    cleanStaleSites();
     for (const name in Game.rooms) {
         const room = Game.rooms[name];
         if (!room.controller?.my) continue;
@@ -220,6 +320,19 @@ export const roomBuilderModule = () => {
         if (!plan || underAttack(room)) continue;
         // A room without spawn waits for the best variation: its first construction site fixes the plan
         if (!roomPlanner.isFinal(room.name) && room.find(FIND_MY_SPAWNS).length === 0) continue;
-        manageStructures(new RoomContext(room, plan));
+        if (isStillComplete(room, plan)) {
+            countStat("roomBuilder:idle");
+            continue;
+        }
+        const ctx = new RoomContext(room, plan);
+        manageStructures(ctx);
+        countStat("roomBuilder:scan");
+        if (ctx.siteCount + ctx.newSites === 0 && !ctx.deferred) {
+            completeRooms.set(room.name, {
+                key: completionKey(room),
+                recheckAt: Game.time + jitter(RECHECK_INTERVAL),
+                wallsClosed: ctx.wallsClosed
+            });
+        }
     }
 };

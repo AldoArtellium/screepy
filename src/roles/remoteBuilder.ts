@@ -8,7 +8,7 @@
  * (index 0 = container tile next to the source, last = next to the planned storage).
  */
 
-import { stayInPlace, whenInRange } from "../core/movement";
+import { followPath, pathIndexOf, stayInPlace, whenInRange } from "../core/movement";
 import { creepsByRole, storageLocation } from "../core/roomState";
 import { trafficManager } from "../modules/TrafficManager";
 import {
@@ -31,8 +31,6 @@ declare global {
     interface CreepMemory {
         /** Remote builder: heading home to refill */
         returning?: boolean;
-        /** Remote builder: path index it walks to next */
-        pathIndex?: number;
     }
 }
 
@@ -68,7 +66,6 @@ export function runRemoteBuilder(creep: Creep): void {
 
 function setReturning(creep: Creep, returning: boolean): void {
     creep.memory.returning = returning;
-    delete creep.memory.pathIndex;
     if (!returning) determineTargetSource(creep);
 }
 
@@ -92,41 +89,19 @@ function determineTargetSource(creep: Creep): void {
 }
 
 /**
- * Walk one tile along the path (towards the source or towards home). Off the path, the creep first
- * heads for the path's closest tile in its room.
+ * Walk one tile along the path (towards the source or towards home), shared path following
+ * (core/movement followPath); at the end of the path the creep holds its tile, without a path tile
+ * in its room or on a detour it heads for the path's end.
  */
-function followPath(creep: Creep, path: RoomPosition[], towardsSource: boolean): void {
-    const index = currentIndex(creep, path);
-    if (index === null) {
-        // Never the container tile (its harvester never moves) nor another occupied tile: cartographer's
-        // fallback path avoids creeps, so an occupied target means ERR_NO_PATH every tick
-        const inRoom = path
-            .map((p, i) => ({ p, i }))
-            .filter(e => e.i > 0 && e.p.roomName === creep.room.name && e.p.lookFor(LOOK_CREEPS).length === 0);
-        const closest = _.min(inRoom, e => e.p.getRangeTo(creep.pos));
-        const target = typeof closest === "number" ? path[towardsSource ? 0 : path.length - 1] : closest.p;
-        trafficManager.requestMove(creep, target, { range: 0, priority: 40 });
-        return;
-    }
-    const next = towardsSource ? index - 1 : index + 1;
-    if (next < 0 || next >= path.length) {
+function walkPath(creep: Creep, path: RoomPosition[], towardsSource: boolean): void {
+    if (followPath(creep, path, towardsSource, 40)) return;
+    if (path.length === 0) return;
+    const index = pathIndexOf(creep, path);
+    if (index !== null && index === (towardsSource ? 0 : path.length - 1)) {
         stayInPlace(creep);
         return;
     }
-    creep.memory.pathIndex = next;
-    trafficManager.requestMove(creep, path[next], { range: 0, priority: 40 });
-}
-
-/** Path index of the creep's tile, looked up around the last known index first */
-function currentIndex(creep: Creep, path: RoomPosition[]): number | null {
-    const last = creep.memory.pathIndex;
-    if (last !== undefined) {
-        for (let i = Math.max(0, last - 3); i <= Math.min(path.length - 1, last + 3); i++) {
-            if (path[i].isEqualTo(creep.pos)) return i;
-        }
-    }
-    const index = path.findIndex(p => p.isEqualTo(creep.pos));
-    return index === -1 ? null : index;
+    trafficManager.requestMove(creep, path[towardsSource ? 0 : path.length - 1], { range: 1, priority: 40 });
 }
 
 function goToSource(creep: Creep, source: RemoteSource): void {
@@ -137,7 +112,7 @@ function goToSource(creep: Creep, source: RemoteSource): void {
     }
     if (pickupNearbyEnergy(creep)) return;
     if (buildRoad(creep, source)) return;
-    followPath(creep, remotePath(source), true);
+    walkPath(creep, remotePath(source), true);
 }
 
 function returnHome(creep: Creep, source: RemoteSource): void {
@@ -172,7 +147,7 @@ function returnHome(creep: Creep, source: RemoteSource): void {
         if (wait) whenInRange(creep, 5, wait);
         return;
     }
-    followPath(creep, remotePath(source), false);
+    walkPath(creep, remotePath(source), false);
 }
 
 /** Pick up an energy pile of at least 100 within 3 tiles */
@@ -209,7 +184,7 @@ function buildRoadOnPath(creep: Creep, source: RemoteSource, work: number, state
     const controller = creep.room.controller;
     if (controller?.owner && !controller.my) return false;
     const path = remotePath(source);
-    const index = currentIndex(creep, path);
+    const index = pathIndexOf(creep, path);
     if (index === null) return repairNearby(creep, work, state);
     for (let i = index - 2; i <= index + 2; i++) {
         if (i < 0 || i >= path.length) continue;

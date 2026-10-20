@@ -4,10 +4,10 @@
  * Ported from Hivemind (MIT), src/role/harvester.remote.ts.
  */
 
-import { whenInRange } from "../core/movement";
+import { followPath, whenInRange } from "../core/movement";
 import { intelManager } from "../modules/IntelManager";
 import { trafficManager } from "../modules/TrafficManager";
-import { containerPos, getRemoteSource, hasRemoteContainer, remoteContainer, sourcePos } from "../remote/RemoteMining";
+import { containerPos, getRemoteSource, hasRemoteContainer, remoteContainer, remotePath, sourcePos } from "../remote/RemoteMining";
 import { REMOTE_HARVESTER } from "../remote/remoteSpawnRole";
 import { countStat } from "../utils/stats";
 import { fleeIfThreatened } from "./flee";
@@ -24,7 +24,7 @@ export function runRemoteHarvester(creep: Creep): void {
     const target = sourcePos(source);
     if (fleeIfThreatened(creep, target)) return;
     if (creep.room.name !== source.room || creep.pos.getRangeTo(target) > 2) {
-        trafficManager.requestMove(creep, target, { range: 1, priority: 40 });
+        if (!followPath(creep, remotePath(source), true, 40)) trafficManager.requestMove(creep, target, { range: 1, priority: 40 });
         return;
     }
 
