@@ -65,8 +65,14 @@ const RAID_BOOSTS = { tough: "GO", ranged_attack: "KO", work: "ZH", attack: "UH"
  * range 5 of the spawn (ringHits, default 30000), scripts/mockup/enemy-bot.js as its code.
  */
 const ENEMY = opt("enemy", null);
+/**
+ * Second owned room from tick 1: "ROOM[:RCL]" (default RCL 1), e.g. --claim W8N3 to test two
+ * neighbouring homes sharing remote rooms. Controller and a spawn at the harness spawn spot, like a
+ * room the expansion just claimed; raises the GCL to 2.
+ */
+const CLAIM = opt("claim", null);
 /** Global control level of the bot (default 1), e.g. 2 to allow a second room (expansion tests) */
-const GCL = Number(opt("gcl", 1));
+const GCL = Math.max(Number(opt("gcl", 1)), CLAIM ? 2 : 1);
 /**
  * Fast-forwarded start (same idea as pserver-test.mjs --preset): "rcl4", "rcl5" or "rcl7" sets the controller
  * level and adds a storage with energy, the extensions of the level on a checkerboard around the
@@ -218,6 +224,22 @@ async function setupEnemy(server, fixture, spec) {
   }
   log(`Enemy in ${room} (RCL ${rcl}): spawn ${spot.x},${spot.y}, ${placed.length} towers, ${ring} ring ramparts of ${ringHits} hits`);
   return { id: enemy.id, room };
+}
+
+/** Second owned room (see CLAIM) */
+async function setupClaim(server, fixture, userId, spec) {
+  const [room, rclText] = spec.split(":");
+  const rcl = Number(rclText || 1);
+  const r = fixture.rooms[room];
+  if (!r) throw new Error(`--claim: room ${room} is not in the fixture`);
+  const spot = findSpawnSpot(r.terrain, r.objects);
+  if (!spot) throw new Error(`--claim: no spawn spot found in ${room}`);
+  const { db } = server.common.storage;
+  const time = await server.world.gameTime;
+  await db.rooms.update({ _id: room }, { $set: { active: true } });
+  await db["rooms.objects"].update({ room, type: "controller" }, { $set: { user: userId, level: rcl, progress: 0, downgradeTime: time + 20000, safeMode: null } });
+  await db["rooms.objects"].insert({ room, type: "spawn", x: spot.x, y: spot.y, user: userId, name: "Spawn2", store: { energy: 300 }, storeCapacityResource: { energy: 300 }, hits: 5000, hitsMax: 5000, spawning: null, notifyWhenAttacked: true });
+  log(`Claimed ${room} (RCL ${rcl}): spawn ${spot.x},${spot.y}`);
 }
 
 /** Fast-forwarded room (see PRESETS) */
@@ -744,6 +766,7 @@ async function main() {
   // The enemy first: adding a second user resets the first one's Memory
   const enemy = ENEMY ? await setupEnemy(server, fixture, ENEMY) : null;
   if (QUICK_PRESET) await applyQuickPreset(server, fixture, spot, user.id);
+  if (CLAIM) await setupClaim(server, fixture, user.id, CLAIM);
   const stronghold = STRONGHOLD ? await setupStronghold(server, fixture, STRONGHOLD) : null;
   const leftovers = STRUCTURES ? await setupStructures(server, fixture, spot, STRUCTURES) : null;
   await env.set(env.keys.MEMORY + user.id, MEMORY_INIT);

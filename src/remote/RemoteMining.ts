@@ -45,6 +45,8 @@ interface PathCache {
      * packed by utils/pathCodec; null when no path
      */
     path: string | null;
+    /** Home room of a failed search (a found path ends in its home) */
+    home?: string;
 }
 
 /** Packed path format (1: "W7N3,12,34;..." strings, migrated on load) */
@@ -225,6 +227,21 @@ function pathHome(packed: string): string | undefined {
     return path.length > 0 ? path[path.length - 1].roomName : undefined;
 }
 
+function cacheHome(cache: PathCache): string | undefined {
+    return cache.path ? pathHome(cache.path) : cache.home;
+}
+
+/**
+ * Paths of a home to sources whose stored path belongs to another home (heap): the store keeps one
+ * path per source, and two homes in range of the same source used to read each other's path (same
+ * travel time, delivery to the other storage). Promoted to the store when the source changes home.
+ */
+const otherPaths: Map<string, PathCache> = new Map();
+
+function otherPathKey(home: string, key: string): string {
+    return `${home}|${key}`;
+}
+
 interface SharedTiles {
     /** Tiles of the home's other remote paths, by room: they cost like roads */
     roads: Map<string, RoomPosition[]>;
@@ -321,7 +338,10 @@ export function forgetRemotePath(source: RemoteSource, roomName: string): void {
 /** Path from a remote source to its home's planned storage, cached (Hivemind getPathFor) */
 function pathFor(home: Room, sourcePos: RoomPosition): RoomPosition[] | null {
     const key = sourceKey(sourcePos.roomName, sourcePos.x, sourcePos.y);
-    const cache = paths()[key];
+    const stored = paths()[key];
+    const storedHome = stored && cacheHome(stored);
+    const own = !storedHome || storedHome === home.name;
+    const cache = own ? stored : otherPaths.get(otherPathKey(home.name, key));
     if (cache) {
         const ttl = cache.path ? PATH_TTL : FAILED_PATH_TTL;
         // A cached path that now crosses someone else's room is searched again at once
@@ -333,7 +353,9 @@ function pathFor(home: Room, sourcePos: RoomPosition): RoomPosition[] | null {
     // No plan yet: don't cache the failure (Hivemind cached null for 5000 ticks)
     if (!storagePos) return null;
     const shared = sharedTiles(home.name, key);
-    const previous = cache?.path ? unpackPath(cache.path)[0] : undefined;
+    // The container tile of the other home's path too: a source changing home keeps its container
+    const previousPath = cache?.path ?? stored?.path;
+    const previous = previousPath ? unpackPath(previousPath)[0] : undefined;
     const start = previous && keepsContainerTile(previous) ? previous : undefined;
     const result = PathFinder.search(start ?? sourcePos, { pos: storagePos, range: 1 }, {
         plainCost: 2,
@@ -345,8 +367,15 @@ function pathFor(home: Room, sourcePos: RoomPosition): RoomPosition[] | null {
     });
     const found = start ? [start, ...result.path] : result.path;
     const path = result.incomplete || found.length >= MAX_PATH_LENGTH ? null : found;
-    paths()[key] = { generated: Game.time, path: path ? encodePath(path) : null };
-    pathStore.touch();
+    const entry: PathCache = path
+        ? { generated: Game.time, path: encodePath(path) }
+        : { generated: Game.time, path: null, home: home.name };
+    if (own) {
+        paths()[key] = entry;
+        pathStore.touch();
+    } else {
+        otherPaths.set(otherPathKey(home.name, key), entry);
+    }
     return path;
 }
 
@@ -487,17 +516,49 @@ function updateBudget(currentRooms: number, possibleRooms: number): void {
     log.info("RemoteMining", `CPU ${mem.cpuAvg.toFixed(1)}/${limit}, bucket ${bucket}: remote rooms ${next === undefined ? "uncapped" : `capped at ${next}`}`);
 }
 
+type Candidate = { source: RemoteSource; net: number; parts: number };
+type HomeSelection = {
+    home: Room;
+    cap: number | undefined;
+    rooms: { [room: string]: { candidates: Candidate[]; reserverCost: number } };
+    ranked: Candidate[];
+    chosen: { [room: string]: RemoteSource[] };
+    count: number;
+};
+
+/** Shortest source path of a home to a remote room, its current home's shortened by KEEP_BONUS */
+function homeDistance(entry: HomeSelection, roomName: string): number {
+    const candidates = entry.rooms[roomName].candidates;
+    const keeps = candidates.some(c => memory().sources[c.source.key]?.homeRoom === entry.home.name);
+    return _.min(candidates.map(c => c.source.travelTime)) / (keeps ? KEEP_BONUS : 1);
+}
+
+/** Adds a home's best ranked sources in the rooms it may open, within its source cap and room slots */
+function pickSources(entry: HomeSelection, owner: Record<string, string>, allowed: (room: string) => boolean): void {
+    for (const candidate of entry.ranked) {
+        if (entry.cap !== undefined && entry.count >= entry.cap) break;
+        const roomName = candidate.source.room;
+        if (entry.chosen[roomName]?.includes(candidate.source)) continue;
+        const opening = !entry.chosen[roomName];
+        if (opening && (owner[roomName] || !allowed(roomName))) continue;
+        if (opening && Object.keys(entry.chosen).length >= maxRemotes(entry.home)) continue;
+        (entry.chosen[roomName] ??= []).push(candidate.source);
+        owner[roomName] = entry.home.name;
+        entry.count++;
+    }
+}
+
 function selectRemotes(): void {
     const selected: { [key: string]: RemoteSource } = {};
     const picked: { score: number; sources: RemoteSource[] }[] = [];
+    const homes: HomeSelection[] = [];
     for (const name in Game.rooms) {
         const home = Game.rooms[name];
         if (!home.controller?.my || !roomPlanner.getPlan(home.name)) continue;
         // A room without spawn (new expansion) mines nothing yet
         if (home.find(FIND_MY_SPAWNS).length === 0) continue;
         const cap = updateSourceCap(home);
-        type Candidate = { source: RemoteSource; net: number; parts: number };
-        const rooms: { [room: string]: { candidates: Candidate[]; reserverCost: number } } = {};
+        const rooms: HomeSelection["rooms"] = {};
         const reserved = (roomName: string) => canReserveFrom(home, roomName);
         const roads = home.controller!.level > 3 && !!(home.storage || home.terminal);
         const candidateNames = candidateRooms(home);
@@ -568,18 +629,31 @@ function selectRemotes(): void {
             _.flatten(Object.values(rooms).map(r => r.candidates)),
             c => (-c.net / c.parts) * (current[c.source.key]?.homeRoom === home.name ? KEEP_BONUS : 1)
         );
-        const chosen: { [room: string]: RemoteSource[] } = {};
-        let count = 0;
-        for (const candidate of ranked) {
-            if (cap !== undefined && count >= cap) break;
-            const opening = !chosen[candidate.source.room];
-            if (opening && Object.keys(chosen).length >= maxRemotes(home)) continue;
-            (chosen[candidate.source.room] ??= []).push(candidate.source);
-            count++;
+        homes.push({ home, cap, rooms, ranked, chosen: {}, count: 0 });
+    }
+    // Each remote room goes to one home (Hivemind: the room's origin, its closest owned room). Every
+    // home used to pick on its own: neighbours picked the same rooms, the later entry overwrote the
+    // other's sources and the duplicates took CPU budget slots (shard0: 5 rooms mined for a cap of 8,
+    // W29N5 dropped by W29N7 while its harvesters and reserver were still there)
+    const preferred: { [room: string]: string } = {};
+    const best: { [room: string]: number } = {};
+    for (const entry of homes) {
+        for (const roomName in entry.rooms) {
+            const distance = homeDistance(entry, roomName);
+            if (best[roomName] === undefined || distance < best[roomName]) {
+                best[roomName] = distance;
+                preferred[roomName] = entry.home.name;
+            }
         }
-        for (const roomName in chosen) {
-            const sources = chosen[roomName];
-            const room = rooms[roomName];
+    }
+    const owner: { [room: string]: string } = {};
+    for (const entry of homes) pickSources(entry, owner, roomName => preferred[roomName] === entry.home.name);
+    // Deviation: a room its closest home has no slot for goes to another home in range (Hivemind leaves it)
+    for (const entry of homes) pickSources(entry, owner, () => true);
+    for (const entry of homes) {
+        for (const roomName in entry.chosen) {
+            const sources = entry.chosen[roomName];
+            const room = entry.rooms[roomName];
             const score = _.sum(sources, s => room.candidates.find(c => c.source === s)!.net) - room.reserverCost;
             picked.push({ score, sources });
         }
@@ -591,6 +665,18 @@ function selectRemotes(): void {
     const cap = memory().maxRooms ?? picked.length;
     for (const entry of picked.slice(0, cap)) {
         for (const source of entry.sources) selected[source.key] = source;
+    }
+    // A source that changed home gets its new home's path in the store (remotePath reads it)
+    for (const source of Object.values(selected)) {
+        const stored = paths()[source.key];
+        if (!stored || cacheHome(stored) === source.homeRoom) continue;
+        const mine = otherPaths.get(otherPathKey(source.homeRoom, source.key));
+        if (!mine) continue;
+        otherPaths.delete(otherPathKey(source.homeRoom, source.key));
+        const previousHome = cacheHome(stored);
+        if (previousHome) otherPaths.set(otherPathKey(previousHome, source.key), stored);
+        paths()[source.key] = mine;
+        pathStore.touch();
     }
     const before = Object.keys(memory().sources).sort().join();
     memory().sources = selected;
