@@ -14,6 +14,7 @@
 import { roomPlanner } from "../planner/RoomPlanner";
 import { RoomPlan } from "../planner/RoomPlan";
 import { log } from "../utils/logger";
+import { decisionBucket } from "../utils/throttle";
 import { drawMapCreeps } from "./mapCreeps";
 import { MapLabels } from "./mapLabels";
 import { MapPanel, sectorCenter } from "./mapPanel";
@@ -73,7 +74,7 @@ function drawRoom(room: Room): void {
         cache.set(room.name, state);
     }
 
-    const redraw = Game.cpu.bucket >= REDRAW_BUCKET;
+    const redraw = decisionBucket() >= REDRAW_BUCKET;
     const plan = roomPlanner.getPlan(room.name);
     if (!layerEnabled("plan")) {
         state.plan = undefined;
@@ -114,7 +115,7 @@ function drawMap(): void {
         mapCache = undefined;
         return;
     }
-    const redraw = Game.cpu.bucket >= REDRAW_BUCKET;
+    const redraw = decisionBucket() >= REDRAW_BUCKET;
     if (!mapCache || (redraw && Game.time - mapCache.tick >= MAP_INTERVAL)) {
         const visual = Game.map.visual;
         visual.clear();
@@ -142,7 +143,7 @@ function drawMap(): void {
 }
 
 export const roomVisualsModule = (): void => {
-    if (!visualsEnabled() || Game.cpu.bucket < STOP_BUCKET) return;
+    if (!visualsEnabled() || decisionBucket() < STOP_BUCKET) return;
     const start = Game.cpu.getUsed();
     sampleIncome();
     for (const name in Game.rooms) {

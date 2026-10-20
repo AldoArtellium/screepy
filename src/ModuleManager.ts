@@ -1,5 +1,5 @@
 import { log } from "utils/logger";
-import { throttleMultiplier } from "utils/throttle";
+import { decisionBucket, throttleMultiplier } from "utils/throttle";
 import { countStat } from "utils/stats";
 
 export interface Module {
@@ -31,7 +31,7 @@ function isAllowedByBucket(module: Module, lastRun: number): boolean {
   const priority = module.mandatory ? "always" : module.priority ?? "default";
   if (priority === "always") return true;
   const [stopAt, throttleAt] = PRIORITY_EFFECTS[priority];
-  if (Game.cpu.bucket <= stopAt) return false;
+  if (decisionBucket() <= stopAt) return false;
   const interval = module.runEvery ?? 1;
   if (Game.time - lastRun < interval) return false;
   return Game.time - lastRun >= interval * throttleMultiplier(stopAt, throttleAt);

@@ -66,7 +66,18 @@ function settings(): ReportSettings | null {
 }
 
 /** Counters compared between two reports: plain keys and the prefixes kept by name */
-const TRACKED = ["work:harvest", "work:remoteHarvest", "globalReset", "safeMode", "memory:deadCreep", "military:lost"];
+const TRACKED = [
+    "work:harvest",
+    "work:remoteHarvest",
+    "globalReset",
+    "safeMode",
+    "memory:deadCreep",
+    "military:lost",
+    "pixels:generated",
+    "pixels:sold",
+    "cpuUnlock:bought",
+    "cpuUnlock:used"
+];
 const TRACKED_PREFIXES = ["roleError:", "throttled:"];
 
 function trackedCounters(): { [name: string]: number } {
@@ -207,6 +218,17 @@ export function buildReport(state: ReportState): string {
         `CPU ${cpuAvg.toFixed(1)} avg, ${state.cpuMax.toFixed(0)} max / ${Game.cpu.limit} | bucket min ${state.bucketMin}, now ${Game.cpu.bucket}` +
             (resets > 0 ? ` | ${resets} global reset${resets > 1 ? "s" : ""}` : "")
     );
+
+    // Pixels and CPU unlocks (modules/Pixels.ts, Memory.pixels)
+    const pixelCounts = ["pixels:generated", "pixels:sold", "cpuUnlock:bought", "cpuUnlock:used"].map(n => delta(counters, state.counters, n));
+    if (Memory.pixels || _.some(pixelCounts, n => n > 0)) {
+        const [generated, sold, bought, used] = pixelCounts;
+        lines.push(
+            `Pixels ${generated} generated, ${sold} sold (stock ${Game.resources[PIXEL] ?? 0}) | CPU unlocks ${bought} bought, ${used} used (stock ${Game.resources[CPU_UNLOCK] ?? 0})` +
+                (Game.cpu.unlockedTime ? ` | full CPU ${((Game.cpu.unlockedTime - Date.now()) / 3600000).toFixed(1)} h` : "") +
+                ` | credits ${Math.round(Game.market.credits)}`
+        );
+    }
 
     // Errors since the last report (Memory.moduleErrors keeps the last 20)
     const moduleErrors = _.countBy(

@@ -47,6 +47,9 @@ jobs:
       - name: Planner check
         run: node tests/planner/run.mjs
 
+      - name: Pixels check
+        run: node tests/pixels/run.mjs
+
       - uses: actions/upload-artifact@v4
         with:
           name: bundle

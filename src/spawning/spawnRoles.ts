@@ -40,7 +40,7 @@ import { isFullOn } from "../core/resources";
 import { boostLabs, boostsFor } from "../labs/boosts";
 import { HELPER } from "../roles/helper";
 import { jitter } from "../utils/jitter";
-import { harvesterSizeFactor } from "../utils/throttle";
+import { decisionBucket, harvesterSizeFactor } from "../utils/throttle";
 
 export interface SpawnOption extends Option {
     role: string;
@@ -462,7 +462,7 @@ function baseUpgraderAmount(room: Room): number {
     const rcl = room.controller?.level ?? 0;
     const reserve: { [rcl: number]: number } = { 5: 10000, 6: 25000, 7: 50000, 8: 100000 };
     const energy = effectiveEnergy(room) - (reserve[rcl] ?? 0);
-    const bucket = Game.cpu.bucket;
+    const bucket = decisionBucket();
     if (energy < (rcl === 7 ? 25000 : 10000)) return 0;
     if (energy < (rcl === 7 ? 75000 : 50000)) return 1;
     if (energy < 100000 && bucket > 5000) return 2;

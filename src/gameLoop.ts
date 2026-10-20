@@ -13,6 +13,7 @@ import { marketManagerModule } from "modules/MarketManager";
 import { terminalTransfersModule } from "modules/TerminalTransfers";
 import { memoryCleanupModule } from "modules/MemoryCleanup";
 import { miningStatsModule } from "modules/MiningStats";
+import { pixelsModule } from "modules/Pixels";
 import { roomIntelModule } from "modules/RoomIntel";
 import { scoutManagerModule } from "modules/ScoutManager";
 import { spawnManagerModule } from "modules/SpawnManager";
@@ -71,6 +72,8 @@ export const gameLoop = () => {
     { name: "MiningStats", fn: miningStatsModule },
     // Every tick (a skipped tick blanks the visuals); the module throttles its own redraws
     { name: "RoomVisuals", fn: roomVisualsModule, priority: "always" },
+    // Pixel from a full bucket, CPU unlocks (Memory.pixels, off by default); every tick so a full bucket is never missed
+    { name: "Pixels", fn: pixelsModule, priority: "always" },
     // Periodic report (Game.notify, Memory.reports) and immediate alerts; samples CPU and bucket every tick
     { name: "Reports", fn: reportsModule, priority: "always" },
 

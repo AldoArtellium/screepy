@@ -16,6 +16,7 @@ import { intelManager } from "../modules/IntelManager";
 import { hasInvaderCore, isRoomUnderAttack } from "../modules/RoomIntel";
 import { roomPlanner } from "../planner/RoomPlanner";
 import { log } from "../utils/logger";
+import { decisionBucket } from "../utils/throttle";
 import { decodePath, encodePath } from "../utils/pathCodec";
 import { parseRoomName, roomsInRange } from "../utils/rooms";
 import { segmentStore } from "../utils/segments";
@@ -503,7 +504,7 @@ function updateBudget(currentRooms: number, possibleRooms: number): void {
     mem.budgetChanged ??= Game.time;
     if (Game.time - mem.budgetChanged < BUDGET_STEP_TICKS) return;
     const limit = Game.cpu.limit;
-    const bucket = Game.cpu.bucket;
+    const bucket = decisionBucket();
     let next = mem.maxRooms;
     if (mem.cpuAvg > limit * BUDGET_HIGH || bucket < 5000) next = Math.max(0, currentRooms - 1);
     else if (mem.cpuAvg < limit * BUDGET_LOW && bucket > 9000 && mem.maxRooms !== undefined) {
