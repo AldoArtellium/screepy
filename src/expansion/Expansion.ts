@@ -223,6 +223,16 @@ export function squadsOf(roomName: string): [string, Squad][] {
     return Object.entries(expansionMemory().squads).filter(([, s]) => s.spawnRoom === roomName);
 }
 
+/**
+ * Squads of a room still claiming their target. Once the target is claimed a squad only sends
+ * pioneers (2 per CREEP_LIFE_TIME at most), far lighter than a remote room, for up to
+ * CLAIMED_TIMEOUT ticks: shard0 W29N7 mined 2 remote rooms instead of 3 while W28N7 grew.
+ */
+export function claimingSquadsOf(roomName: string): [string, Squad][] {
+    const current = expansionMemory().current;
+    return squadsOf(roomName).filter(([, s]) => !(current?.claimed && s.targetRoom === current.roomName));
+}
+
 export const expansionModule = (): void => {
     const memory = expansionMemory();
     if (Game.time % 5000 === 0) memory.failed = memory.failed.filter(f => Game.time - f.time <= FAILURE_MEMORY);
