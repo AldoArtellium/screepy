@@ -10,23 +10,21 @@
 import { enemyStrength } from "../defense/RoomDefense";
 import { intelManager } from "../modules/IntelManager";
 import { canReserveFrom } from "../remote/RemoteMining";
+import { LABEL_PRIORITY, labelStyle, MapLabels } from "./mapLabels";
 
-const FONT = 6;
+const THREAT_FONT = 5;
+const RESERVATION_FONT = 4;
+const UNRESERVED_FONT = 3;
 const OK = "#7ee08a";
 const WARN = "#e8a23a";
 const BAD = "#ff5c5c";
 const DIM = "#a0a0a0";
-const BACKDROP = "#101010";
 const STRENGTH_NAMES = ["none", "weak", "normal", "strong", "deadly"];
 
 /** Our reservation below this many ticks turns orange */
 const LOW_RESERVATION = 1000;
 /** Reservation data older than this is shown as unknown */
 const STALE_RESERVATION = 1500;
-
-function textStyle(color: string): MapTextStyle {
-    return { color, fontSize: FONT, backgroundColor: BACKDROP, backgroundPadding: 0.8, opacity: 0.85 };
-}
 
 function short(ticks: number): string {
     return ticks >= 1000 ? `${(ticks / 1000).toFixed(1)}k` : `${ticks}`;
@@ -42,7 +40,7 @@ function watchedRooms(): { owned: string[]; remotes: string[] } {
     return { owned, remotes: [...remotes].filter(name => !owned.includes(name)) };
 }
 
-function drawThreat(visual: MapVisual, roomName: string): void {
+function drawThreat(visual: MapVisual, labels: MapLabels, roomName: string): void {
     const enemies = Memory.rooms?.[roomName]?.enemies;
     if (!enemies || (enemies.expires ?? 0) <= Game.time) return;
     const parts = [`hostiles · ${short(enemies.expires! - Game.time)}t`];
@@ -60,7 +58,9 @@ function drawThreat(visual: MapVisual, roomName: string): void {
     if (enemies.safe) parts.push("safe");
     const color = enemies.safe ? WARN : BAD;
     visual.rect(new RoomPosition(1, 1, roomName), 48, 48, { fill: "transparent", stroke: color, strokeWidth: 1, opacity: 0.6 });
-    visual.text(parts.join(" · "), new RoomPosition(25, 33, roomName), textStyle(color));
+    const pos = (y: number) => new RoomPosition(25, y, roomName);
+    const style = labelStyle(color, THREAT_FONT);
+    labels.add(parts.join(" · "), [pos(33), pos(29), pos(37)], style, LABEL_PRIORITY.threat, true);
 }
 
 /** Our username, from any owned controller (me is declared but never set) */
@@ -91,31 +91,33 @@ function reservation(roomName: string, me: string | undefined): { user?: string;
     return best;
 }
 
-function drawReservation(visual: MapVisual, roomName: string, homes: Room[]): void {
-    const pos = new RoomPosition(25, 7, roomName);
+function drawReservation(labels: MapLabels, roomName: string, homes: Room[]): void {
+    // Top of the room, then its other corners: source labels give way to it
+    const pos = [25, 10, 40].map(x => new RoomPosition(x, 6, roomName));
+    const add = (text: string, style: MapTextStyle) => labels.add(text, pos, style, LABEL_PRIORITY.reservation);
     const me = myUsername();
     const state = reservation(roomName, me);
     if (state?.user && state.user !== me) {
-        visual.text(`res ${state.user} ${short(state.ticks)}`, pos, textStyle(BAD));
+        add(`res ${state.user} ${short(state.ticks)}`, labelStyle(BAD, RESERVATION_FONT));
         return;
     }
     if (state?.user && state.ticks > 0) {
         const stale = state.age > STALE_RESERVATION;
         const color = stale || state.ticks < LOW_RESERVATION ? WARN : OK;
-        visual.text(`res ${short(state.ticks)}${stale ? "?" : ""}`, pos, textStyle(color));
+        add(`res ${short(state.ticks)}${stale ? "?" : ""}`, labelStyle(color, RESERVATION_FONT));
         return;
     }
     // Nobody holds it: only worth a word where one of our homes could reserve
-    if (homes.some(home => canReserveFrom(home, roomName))) visual.text("unreserved", pos, textStyle(DIM));
+    if (homes.some(home => canReserveFrom(home, roomName))) add("unreserved", labelStyle(DIM, UNRESERVED_FONT, 0.6));
 }
 
 /** Draws the threats and reservations on the world map */
-export function drawMapThreats(visual: MapVisual): void {
+export function drawMapThreats(visual: MapVisual, labels: MapLabels): void {
     const { owned, remotes } = watchedRooms();
-    for (const name of owned) drawThreat(visual, name);
+    for (const name of owned) drawThreat(visual, labels, name);
     const homes = owned.map(name => Game.rooms[name]);
     for (const name of remotes) {
-        drawThreat(visual, name);
-        drawReservation(visual, name, homes);
+        drawThreat(visual, labels, name);
+        drawReservation(labels, name, homes);
     }
 }

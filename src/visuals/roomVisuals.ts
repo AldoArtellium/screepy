@@ -13,6 +13,7 @@ import { roomPlanner } from "../planner/RoomPlanner";
 import { RoomPlan } from "../planner/RoomPlan";
 import { log } from "../utils/logger";
 import { drawMapCreeps } from "./mapCreeps";
+import { MapLabels } from "./mapLabels";
 import { drawMapRemotes } from "./mapRemotes";
 import { drawMapStrategy } from "./mapStrategy";
 import { drawMapThreats } from "./mapThreats";
@@ -114,10 +115,12 @@ function drawMap(): void {
     if (!mapCache || (redraw && Game.time - mapCache.tick >= MAP_INTERVAL)) {
         const visual = Game.map.visual;
         visual.clear();
-        if (remotes) drawMapRemotes(visual);
-        if (strategy) drawMapStrategy(visual);
-        if (threats) drawMapThreats(visual);
-        if (creeps) drawMapCreeps(visual);
+        const labels = new MapLabels();
+        if (remotes) drawMapRemotes(visual, labels);
+        if (strategy) drawMapStrategy(visual, labels);
+        if (threats) drawMapThreats(visual, labels);
+        if (creeps) drawMapCreeps(visual, labels);
+        labels.flush(visual);
         mapCache = { tick: Game.time, data: visual.export() ?? "" };
     } else if (mapCache.data) {
         Game.map.visual.import(mapCache.data);

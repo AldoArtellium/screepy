@@ -11,9 +11,9 @@ import { DUO_ATTACKER, DUO_HEALER } from "../military/duo";
 import { QUAD_ATTACKER, QUAD_HEALER } from "../military/quad";
 import { REMOTE_DEFENDER } from "../remote/remoteDefense";
 import { REMOTE_BUILDER } from "../remote/remoteSpawnRole";
+import { clampX, LABEL_PRIORITY, labelSize, labelStyle, MapLabels } from "./mapLabels";
 
-const FONT = 5;
-const BACKDROP = "#101010";
+const FONT = 4;
 
 interface Kind {
     name: string;
@@ -59,7 +59,7 @@ interface Group {
 }
 
 /** Draws the creeps in transit on the world map */
-export function drawMapCreeps(visual: MapVisual): void {
+export function drawMapCreeps(visual: MapVisual, labels: MapLabels): void {
     const groups: Map<string, Group> = new Map();
     for (const name in Game.creeps) {
         const creep = Game.creeps[name];
@@ -89,14 +89,10 @@ export function drawMapCreeps(visual: MapVisual): void {
             });
         }
         // Next to the creep, kept inside the room
-        const labelPos = new RoomPosition(Math.max(5, Math.min(45, pos.x)), pos.y > 40 ? pos.y - 3 : pos.y + 3, pos.roomName);
         const text = group.count > 1 ? `${group.label} x${group.count}` : group.label;
-        visual.text(text, labelPos, {
-            fontSize: FONT,
-            color: kind.color,
-            backgroundColor: BACKDROP,
-            backgroundPadding: 0.8,
-            opacity: 0.85
-        });
+        const x = clampX(pos.x, labelSize(text, FONT).width);
+        const rows = [pos.y + 4, pos.y - 2, pos.y + 8, pos.y - 6].filter(y => y >= 3 && y <= 48);
+        const candidates = rows.map(y => new RoomPosition(x, y, pos.roomName));
+        labels.add(text, candidates, labelStyle(kind.color, FONT), LABEL_PRIORITY.creep);
     }
 }
