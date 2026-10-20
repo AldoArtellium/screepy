@@ -76,3 +76,69 @@ export function sourceParts(source: SourceEconomy): number {
     const builders = builderWork + builderCarry + Math.ceil((builderWork + builderCarry) / 2);
     return harvester + haulers + builders;
 }
+
+export interface SourceCrew {
+    harvesters: number;
+    haulers: number;
+    builders: number;
+    /** Creeps alive at once (harvester replacements included) */
+    creeps: number;
+    /** Share of the generation the harvesters fit on the free tiles can extract */
+    harvested: number;
+}
+
+/**
+ * Creeps a remote source keeps alive with the bodies a home of `capacity` energy can spawn (bodies of
+ * remoteSpawnRole.ts). The official CPU goes with creeps (code and intents), not body parts: a home at
+ * 450 capacity mines a source with 2 harvesters of 2 WORK and haulers of 4 CARRY, ~3x the creeps of a
+ * home at 1800 for the same energy (shard0 W28N7 next to W29N7).
+ */
+export function sourceCreeps(source: SourceEconomy, capacity: number, free: number): SourceCrew {
+    const { generation, distance, roads } = source;
+
+    const workNeeded = generation / HARVEST_POWER;
+    const harvesterParts = Math.floor((MAX_CREEP_SIZE - 2) / (roads ? 1.5 : 2));
+    const carryCost = BODYPART_COST[CARRY] + BODYPART_COST[MOVE];
+    const workCost = BODYPART_COST[WORK] + BODYPART_COST[MOVE] / (roads ? 2 : 1);
+    const workPerHarvester = Math.min(harvesterParts, Math.floor((capacity - carryCost) / workCost));
+    if (workPerHarvester <= 0) return { harvesters: 0, haulers: 0, builders: 0, creeps: 0, harvested: 0 };
+    const count = Math.min(Math.max(1, free), Math.ceil(workNeeded / workPerHarvester));
+    const harvested = Math.min(1, (count * workPerHarvester) / workNeeded);
+    const harvesters = (count * CREEP_LIFE_TIME) / Math.max(1, CREEP_LIFE_TIME - distance);
+
+    // Haulers are pooled per home: fractions count
+    const carry = (2 * distance * generation * harvested) / CARRY_CAPACITY;
+    const carryPerHauler = Math.min(
+        Math.floor(MAX_CREEP_SIZE / (roads ? 1.5 : 2)),
+        Math.floor((0.9 * CONTAINER_CAPACITY) / CARRY_CAPACITY),
+        Math.floor(capacity / (BODYPART_COST[CARRY] + BODYPART_COST[MOVE] / (roads ? 2 : 1)))
+    );
+    const haulers = carryPerHauler > 0 ? carry / carryPerHauler : 0;
+
+    // Remote builders: CARRY 5 : WORK 2 on road bodies
+    const builderUnit = 2 * BODYPART_COST[WORK] + 5 * BODYPART_COST[CARRY] + 4 * BODYPART_COST[MOVE];
+    const units = Math.min(Math.floor(MAX_CREEP_SIZE / 11), Math.floor(capacity / builderUnit));
+    const workPerBuilder = Math.max(1, 2 * units);
+    const builders = source.maintenanceWork / workPerBuilder;
+
+    return { harvesters, haulers, builders, creeps: harvesters + haulers + builders, harvested };
+}
+
+/**
+ * Net energy per creep of a remote room: the share of each source's net income its harvesters reach,
+ * minus the reserver, over the creeps of its sources and its reservers. The CPU budget keeps the rooms
+ * that pay the most per creep.
+ */
+export function roomEnergyPerCreep(
+    sources: { net: number; crew: SourceCrew }[],
+    reserverEnergy: number,
+    reservers: number
+): number {
+    let net = -reserverEnergy;
+    let creeps = reservers;
+    for (const { net: sourceIncome, crew } of sources) {
+        net += sourceIncome * crew.harvested;
+        creeps += crew.creeps;
+    }
+    return creeps > 0 ? net / creeps : 0;
+}
