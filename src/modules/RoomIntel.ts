@@ -65,7 +65,8 @@ export const roomIntelModule = () => {
                 rangedDamage: _.sum(hostiles, c => activePower(c, RANGED_ATTACK, "rangedAttack") * RANGED_ATTACK_POWER),
                 hits: _.sum(hostiles, c => effectiveHits(c)),
                 fastMelee: hostiles.some(c => c.getActiveBodyparts(ATTACK) > 0 && isFast(c)),
-                ranged: hostiles.some(c => c.getActiveBodyparts(RANGED_ATTACK) > 0)
+                ranged: hostiles.some(c => c.getActiveBodyparts(RANGED_ATTACK) > 0),
+                players: hostiles.some(c => c.owner.username !== "Invader")
             })
         };
         if (owned) room.memory.defenseMode = !safe;
