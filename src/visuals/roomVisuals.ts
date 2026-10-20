@@ -4,7 +4,9 @@
  * PANEL_INTERVAL ticks) and the spawn overlay (every tick); on the world map the remote mining and
  * strategy layers (every MAP_INTERVAL ticks). Cached layers are kept in the heap as exports and
  * imported on the other ticks, so a tick costs one import per layer. `Memory.visuals = false` turns
- * it off, `Memory.visuals = { mapRemotes: false, ... }` single layers (`settings.ts`).
+ * it off, `Memory.visuals = { mapRemotes: false, ... }` single layers (`settings.ts`). The map texts go
+ * to a panel over the center of the first owned room's sector (`mapPanel.ts`; `mapPanel: false` puts
+ * them back on the rooms), the rest through the shared label placer (`mapLabels.ts`).
  * Runs every tick (visuals last one tick): only the redraws wait while the bucket is low, the cached
  * layers are still imported; below STOP_BUCKET nothing is drawn.
  */
@@ -13,6 +15,8 @@ import { roomPlanner } from "../planner/RoomPlanner";
 import { RoomPlan } from "../planner/RoomPlan";
 import { log } from "../utils/logger";
 import { drawMapCreeps } from "./mapCreeps";
+import { MapLabels } from "./mapLabels";
+import { MapPanel, sectorCenter } from "./mapPanel";
 import { drawMapRemotes } from "./mapRemotes";
 import { drawMapStrategy } from "./mapStrategy";
 import { drawMapThreats } from "./mapThreats";
@@ -114,10 +118,20 @@ function drawMap(): void {
     if (!mapCache || (redraw && Game.time - mapCache.tick >= MAP_INTERVAL)) {
         const visual = Game.map.visual;
         visual.clear();
-        if (remotes) drawMapRemotes(visual);
-        if (strategy) drawMapStrategy(visual);
-        if (threats) drawMapThreats(visual);
-        if (creeps) drawMapCreeps(visual);
+        const labels = new MapLabels();
+        // The panel sits on the center of the first owned room's sector
+        const firstOwned = Object.keys(Game.rooms)
+            .filter(name => Game.rooms[name].controller?.my)
+            .sort()[0];
+        const origin = firstOwned && layerEnabled("mapPanel") ? sectorCenter(firstOwned) : undefined;
+        const panel = origin ? new MapPanel() : undefined;
+        if (remotes) drawMapRemotes(visual, labels, panel);
+        if (strategy) drawMapStrategy(visual, labels, panel);
+        if (threats) drawMapThreats(visual, labels, panel);
+        if (creeps) drawMapCreeps(visual, labels);
+        const area = panel && origin ? panel.draw(visual, origin) : undefined;
+        if (area) labels.block(area);
+        labels.flush(visual);
         mapCache = { tick: Game.time, data: visual.export() ?? "" };
     } else if (mapCache.data) {
         Game.map.visual.import(mapCache.data);

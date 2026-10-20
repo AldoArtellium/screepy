@@ -4,29 +4,30 @@
  * names and the enemy strength when the room is visible, "safe" while hostiles can't fight).
  * Remote rooms and the expansion target: reservation ticks left at (25,7), from the controller when
  * visible, else the most recent of our reserver's `lastClaim` and the scouted intel, extrapolated.
+ * With the map panel the texts go to it instead (a `threats` section; reservations on the source
+ * rows of the remote layer), the frame stays in the room.
  * Cached data only (Memory, intel store, visible rooms); the caller caches the export.
  */
 
 import { enemyStrength } from "../defense/RoomDefense";
 import { intelManager } from "../modules/IntelManager";
 import { canReserveFrom } from "../remote/RemoteMining";
+import { LABEL_PRIORITY, labelStyle, MapLabels } from "./mapLabels";
+import { Cell, MapPanel } from "./mapPanel";
 
-const FONT = 6;
+const THREAT_FONT = 5;
+const RESERVATION_FONT = 4;
+const UNRESERVED_FONT = 3;
 const OK = "#7ee08a";
 const WARN = "#e8a23a";
 const BAD = "#ff5c5c";
 const DIM = "#a0a0a0";
-const BACKDROP = "#101010";
 const STRENGTH_NAMES = ["none", "weak", "normal", "strong", "deadly"];
 
 /** Our reservation below this many ticks turns orange */
 const LOW_RESERVATION = 1000;
 /** Reservation data older than this is shown as unknown */
 const STALE_RESERVATION = 1500;
-
-function textStyle(color: string): MapTextStyle {
-    return { color, fontSize: FONT, backgroundColor: BACKDROP, backgroundPadding: 0.8, opacity: 0.85 };
-}
 
 function short(ticks: number): string {
     return ticks >= 1000 ? `${(ticks / 1000).toFixed(1)}k` : `${ticks}`;
@@ -42,7 +43,7 @@ function watchedRooms(): { owned: string[]; remotes: string[] } {
     return { owned, remotes: [...remotes].filter(name => !owned.includes(name)) };
 }
 
-function drawThreat(visual: MapVisual, roomName: string): void {
+function drawThreat(visual: MapVisual, labels: MapLabels, threats: Cell[][] | undefined, roomName: string): void {
     const enemies = Memory.rooms?.[roomName]?.enemies;
     if (!enemies || (enemies.expires ?? 0) <= Game.time) return;
     const parts = [`hostiles · ${short(enemies.expires! - Game.time)}t`];
@@ -60,7 +61,16 @@ function drawThreat(visual: MapVisual, roomName: string): void {
     if (enemies.safe) parts.push("safe");
     const color = enemies.safe ? WARN : BAD;
     visual.rect(new RoomPosition(1, 1, roomName), 48, 48, { fill: "transparent", stroke: color, strokeWidth: 1, opacity: 0.6 });
-    visual.text(parts.join(" · "), new RoomPosition(25, 33, roomName), textStyle(color));
+    if (threats) {
+        threats.push([
+            { text: roomName, color },
+            { text: parts.join(" · "), color }
+        ]);
+        return;
+    }
+    const pos = (y: number) => new RoomPosition(25, y, roomName);
+    const style = labelStyle(color, THREAT_FONT);
+    labels.add(parts.join(" · "), [pos(33), pos(29), pos(37)], style, LABEL_PRIORITY.threat, true);
 }
 
 /** Our username, from any owned controller (me is declared but never set) */
@@ -91,31 +101,40 @@ function reservation(roomName: string, me: string | undefined): { user?: string;
     return best;
 }
 
-function drawReservation(visual: MapVisual, roomName: string, homes: Room[]): void {
-    const pos = new RoomPosition(25, 7, roomName);
+/** Reservation text of a room, undefined when nothing is worth showing */
+export function reservationCell(roomName: string, homes: Room[]): Cell | undefined {
     const me = myUsername();
     const state = reservation(roomName, me);
-    if (state?.user && state.user !== me) {
-        visual.text(`res ${state.user} ${short(state.ticks)}`, pos, textStyle(BAD));
-        return;
-    }
+    if (state?.user && state.user !== me) return { text: `res ${state.user} ${short(state.ticks)}`, color: BAD };
     if (state?.user && state.ticks > 0) {
         const stale = state.age > STALE_RESERVATION;
         const color = stale || state.ticks < LOW_RESERVATION ? WARN : OK;
-        visual.text(`res ${short(state.ticks)}${stale ? "?" : ""}`, pos, textStyle(color));
-        return;
+        return { text: `res ${short(state.ticks)}${stale ? "?" : ""}`, color };
     }
     // Nobody holds it: only worth a word where one of our homes could reserve
-    if (homes.some(home => canReserveFrom(home, roomName))) visual.text("unreserved", pos, textStyle(DIM));
+    if (homes.some(home => canReserveFrom(home, roomName))) return { text: "unreserved", color: DIM };
+    return undefined;
+}
+
+function drawReservation(labels: MapLabels, roomName: string, homes: Room[]): void {
+    const cell = reservationCell(roomName, homes);
+    if (!cell) return;
+    // Top of the room, then its other corners: source labels give way to it
+    const pos = [25, 10, 40].map(x => new RoomPosition(x, 6, roomName));
+    const style =
+        cell.color === DIM ? labelStyle(DIM, UNRESERVED_FONT, 0.6) : labelStyle(cell.color, RESERVATION_FONT);
+    labels.add(cell.text, pos, style, LABEL_PRIORITY.reservation);
 }
 
 /** Draws the threats and reservations on the world map */
-export function drawMapThreats(visual: MapVisual): void {
+export function drawMapThreats(visual: MapVisual, labels: MapLabels, panel?: MapPanel): void {
     const { owned, remotes } = watchedRooms();
-    for (const name of owned) drawThreat(visual, name);
+    const threats: Cell[][] | undefined = panel ? [] : undefined;
+    for (const name of owned) drawThreat(visual, labels, threats, name);
     const homes = owned.map(name => Game.rooms[name]);
     for (const name of remotes) {
-        drawThreat(visual, name);
-        drawReservation(visual, name, homes);
+        drawThreat(visual, labels, threats, name);
+        if (!panel) drawReservation(labels, name, homes);
     }
+    if (panel && threats!.length > 0) panel.section([{ text: "threats", color: BAD }]).push(...threats!);
 }

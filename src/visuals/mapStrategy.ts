@@ -2,22 +2,23 @@
  * World map layer: strategy - owned rooms (RCL), the expansion target with lines from its spawn room
  * (solid) and support rooms (dashed), past expansion failures (red circles), the attack target with a
  * line from each squad's spawn room, and the age of the intel of every known room (one dot per room).
- * Texts sit on a dark backdrop; the expansion text goes under the RCL, clear of the remote summary.
+ * Texts sit on a dark backdrop and go through the shared placer (`mapLabels.ts`): the expansion text
+ * under the RCL, or lower in the room when that spot is taken. With the map panel the expansion and
+ * attack texts go to it (one untitled section), circles and lines stay on the rooms.
  * Reads cached data only (Memory, intel store); the caller caches the export.
  */
 
 import { intelManager } from "../modules/IntelManager";
+import { LABEL_PRIORITY, labelStyle, MapLabels } from "./mapLabels";
+import { Cell, MapPanel } from "./mapPanel";
+import { reservationCell } from "./mapThreats";
 
-const FONT = 7;
+const RCL_FONT = 6;
+const FONT = 5;
 const OK = "#7ee08a";
 const WARN = "#e8a23a";
 const BAD = "#ff5c5c";
 const EXPAND = "#4dd0ff";
-
-/** Text style on a dark backdrop, readable on any terrain */
-function textStyle(color: string): MapTextStyle {
-    return { color, fontSize: FONT, backgroundColor: "#101010", backgroundPadding: 0.8, opacity: 0.85 };
-}
 
 /** Intel age thresholds (ticks): green below FRESH, yellow below STALE, red above */
 const FRESH = 10000;
@@ -33,11 +34,12 @@ function ageText(ticks: number): string {
     return ticks >= 1000 ? `${Math.round(ticks / 1000)}k` : `${ticks}`;
 }
 
-function drawOwnedRooms(visual: MapVisual): void {
+function drawOwnedRooms(labels: MapLabels): void {
     for (const name in Game.rooms) {
         const controller = Game.rooms[name].controller;
         if (!controller?.my) continue;
-        visual.text(`RCL ${controller.level}`, new RoomPosition(25, 7, name), textStyle(OK));
+        const pos = new RoomPosition(25, 7, name);
+        labels.add(`RCL ${controller.level}`, [pos], labelStyle(OK, RCL_FONT), LABEL_PRIORITY.owned, true);
     }
 }
 
@@ -50,7 +52,7 @@ function drawIntelAge(visual: MapVisual): void {
     }
 }
 
-function drawExpansion(visual: MapVisual): void {
+function drawExpansion(visual: MapVisual, labels: MapLabels, rows?: Cell[][]): void {
     const expand = Memory.expand;
     if (!expand) return;
     for (const failure of expand.failed ?? []) {
@@ -76,10 +78,22 @@ function drawExpansion(visual: MapVisual): void {
     }
     const state = current.claimed ? `claimed ${ageText(Game.time - current.claimed)}` : ageText(Game.time - current.started);
     visual.circle(target, { radius: 6, fill: "transparent", stroke: EXPAND, strokeWidth: 1, opacity: 0.8 });
-    visual.text(`expand · ${state}`, new RoomPosition(25, 14, current.roomName), textStyle(EXPAND));
+    if (rows) {
+        const owned = Object.values(Game.rooms).filter(room => room.controller?.my);
+        const reservation = current.claimed ? undefined : reservationCell(current.roomName, owned);
+        rows.push([
+            { text: "expand", color: EXPAND },
+            { text: current.roomName, color: EXPAND },
+            { text: state, color: EXPAND },
+            reservation ?? { text: "", color: EXPAND }
+        ]);
+        return;
+    }
+    const pos = (y: number) => new RoomPosition(25, y, current.roomName);
+    labels.add(`expand · ${state}`, [pos(14), pos(40), pos(44)], labelStyle(EXPAND, FONT), LABEL_PRIORITY.owned, true);
 }
 
-function drawAttack(visual: MapVisual): void {
+function drawAttack(visual: MapVisual, labels: MapLabels, rows?: Cell[][]): void {
     const military = Memory.military;
     const targetRoom = military?.attack ?? military?.target?.room;
     if (!military || !targetRoom) return;
@@ -92,14 +106,25 @@ function drawAttack(visual: MapVisual): void {
     for (const home of homes) visual.line(center(home), target, { color: BAD, width: 1, opacity: 0.6 });
     visual.circle(target, { radius: 6, fill: "transparent", stroke: BAD, strokeWidth: 1, opacity: 0.8 });
     const reason = military.attack ? "manual" : (military.target?.reason ?? "");
+    if (rows) {
+        rows.push([
+            { text: "attack", color: BAD },
+            { text: targetRoom, color: BAD },
+            { text: reason, color: BAD },
+            { text: [...states].join(", "), color: BAD }
+        ]);
+        return;
+    }
     const label = states.size > 0 ? `attack (${reason}) · ${[...states].join(", ")}` : `attack (${reason})`;
-    visual.text(label, new RoomPosition(25, 40, targetRoom), textStyle(BAD));
+    const pos = (y: number) => new RoomPosition(25, y, targetRoom);
+    labels.add(label, [pos(40), pos(44), pos(16)], labelStyle(BAD, FONT), LABEL_PRIORITY.owned, true);
 }
 
 /** Draws the strategy layer on the world map */
-export function drawMapStrategy(visual: MapVisual): void {
+export function drawMapStrategy(visual: MapVisual, labels: MapLabels, panel?: MapPanel): void {
     drawIntelAge(visual);
-    drawOwnedRooms(visual);
-    drawExpansion(visual);
-    drawAttack(visual);
+    drawOwnedRooms(labels);
+    const rows = panel?.section([]);
+    drawExpansion(visual, labels, rows);
+    drawAttack(visual, labels, rows);
 }
