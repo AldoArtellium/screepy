@@ -9,7 +9,7 @@ import { whenInRange } from "../core/movement";
 import { clearOrder, creepsWithOrder, effectiveEnergy, Order, setOrder, tickCache } from "../core/roomState";
 import { desiredWallStrength, ENEMY_STRENGTH_NONE, ENEMY_STRENGTH_NORMAL, enemyStrength } from "../defense/RoomDefense";
 import { roomPlanner } from "../planner/RoomPlanner";
-import { countStat } from "../utils/stats";
+import { buildEnergy, countCreep, countWork, repairEnergy, upgradeEnergy } from "../utils/history";
 import { performRecycle } from "./recycle";
 import { registerRole } from "./registry";
 import { performGetEnergy } from "./transporter";
@@ -59,7 +59,7 @@ export function runBuilder(creep: Creep): void {
         whenInRange(creep, 1, deliverer);
         return;
     }
-    countStat("work:builderFetch");
+    countCreep(creep, "builder:fetch");
     if (!creep.room.storage || effectiveEnergy(creep.room) > 2500) performGetEnergy(creep);
 }
 
@@ -83,7 +83,7 @@ function performUpgrade(creep: Creep): void {
         return;
     }
     whenInRange(creep, 3, controller, () => {
-        if (creep.upgradeController(controller) === OK) countStat("work:builderUpgrade");
+        if (creep.upgradeController(controller) === OK) countWork(creep, "builderUpgrade", upgradeEnergy(creep));
     });
 }
 
@@ -107,11 +107,11 @@ function performRepair(creep: Creep): boolean {
             calculateBuilderTarget(creep);
             return true;
         }
-        workOn(creep, structure, () => creep.repair(structure) === OK && countStat("work:repair"));
+        workOn(creep, structure, () => creep.repair(structure) === OK && countWork(creep, "repair", repairEnergy(creep, structure)));
         return true;
     }
     const site = target as ConstructionSite;
-    workOn(creep, site, () => creep.build(site) === OK && countStat("work:build"));
+    workOn(creep, site, () => creep.build(site) === OK && countWork(creep, "build", buildEnergy(creep, site)));
     return true;
 }
 

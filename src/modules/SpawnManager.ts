@@ -9,12 +9,23 @@
 
 import { bodyCost } from "../core/bodyBuilder";
 import { getBestOption } from "../core/options";
-import { mySpawns } from "../core/roomState";
+import { creepsByRole, mySpawns } from "../core/roomState";
 import { ECONOMY_SPAWN_ROLES, SpawnOption, SpawnRole, starvedRooms } from "../spawning/spawnRoles";
 import { markForBoosting } from "../labs/boosts";
 import { spawnEnergyStructures, spawnExitDirections } from "../spawning/spawnPlacement";
+import { recordSpawn } from "../utils/history";
 import { log } from "../utils/logger";
 import { countStat } from "../utils/stats";
+
+declare module "../spawning/spawnRoles" {
+    interface SpawnOption {
+        /**
+         * Why the role asks for this creep (quota inputs, e.g. "needs 12 WORK, energy 45k"), kept in
+         * the spawn log (utils/history.ts). Without it the log records the role's creep count at home.
+         */
+        reason?: string;
+    }
+}
 
 /**
  * Spawn request from a module. Creeps carry `memory.role` and are driven by the handler registered
@@ -32,6 +43,8 @@ export interface ExternalSpawnRequest {
     memory: Partial<CreepMemory> & { role: string };
     /** Ticks the request stays queued without being renewed (default 20) */
     ttl?: number;
+    /** Why the module asks for it (spawn log); default: the request id */
+    reason?: string;
 }
 
 const DEFAULT_REQUEST_TTL = 20;
@@ -145,7 +158,8 @@ class SpawnManager {
                 weight: request.weight ?? 0,
                 body: request.body,
                 memory: request.memory,
-                requestId: id
+                requestId: id,
+                reason: request.reason ?? id
             });
         }
         return options;
@@ -186,7 +200,7 @@ class SpawnManager {
             const closest = _.min(spawns, s => s.pos.getRangeTo(option.preferClosestSpawn!)) as StructureSpawn;
             if (closest.pos.getRangeTo(option.preferClosestSpawn) < 3) spawn = closest;
         }
-        if (this.trySpawn(room, spawn, option)) {
+        if (this.trySpawn(room, spawn, option, options)) {
             this.waiting.delete(room.name);
             starvedRooms.delete(room.name);
         } else {
@@ -207,7 +221,12 @@ class SpawnManager {
         }
     }
 
-    private trySpawn(room: Room, spawn: StructureSpawn, option: SpawnOption & { spawnRole: SpawnRole }): boolean {
+    private trySpawn(
+        room: Room,
+        spawn: StructureSpawn,
+        option: SpawnOption & { spawnRole: SpawnRole },
+        options: (SpawnOption & { spawnRole: SpawnRole })[]
+    ): boolean {
         const body = option.spawnRole.body(room, option);
         this.waitingOption.set(room.name, { priority: option.priority });
         if (body.length === 0) return false;
@@ -241,7 +260,20 @@ class SpawnManager {
         this.idleRoomUntil.delete(room.name);
         log.info("SpawnManager", `Spawning ${name} in ${room.name} (${body.length} parts, ${cost} energy, priority ${option.priority})`);
         countStat(`spawned:${option.role}`);
+        recordSpawn(room.name, option.role, option.priority, option.weight, cost, body.length, memory, this.reason(room, option, options));
         return true;
+    }
+
+    /** The option's own reason (else its role's creep count at home), the room energy and the runner-up */
+    private reason(room: Room, option: SpawnOption, options: SpawnOption[]): string {
+        const parts = [option.reason ?? `had ${creepsByRole(room.name, option.role).length}`];
+        // Remote options carry their source (remote/remoteSpawnRole.ts RemoteOption)
+        const target = (option as { remote?: { key?: string } }).remote?.key;
+        if (target) parts.push(`for ${target}`);
+        parts.push(`energy ${room.energyAvailable}/${room.energyCapacityAvailable}`);
+        const next = getBestOption(options.filter(o => o !== option));
+        if (next) parts.push(`next ${next.role} ${next.priority}/${Math.round(next.weight * 100) / 100}`);
+        return parts.join(", ");
     }
 
     private creepName(role: string): string {

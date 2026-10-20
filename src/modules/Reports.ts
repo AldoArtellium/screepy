@@ -1,7 +1,8 @@
 /**
  * Reports (Hivemind process/report.ts): every `interval` ticks (default 3000) a compact plain-text
  * report of the empire, sent with Game.notify (split in messages under 1000 characters) and logged:
- * GCL and RCL progress rates with ETAs, storage, energy income, CPU and bucket, global resets, module
+ * GCL and RCL progress rates with ETAs, storage, energy income (empire, then per room with its
+ * spending from the room counters of utils/history.ts), CPU and bucket, global resets, module
  * and role errors, throttled creeps, remotes, defense, expansion and attack. Also immediate alerts
  * (rate-limited): a room lost its last spawn (or the room itself), a controller close to downgrading,
  * a module failing repeatedly.
@@ -12,6 +13,7 @@
  * reports lives in `Memory.reportState` (a few hundred characters).
  */
 import { STARVED_TICKS } from "../remote/RemoteMining";
+import { roomCountersSince } from "../utils/history";
 import { log } from "../utils/logger";
 
 interface ReportSettings {
@@ -169,6 +171,29 @@ function progressGain(level: number, progress: number, previous: { level: number
     return undefined;
 }
 
+/**
+ * One line per owned room from the room counters (utils/history.ts: snapshots since the last report
+ * plus the current period), energy per tick: income local / remote, spending build / repair /
+ * upgrade / spawn, and the creeps of the room.
+ */
+function roomEconomyLines(since: number): string[] {
+    const totals = roomCountersSince(since);
+    const creeps = _.countBy(Game.creeps, c => c.memory.room ?? c.room.name);
+    const lines: string[] = [];
+    for (const room of myRooms()) {
+        const total = totals[room.name];
+        if (!total || total.ticks <= 0) continue;
+        const per = (key: string) => rate((total.counters[key] ?? 0) / total.ticks);
+        let spawn = 0;
+        for (const key in total.counters) if (key.startsWith("spawn:")) spawn += total.counters[key];
+        lines.push(
+            `  ${room.name} in local ${per("harvest")}, remote ${per("remoteHarvest")} | out build ${per("build")}, repair ${per("repair")}, ` +
+                `upgrade ${per("upgrade")}, spawn ${rate(spawn / total.ticks)} | ${creeps[room.name] ?? 0} creeps (${total.ticks}t)`
+        );
+    }
+    return lines;
+}
+
 export function buildReport(state: ReportState): string {
     const ticks = Math.max(1, Game.time - state.time);
     const counters = trackedCounters();
@@ -206,10 +231,11 @@ export function buildReport(state: ReportState): string {
         lines.push(line);
     }
 
-    // Energy harvested (WORK parts x HARVEST_POWER)
-    const local = (delta(counters, state.counters, "work:harvest") * HARVEST_POWER) / ticks;
-    const remote = (delta(counters, state.counters, "work:remoteHarvest") * HARVEST_POWER) / ticks;
+    // Energy harvested
+    const local = delta(counters, state.counters, "work:harvest") / ticks;
+    const remote = delta(counters, state.counters, "work:remoteHarvest") / ticks;
     lines.push(`Income ${rate(local + remote)}/t (local ${rate(local)}, remote ${rate(remote)})`);
+    lines.push(...roomEconomyLines(state.time));
 
     // CPU (tick CPU of the sampled ticks, from Memory.stats.cpu)
     const cpuAvg = state.ticks > 0 ? state.cpuSum / state.ticks : (Memory.stats?.cpuAvg ?? 0);

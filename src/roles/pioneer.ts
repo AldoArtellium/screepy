@@ -11,7 +11,7 @@ import { stayInPlace, whenInRange } from "../core/movement";
 import { effectiveEnergy, storageLocation } from "../core/roomState";
 import { PIONEER } from "../expansion/squadSpawnRole";
 import { trafficManager } from "../modules/TrafficManager";
-import { countStat } from "../utils/stats";
+import { buildEnergy, countWork, harvestEnergy, upgradeEnergy } from "../utils/history";
 import { fleeIfThreatened } from "./flee";
 import { registerRole } from "./registry";
 import { performGetEnergy } from "./transporter";
@@ -87,7 +87,7 @@ function build(creep: Creep): void {
 
     const site = buildTarget(creep);
     if (site) {
-        whenInRange(creep, 3, site, () => creep.build(site) === OK && countStat("work:pioneerBuild"));
+        whenInRange(creep, 3, site, () => creep.build(site) === OK && countWork(creep, "pioneerBuild", buildEnergy(creep, site)));
         return;
     }
     if (mine && controller) upgrade(creep, controller);
@@ -107,7 +107,7 @@ function buildTarget(creep: Creep): ConstructionSite | null {
 }
 
 function upgrade(creep: Creep, controller: StructureController): void {
-    whenInRange(creep, 3, controller, () => creep.upgradeController(controller) === OK && countStat("work:pioneerUpgrade"));
+    whenInRange(creep, 3, controller, () => creep.upgradeController(controller) === OK && countWork(creep, "pioneerUpgrade", upgradeEnergy(creep)));
 }
 
 /** Piles, the storage, containers, else harvest the closest active source */
@@ -138,7 +138,7 @@ function getEnergy(creep: Creep): void {
         // has a spawn), the path there fails every tick
         const source = creep.pos.findClosestByRange(FIND_SOURCES_ACTIVE, { filter: s => hasFreeTile(s.pos, creep) });
         if (source) {
-            whenInRange(creep, 1, source, () => creep.harvest(source) === OK && countStat("work:pioneerHarvest"));
+            whenInRange(creep, 1, source, () => creep.harvest(source) === OK && countWork(creep, "pioneerHarvest", harvestEnergy(creep, source)));
             return;
         }
     }

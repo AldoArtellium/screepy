@@ -85,11 +85,11 @@ function rate(samples: Sample[]): number | undefined {
     return (last.value - first.value) / (last.tick - first.tick);
 }
 
-/** Samples the empire-wide harvest counters (WORK parts that harvested, cumulated) */
+/** Samples the empire-wide harvest counters (energy harvested, cumulated) */
 export function sampleIncome(): void {
     const counters = Memory.stats?.counters ?? {};
-    pushSample(incomeSamples.local, (counters["work:harvest"] ?? 0) * HARVEST_POWER);
-    pushSample(incomeSamples.remote, (counters["work:remoteHarvest"] ?? 0) * HARVEST_POWER);
+    pushSample(incomeSamples.local, counters["work:harvest"] ?? 0);
+    pushSample(incomeSamples.remote, counters["work:remoteHarvest"] ?? 0);
     // CPU counters: one pass over the counters every SAMPLE_INTERVAL ticks
     if (Game.time - lastCpuSample < SAMPLE_INTERVAL) return;
     lastCpuSample = Game.time;
