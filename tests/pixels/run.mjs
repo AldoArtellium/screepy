@@ -57,9 +57,9 @@ const NOW = 1_800_000_000_000;
 const history = price => [1, 2, 3, 4].map(d => ({ date: `2026-10-0${d}`, avgPrice: price, stddevPrice: 0, volume: 100, transactions: 10 }));
 
 /** Fresh world: full bucket, CPU average at 40% of the limit, no hostile, no market activity */
-function world({ settings = "on", bucket = 10000, cpuAvg = 8, limit = 20, rooms = {}, resources = {}, credits = 0, unlocked = false, unlockedTime, orders = [], prices = {}, time = 1000 } = {}) {
+function world({ settings = "on", bucket = 10000, cpuAvg = 8, limit = 20, rooms = {}, resources = {}, credits = 0, unlocked = false, unlockedTime, orders = [], prices = {}, time = 1000, maxRooms } = {}) {
     const calls = { generatePixel: 0, unlock: 0, deals: [] };
-    globalThis.Memory = { pixels: settings === "on" ? true : (settings ?? undefined), stats: { cpuAvg, counters: {} }, rooms };
+    globalThis.Memory = { pixels: settings === "on" ? true : (settings ?? undefined), stats: { cpuAvg, counters: {} }, rooms, remoteMining: { sources: {}, lastSelect: 0, maxRooms } };
     globalThis.Game = {
         time,
         rooms: Object.fromEntries(Object.keys(rooms).map(name => [name, { name, controller: { my: true } }])),
@@ -98,9 +98,26 @@ check("full bucket, low CPU: one pixel", [calls.generatePixel, Memory.stats.coun
 calls = world({ bucket: 9999 });
 pixelsModule();
 check("bucket not full: none", calls.generatePixel, 0);
-calls = world({ cpuAvg: 13 });
+check("default maxCpuRatio 0.8", pixelSettings().maxCpuRatio, 0.8);
+calls = world({ cpuAvg: 15 });
 pixelsModule();
-check("CPU average above 60% of the limit: none", calls.generatePixel, 0);
+check("CPU average 75% of the limit (shard0: 15/20): one pixel", calls.generatePixel, 1);
+calls = world({ cpuAvg: 16 });
+pixelsModule();
+check("CPU average at 80% of the limit: none", calls.generatePixel, 0);
+calls = world({ cpuAvg: 15, settings: { maxCpuRatio: 0.6 } });
+pixelsModule();
+check("maxCpuRatio from Memory.pixels: none above it", calls.generatePixel, 0);
+calls = world({ cpuAvg: 15, maxRooms: 7 });
+pixelsModule();
+check("remote budget capped: none (the full bucket goes to a remote room)", [calls.generatePixel, Memory.pixelState?.refilling], [0, undefined]);
+calls = world({ cpuAvg: 15, maxRooms: 0 });
+pixelsModule();
+check("remote budget capped at 0 rooms: none", calls.generatePixel, 0);
+calls = world({ cpuAvg: 15 });
+delete Memory.remoteMining;
+pixelsModule();
+check("no remote mining memory (uncapped): one pixel", calls.generatePixel, 1);
 calls = world({ rooms: { W1N1: { enemies: { expires: 1100, safe: true } } } });
 pixelsModule();
 check("hostiles in an owned room: none", calls.generatePixel, 0);
@@ -129,7 +146,7 @@ Memory.stats.cpuAvg = 17;
 Game.time++;
 pixelsModule();
 check("CPU average above 80%: real bucket again", [Memory.pixelState.refilling, decisionBucket(), throttle(0)], [undefined, 4000, true]);
-calls = world();
+calls = world({ settings: { maxCpuRatio: 0.6 } });
 pixelsModule();
 Game.cpu.bucket = 10000;
 Game.time++;
@@ -144,6 +161,27 @@ pixelsModule();
 check("turned off while refilling: real bucket", decisionBucket(), 3000);
 calls = world({ bucket: 3000 });
 check("never generated: real bucket", decisionBucket(), 3000);
+
+// Refill vs the remote CPU budget: a capped budget must never read a refill bucket as full (it would add a room)
+calls = world({ cpuAvg: 12 });
+pixelsModule();
+Game.cpu.bucket = 6000;
+Game.time++;
+pixelsModule();
+check("uncapped while refilling: decisions see a full bucket", decisionBucket(), 10000);
+Memory.remoteMining.maxRooms = 7;
+check("budget just capped (same tick): flag still set", Memory.pixelState.refilling, true);
+Game.time++;
+pixelsModule();
+check("budget capped: refill dropped, real bucket", [Memory.pixelState.refilling, decisionBucket(), calls.generatePixel], [undefined, 6000, 1]);
+Game.cpu.bucket = 10000;
+Game.time++;
+pixelsModule();
+check("capped with a full bucket: still no pixel", [calls.generatePixel, decisionBucket()], [1, 10000]);
+delete Memory.remoteMining.maxRooms;
+Game.time++;
+pixelsModule();
+check("uncapped again: pixels again", calls.generatePixel, 2);
 
 // CPU unlock use
 calls = world({ bucket: 0, resources: { cpuUnlock: 2 } });
