@@ -29,6 +29,9 @@ export const REMOTE_HAULER = "remoteHauler";
 export const RESERVER = "reserver";
 export const REMOTE_BUILDER = "remoteBuilder";
 
+/** Reservation a second reserver of a room is spawned under (not in Hivemind: one per free tile around the controller) */
+const RESERVE_HOLD = 1000;
+
 declare global {
     interface CreepMemory {
         /** Remote source key (remote harvesters and haulers) */
@@ -206,6 +209,18 @@ function reserverOption(home: Room, source: RemoteSource): RemoteOption | null {
     const remaining = lastClaim ? Math.max(0, lastClaim.value + lastClaim.time - Game.time) : 0;
     const extra = _.sum(reservers, c => (c.spawning ? CREEP_CLAIM_LIFE_TIME : c.ticksToLive ?? 0) * c.getActiveBodyparts(CLAIM));
     if (remaining + extra - spawnTime - source.travelTime + maxAdditional > CONTROLLER_RESERVE_MAX) return null;
+    // A 1-CLAIM reserver only offsets the decay (Hivemind sent one per free tile, 4 on shard0 W28N5): another one
+    // only while the reservation left by those on their way, over the new creep's life, stays under RESERVE_HOLD
+    if (activeOnArrival.length > 0) {
+        const horizon = spawnTime + CREEP_CLAIM_LIFE_TIME;
+        const held = _.sum(
+            reservers,
+            c =>
+                Math.min(c.spawning ? CREEP_CLAIM_LIFE_TIME - source.travelTime : c.ticksToLive ?? 0, horizon) *
+                c.getActiveBodyparts(CLAIM)
+        );
+        if (remaining + held - horizon >= RESERVE_HOLD) return null;
+    }
     return { role: RESERVER, unit: "reserver", priority: 3, weight: 1 - source.travelTime / 100, remote: source };
 }
 
