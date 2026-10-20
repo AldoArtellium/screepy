@@ -19,12 +19,15 @@ import {
     sourcePos
 } from "../remote/RemoteMining";
 import { REMOTE_HARVESTER, REMOTE_HAULER } from "../remote/remoteSpawnRole";
+import { countRemoteDelivery } from "../utils/history";
 import { fleeIfThreatened } from "./flee";
 import { registerRole } from "./registry";
 import { performDeliver } from "./transporter";
 
 /** Source the hauler comes back from, for the stored path home (heap: a reset falls back to moveToRoom) */
 const returningFrom: Map<string, string> = new Map();
+/** Haulers whose energy of the current trip home was counted (remote balance), cleared outside home */
+const deliveredTrip: Set<string> = new Set();
 
 export function runRemoteHauler(creep: Creep): void {
     const used = creep.store.getUsedCapacity();
@@ -130,10 +133,17 @@ function deliver(creep: Creep): void {
     const home = creep.memory.room ?? creep.room.name;
     if (fleeIfThreatened(creep)) return;
     if (creep.room.name !== home) {
+        deliveredTrip.delete(creep.name);
         const source = getRemoteSource(returningFrom.get(creep.name));
         if (source && source.homeRoom === home && followPath(creep, remotePath(source), false, 45)) return;
         trafficManager.moveToRoom(creep, home, { priority: 45 });
         return;
+    }
+    // Remote balance (utils/history.ts): energy brought home, once per trip
+    const from = returningFrom.get(creep.name);
+    if (from && !deliveredTrip.has(creep.name)) {
+        countRemoteDelivery(from, creep.store.energy);
+        deliveredTrip.add(creep.name);
     }
     // At home: deliver like a transporter (spawn, extensions, towers, workers, storage, center pile)
     performDeliver(creep);

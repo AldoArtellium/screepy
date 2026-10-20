@@ -23,7 +23,7 @@ import {
     sourcePos
 } from "../remote/RemoteMining";
 import { REMOTE_BUILDER, REMOTE_HARVESTER } from "../remote/remoteSpawnRole";
-import { countStat } from "../utils/stats";
+import { buildEnergy, countWork, repairEnergy } from "../utils/history";
 import { fleeIfThreatened } from "./flee";
 import { registerRole } from "./registry";
 
@@ -195,7 +195,7 @@ function buildRoadOnPath(creep: Creep, source: RemoteSource, work: number, state
             if (state.acted) return true;
             if (creep.repair(road) === OK) {
                 state.acted = true;
-                countStat("work:remoteRepair", work);
+                countWork(creep, "remoteRepair", repairEnergy(creep, road));
             }
             if (road.hits < road.hitsMax - 2 * work * REPAIR_POWER) return true;
             continue;
@@ -219,7 +219,7 @@ function repairNearby(creep: Creep, work: number, state: { acted: boolean }): bo
     if (!damaged) return false;
     if (creep.repair(damaged) === OK) {
         state.acted = true;
-        countStat("work:remoteRepair", work);
+        countWork(creep, "remoteRepair", repairEnergy(creep, damaged));
     }
     return damaged.hits < damaged.hitsMax - 2 * work * REPAIR_POWER;
 }
@@ -232,7 +232,7 @@ function ensureContainer(creep: Creep, source: RemoteSource, work: number, state
         if (state.acted) return true;
         if (creep.repair(container) === OK) {
             state.acted = true;
-            countStat("work:remoteRepair", work);
+            countWork(creep, "remoteRepair", repairEnergy(creep, container));
         }
         return container.hits < container.hitsMax - 2 * work * REPAIR_POWER;
     }
@@ -253,7 +253,7 @@ function buildNearby(creep: Creep, work: number, state: { acted: boolean }): boo
     if (state.acted) return true;
     if (creep.build(site) === OK) {
         state.acted = true;
-        countStat("work:remoteBuild", work);
+        countWork(creep, "remoteBuild", buildEnergy(creep, site));
     }
     return site.progressTotal - site.progress > work * BUILD_POWER * 2;
 }

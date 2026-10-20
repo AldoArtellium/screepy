@@ -9,7 +9,7 @@ import { intelManager } from "../modules/IntelManager";
 import { trafficManager } from "../modules/TrafficManager";
 import { containerPos, getRemoteSource, hasRemoteContainer, remoteContainer, remotePath, sourcePos } from "../remote/RemoteMining";
 import { REMOTE_HARVESTER } from "../remote/remoteSpawnRole";
-import { countStat } from "../utils/stats";
+import { buildEnergy, countRemoteHarvest, countWork, harvestEnergy } from "../utils/history";
 import { fleeIfThreatened } from "./flee";
 import { performRecycle } from "./recycle";
 import { registerRole } from "./registry";
@@ -35,7 +35,7 @@ export function runRemoteHarvester(creep: Creep): void {
     if (site && creep.pos.inRangeTo(site, 3)) {
         if (work > 0 && creep.store.energy >= Math.min(BUILD_POWER * work, creep.store.getCapacity())) {
             if (creep.build(site) === OK) {
-                countStat("work:remoteBuild");
+                countWork(creep, "remoteBuild", buildEnergy(creep, site));
                 trafficManager.requestMove(creep, creep.pos, { range: 0 });
                 return;
             }
@@ -64,7 +64,7 @@ export function runRemoteHarvester(creep: Creep): void {
     const onContainer = container && !container.pos.lookFor(LOOK_CREEPS).some(c => c !== creep);
     const spot = onContainer ? container!.pos : target;
     whenInRange(creep, onContainer ? 0 : 1, spot, () => {
-        if (mine.energy > 0 && creep.harvest(mine) === OK) countStat("work:remoteHarvest", creep.getActiveBodyparts(WORK));
+        if (mine.energy > 0 && creep.harvest(mine) === OK) countRemoteHarvest(creep, source.key, harvestEnergy(creep, mine));
         if (container && !creep.pos.isEqualTo(container.pos) && creep.store.getFreeCapacity() < creep.getActiveBodyparts(WORK) * 2) {
             creep.transfer(container, RESOURCE_ENERGY);
         }

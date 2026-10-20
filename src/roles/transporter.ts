@@ -9,6 +9,7 @@ import { clearOrder, currentEnergy, Order, roomBays, setOrder, storageLocation }
 import { DispatchContext } from "../dispatcher/Dispatcher";
 import { destinationDispatcher } from "../dispatcher/destinations";
 import { sourceDispatcher } from "../dispatcher/sources";
+import { countCreep } from "../utils/history";
 import { countStat } from "../utils/stats";
 import { registerRole } from "./registry";
 
@@ -31,7 +32,7 @@ export function runTransporter(creep: Creep): void {
     const idle = idlingFor.get(creep.name) ?? 0;
     if (idle > 0) {
         idlingFor.set(creep.name, idle - 1);
-        countStat(`idle:${creep.memory.role}`);
+        countCreep(creep, `idle:${creep.memory.role}`);
         stayInPlace(creep);
         return;
     }

@@ -7,7 +7,7 @@
 import { whenInRange } from "../core/movement";
 import { controllerContainer, controllerLink, creepsByRole, creepsWithOrder } from "../core/roomState";
 import { roomPlanner } from "../planner/RoomPlanner";
-import { countStat } from "../utils/stats";
+import { countWork, upgradeEnergy } from "../utils/history";
 import { registerRole } from "./registry";
 import { performGetEnergy } from "./transporter";
 
@@ -47,7 +47,7 @@ function performUpgrade(creep: Creep, container: StructureContainer | null, link
         const spot = roomPlanner.getPlan(creep.room.name)?.getLocations("upgrader.0")[0];
         whenInRange(creep, 0, spot ?? controller.pos);
     } else {
-        whenInRange(creep, 3, controller, () => creep.upgradeController(controller) === OK && countStat("work:upgrade"));
+        whenInRange(creep, 3, controller, () => creep.upgradeController(controller) === OK && countWork(creep, "upgrade", upgradeEnergy(creep)));
     }
 
     // Keep refilling at the link, else the container, while upgrading

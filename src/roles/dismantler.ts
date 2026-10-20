@@ -24,7 +24,7 @@ function runDismantler(creep: Creep): void {
         }
         const target = dismantleTarget(pos)!;
         whenInRange(creep, 1, pos, () => {
-            if (creep.dismantle(target) === OK) countStat("work:dismantle");
+            if (creep.dismantle(target) === OK) countStat("work:dismantle", Math.min(target.hits, creep.getActiveBodyparts(WORK) * DISMANTLE_POWER));
         });
         return;
     }

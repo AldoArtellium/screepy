@@ -8,6 +8,7 @@
 import { whenInRange } from "../core/movement";
 import { clearOrder, creepsByRole, roomBays, sourceContainer, sourceLink, structuresOfType } from "../core/roomState";
 import { roomPlanner } from "../planner/RoomPlanner";
+import { countWork, harvestEnergy } from "../utils/history";
 import { countStat } from "../utils/stats";
 import { registerRole } from "./registry";
 import { performDeliver } from "./transporter";
@@ -77,7 +78,7 @@ function performHarvest(creep: Creep): void {
 
     const arrived = whenInRange(creep, range, target, () => {
         // An empty source would only fail the call (Overmind miner: harvest only with energy left)
-        if (source.energy > 0 && creep.harvest(source) === OK) countStat("work:harvest", creep.getActiveBodyparts(WORK));
+        if (source.energy > 0 && creep.harvest(source) === OK) countWork(creep, "harvest", harvestEnergy(creep, source));
         if (depositInBay(creep)) return;
         depositResources(creep, source);
     });
