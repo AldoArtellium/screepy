@@ -34,8 +34,16 @@ interface MoveOptions {
 interface StuckState {
     tick: number;
     pos: string;
+    x: number;
+    y: number;
+    roomName: string;
     stuckTicks: number;
+    /** Consecutive ticks the creep landed on the mirror of its previous tile across a room edge */
+    edgeBounces: number;
 }
+
+/** Edge crossings in a row onto the mirrored tile (A, B, A) that make a creep "bouncing" */
+export const EDGE_BOUNCES = 2;
 
 /** Ticks before the idle-position candidate list is rebuilt */
 const IDLE_CACHE_TTL = 500;
@@ -92,11 +100,23 @@ class TrafficManager {
             this.holdRange(creep, targetPos, range, 101 - Math.min(100, Math.max(0, priority)));
             return OK;
         }
+        if (!inRange && range === 0) {
+            const hop = this.sameEdgeHop(creep, targetPos);
+            if (hop) {
+                countStat("move:edgeHop");
+                return move(creep, [hop], 101 - Math.min(100, Math.max(0, priority)));
+            }
+        }
+        // Bounced between two rooms by an exit tile (the step off it failed, usually a creep on the tile
+        // inside): the tile changes every tick, so neither our stuck count nor cartographer's sees it.
+        // Repath around creeps, through them if that leaves no path.
+        const bouncing = this.getEdgeBounces(creep) >= EDGE_BOUNCES;
+        if (bouncing) clearCachedPath(creep);
         const moveOpts = {
             // cartographer: higher value = more important
             priority: 101 - Math.min(100, Math.max(0, priority)),
             reusePath: options.reusePath,
-            avoidCreeps: options.combat ?? false,
+            avoidCreeps: (options.combat ?? false) || bouncing,
             visualizePathStyle: options.visualize ? { stroke: options.combat ? "#ff0000" : "#ffffff", lineStyle: "dashed" as const } : undefined
         };
         // Stuck creeps: cartographer repaths with avoidCreeps, which marks every creep tile impassable,
@@ -109,6 +129,10 @@ class TrafficManager {
         const attempt = (maxRooms?: number): ScreepsReturnCode => {
             const opts = maxRooms ? { ...moveOpts, maxRooms } : moveOpts;
             let result = moveTo(creep, goal, opts, { avoidCreeps: avoidCreepsWhenStuck });
+            if (result === ERR_NO_PATH && bouncing && !options.combat) {
+                countStat("moveRetry");
+                result = moveTo(creep, goal, { ...opts, avoidCreeps: false }, { avoidCreeps: false });
+            }
             if (result === ERR_NO_PATH && stuck && avoidCreepsWhenStuck && !moveOpts.avoidCreeps) {
                 // Creeps closed every way to the goal: the failed fallback reset the cached path, repath through them
                 countStat("moveRetry");
@@ -148,6 +172,40 @@ class TrafficManager {
         this.trackStuck(creep, false);
         const p = priority ?? this.getCreepPriority(creep);
         return move(creep, [pos], 101 - Math.min(100, Math.max(0, p)));
+    }
+
+    /**
+     * Engine PathFinder bug (native JPS, @screeps/driver pf.cc): from an exit tile, an exit tile of the
+     * same edge 1 or 2 tiles away is never reached at range 0 (incomplete path, ERR_NO_PATH), even on
+     * plain terrain and whatever maxRooms: the border rules only let the search leave the edge, and the
+     * jump rules never turn back onto it that close (3+ tiles away works). Step onto the inner tile next
+     * to both instead; from there the target is one step away. Null when the case doesn't apply or the
+     * inner tiles are blocked.
+     */
+    private sameEdgeHop(creep: Creep | PowerCreep, targetPos: RoomPosition): RoomPosition | null {
+        const { x, y, roomName } = creep.pos;
+        if (targetPos.roomName !== roomName || creep.pos.getRangeTo(targetPos) > 2) return null;
+        const onX = (x === 0 || x === 49) && targetPos.x === x;
+        const onY = (y === 0 || y === 49) && targetPos.y === y;
+        if (!onX && !onY) return null;
+        const room = Game.rooms[roomName];
+        if (!room) return null;
+        const terrain = room.getTerrain();
+        const obstacles = this.roomObstacles(room);
+        // Inner tiles adjacent to both ends, the middle one first
+        const from = onY ? x : y;
+        const to = onY ? targetPos.x : targetPos.y;
+        const inner = onY ? (y === 0 ? 1 : 48) : x === 0 ? 1 : 48;
+        const candidates = [Math.round((from + to) / 2), from, to].filter(
+            (c, i, all) => all.indexOf(c) === i && Math.abs(c - from) <= 1 && Math.abs(c - to) <= 1
+        );
+        for (const c of candidates) {
+            const hx = onY ? c : inner;
+            const hy = onY ? inner : c;
+            if (terrain.get(hx, hy) === TERRAIN_MASK_WALL || obstacles.has(hy * 50 + hx)) continue;
+            return new RoomPosition(hx, hy, roomName);
+        }
+        return null;
     }
 
     /**
@@ -224,17 +282,33 @@ class TrafficManager {
         return state.stuckTicks;
     }
 
+    /**
+     * Consecutive ticks the creep landed on the mirror of its previous tile across a room edge, this
+     * tick included: 1 for a normal crossing, 2+ for a creep bounced between two rooms by an exit tile
+     * it never leaves (its tile changes every tick, so the stuck count stays at 0).
+     */
+    getEdgeBounces(creep: Creep | PowerCreep): number {
+        const state = this.stuck.get(creep.name);
+        if (!state) return 0;
+        if (state.tick === Game.time) return state.edgeBounces;
+        if (state.tick < Game.time - 1) return 0;
+        return isEdgeMirror(state, creep.pos) ? state.edgeBounces + 1 : 0;
+    }
+
     private trackStuck(creep: Creep | PowerCreep, inRange: boolean): void {
-        const posKey = `${creep.pos.roomName}:${creep.pos.x},${creep.pos.y}`;
+        const { x, y, roomName } = creep.pos;
+        const posKey = `${roomName}:${x},${y}`;
         const prev = this.stuck.get(creep.name);
         if (prev?.tick === Game.time) return;
 
         let stuckTicks = 0;
+        let edgeBounces = 0;
         const fatigue = "fatigue" in creep ? creep.fatigue : 0;
-        if (!inRange && fatigue === 0 && prev && prev.tick === Game.time - 1 && prev.pos === posKey) {
-            stuckTicks = prev.stuckTicks + 1;
+        if (prev && prev.tick === Game.time - 1) {
+            if (!inRange && fatigue === 0 && prev.pos === posKey) stuckTicks = prev.stuckTicks + 1;
+            if (isEdgeMirror(prev, creep.pos)) edgeBounces = prev.edgeBounces + 1;
         }
-        this.stuck.set(creep.name, { tick: Game.time, pos: posKey, stuckTicks });
+        this.stuck.set(creep.name, { tick: Game.time, pos: posKey, x, y, roomName, stuckTicks, edgeBounces });
     }
 
     /**
@@ -360,6 +434,14 @@ class TrafficManager {
             requestsThisTick: this.requestsTick === Game.time ? this.requestsThisTick : 0
         };
     }
+}
+
+/** `b` is the tile across a room edge from `a` (where the engine carries a creep standing on exit tile `a`) */
+function isEdgeMirror(a: { x: number; y: number; roomName: string }, b: RoomPosition): boolean {
+    if (a.roomName === b.roomName) return false;
+    if (a.x === b.x) return (a.y === 0 && b.y === 49) || (a.y === 49 && b.y === 0);
+    if (a.y === b.y) return (a.x === 0 && b.x === 49) || (a.x === 49 && b.x === 0);
+    return false;
 }
 
 /**

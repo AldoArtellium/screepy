@@ -3,8 +3,8 @@
  * intent when already there) every tick, run the action once in range.
  */
 
-import { trafficManager } from "../modules/TrafficManager";
-import { countStat } from "../utils/stats";
+import { EDGE_BOUNCES, trafficManager } from "../modules/TrafficManager";
+import { countStat, recordSample } from "../utils/stats";
 
 export function whenInRange(
     creep: Creep,
@@ -28,6 +28,11 @@ export function stayInPlace(creep: Creep): void {
 const DETOUR_TICKS = 5;
 /** Stuck ticks on a stored path before the detour */
 const STUCK_TICKS = 3;
+
+/** Tile on a room edge: the engine carries a creep left there to the next room */
+function isExitTile(pos: RoomPosition): boolean {
+    return pos.x === 0 || pos.x === 49 || pos.y === 0 || pos.y === 49;
+}
 
 /** Last path index and detour end per creep (heap; lost on a global reset, then looked up again) */
 const pathIndexCache: Map<string, number> = new Map();
@@ -61,8 +66,15 @@ export function followPath(creep: Creep, path: RoomPosition[], backwards: boolea
     }
     if (path.length === 0) return false;
     if ((detourUntil.get(creep.name) ?? 0) > Game.time) return false;
-    if (trafficManager.getStuckTicks(creep) >= STUCK_TICKS) {
+    const bounced = trafficManager.getEdgeBounces(creep) >= EDGE_BOUNCES;
+    if (bounced || trafficManager.getStuckTicks(creep) >= STUCK_TICKS) {
         detourUntil.set(creep.name, Game.time + DETOUR_TICKS);
+        if (bounced) {
+            countStat("move:edgeBounce");
+            const index = pathIndexOf(creep, path);
+            const where = `${index === null ? "off" : `at ${index}`}/${path.length} ${backwards ? "back" : "fwd"}`;
+            recordSample("edgeBounces", `${creep.memory.role} ${creep.pos} ${where}`);
+        }
         countStat("move:pathDetour");
         return false;
     }
@@ -79,12 +91,18 @@ export function followPath(creep: Creep, path: RoomPosition[], backwards: boolea
     return true;
 }
 
+/**
+ * Exit tiles of the path are never targets: a creep stepping onto one is carried to the next room off
+ * the path, and from an exit tile the engine PathFinder can't reach an exit tile of the same edge 1-2
+ * tiles away (see TrafficManager.sameEdgeHop): the creep stayed on its exit tile and bounced between
+ * the two rooms every tick (shard0 W29N6/W29N7). The inner tile next to the crossing is used instead.
+ */
 function rejoinPath(creep: Creep, path: RoomPosition[], backwards: boolean, priority?: number): boolean {
     let best = -1;
     let bestRange = Infinity;
     for (let i = 0; i < path.length; i++) {
         const pos = path[i];
-        if (pos.roomName !== creep.pos.roomName) continue;
+        if (pos.roomName !== creep.pos.roomName || isExitTile(pos)) continue;
         const range = creep.pos.getRangeTo(pos);
         // Equal range: the tile further along the way wins
         const ahead = best === -1 || (backwards ? i < best : i > best);
@@ -106,7 +124,7 @@ function rejoinPath(creep: Creep, path: RoomPosition[], backwards: boolean, prio
     let targetRange = Infinity;
     for (let i = 0; i < path.length; i++) {
         const pos = path[i];
-        if (pos.roomName !== creep.pos.roomName || i === 0) continue;
+        if (pos.roomName !== creep.pos.roomName || i === 0 || isExitTile(pos)) continue;
         const range = creep.pos.getRangeTo(pos);
         if (range < targetRange && pos.lookFor(LOOK_CREEPS).length === 0) {
             target = i;
