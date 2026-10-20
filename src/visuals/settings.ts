@@ -3,7 +3,15 @@
  * layers off (`Memory.visuals = { map: false }`); a layer not listed is on.
  */
 
-export type VisualLayer = "panel" | "plan" | "spawn" | "mapRemotes" | "mapStrategy" | "mapCreeps" | "mapThreats";
+export type VisualLayer =
+    | "panel"
+    | "plan"
+    | "spawn"
+    | "mapRemotes"
+    | "mapStrategy"
+    | "mapCreeps"
+    | "mapThreats"
+    | "mapPanel";
 
 declare global {
     interface Memory {

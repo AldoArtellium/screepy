@@ -1,23 +1,36 @@
 /**
  * World map labels shared by every map layer: each layer queues its texts with a priority and the
  * positions it accepts, nearest first; `flush` places them by priority (then queue order) at the
- * first position whose box overlaps no label placed yet, in world coordinates so labels spilling
- * into a neighbour room are seen too. A label with no free position is drawn at its first one when
- * `force` is set, else left out (the layer's dots and lines still show the state).
+ * first position whose box overlaps no label placed yet nor a blocked area (the map panel), in world
+ * coordinates so labels spilling into a neighbour room are seen too. A label with no free position
+ * is drawn at its first one when `force` is set, else left out (the layer's dots and lines still
+ * show the state).
  */
 
-import { parseRoomName } from "../utils/rooms";
+import { parseRoomName, roomNameFromCoords } from "../utils/rooms";
 
-/** Map text width per character, in room tiles per font unit (measured on the map at font 6) */
-const CHAR_WIDTH = 0.42;
-/** Room tiles per room on the world grid (a room is 50 tiles, a 1-tile gap keeps labels apart) */
+/**
+ * Character widths in font units (Arial metrics: "7.4/t · 54t · 1H" at font 6 sums to 37.7 tiles,
+ * 38 measured on the client map)
+ */
+const NARROW = " .,:;'|!()[]/·ijlftI";
+const CHAR_WIDTHS: { [char: string]: number } = { r: 0.333, w: 0.722, m: 0.833, W: 0.944, M: 0.833, "%": 0.889 };
+function charWidth(char: string): number {
+    if (CHAR_WIDTHS[char] !== undefined) return CHAR_WIDTHS[char];
+    if (NARROW.includes(char)) return 0.278;
+    if (char >= "0" && char <= "9") return 0.556;
+    if (char >= "A" && char <= "Z") return 0.72;
+    return 0.53;
+}
+/** Room tiles per room on the world grid */
 const ROOM_SIZE = 50;
+const PADDING = 0.6;
 
 export const LABEL_BACKDROP = "#101010";
 
 /** Text style on a dark backdrop, readable on any terrain */
 export function labelStyle(color: string, fontSize: number, opacity = 0.85): MapTextStyle {
-    return { color, fontSize, backgroundColor: LABEL_BACKDROP, backgroundPadding: 0.6, opacity };
+    return { color, fontSize, backgroundColor: LABEL_BACKDROP, backgroundPadding: PADDING, opacity };
 }
 
 /** Label priorities: higher is placed first */
@@ -30,7 +43,8 @@ export const LABEL_PRIORITY = {
     creep: 5
 };
 
-interface Box {
+/** Area on the world grid, in world tiles */
+export interface Box {
     x1: number;
     y1: number;
     x2: number;
@@ -46,19 +60,39 @@ interface Label {
     order: number;
 }
 
-/** Width and height of a label (room tiles) */
-export function labelSize(text: string, fontSize: number): { width: number; height: number } {
-    const padding = 2 * 0.6;
-    return { width: text.length * CHAR_WIDTH * fontSize + padding, height: fontSize + padding };
+/** Width of a text without backdrop (room tiles) */
+export function textWidth(text: string, fontSize: number): number {
+    let width = 0;
+    for (const char of text) width += charWidth(char);
+    return width * fontSize;
 }
 
-/** Text centered horizontally on x, the box mostly above y (map texts sit on their baseline) */
-function boxAt(pos: RoomPosition, width: number, height: number): Box | undefined {
+/** Width and height of a label with its backdrop (room tiles) */
+export function labelSize(text: string, fontSize: number): { width: number; height: number } {
+    return { width: textWidth(text, fontSize) + 2 * PADDING, height: fontSize + 2 * PADDING };
+}
+
+/** World tile of a room position */
+export function toWorld(pos: RoomPosition): { x: number; y: number } | undefined {
     const room = parseRoomName(pos.roomName);
     if (!room) return undefined;
-    const x = room.wx * ROOM_SIZE + pos.x;
-    const y = room.wy * ROOM_SIZE + pos.y;
-    return { x1: x - width / 2, x2: x + width / 2, y1: y - height * 0.75, y2: y + height * 0.25 };
+    return { x: room.wx * ROOM_SIZE + pos.x, y: room.wy * ROOM_SIZE + pos.y };
+}
+
+/** Room position of a world tile, rounded (room positions are whole tiles) */
+export function fromWorld(worldX: number, worldY: number): RoomPosition {
+    const x = Math.round(worldX);
+    const y = Math.round(worldY);
+    const wx = Math.floor(x / ROOM_SIZE);
+    const wy = Math.floor(y / ROOM_SIZE);
+    return new RoomPosition(x - wx * ROOM_SIZE, y - wy * ROOM_SIZE, roomNameFromCoords(wx, wy));
+}
+
+/** Text centered on the position (a backdrop centers map texts vertically too) */
+function boxAt(pos: RoomPosition, width: number, height: number): Box | undefined {
+    const world = toWorld(pos);
+    if (!world) return undefined;
+    return { x1: world.x - width / 2, x2: world.x + width / 2, y1: world.y - height / 2, y2: world.y + height / 2 };
 }
 
 function overlaps(a: Box, b: Box): boolean {
@@ -73,6 +107,7 @@ export function clampX(x: number, width: number): number {
 
 export class MapLabels {
     private labels: Label[] = [];
+    private blocked: Box[] = [];
 
     /** Queues a text; candidates nearest first */
     add(text: string, candidates: RoomPosition[], style: MapTextStyle, priority: number, force = false): void {
@@ -80,9 +115,14 @@ export class MapLabels {
         this.labels.push({ text, candidates, style, priority, force, order: this.labels.length });
     }
 
+    /** Keeps labels out of an area (world tiles) */
+    block(box: Box): void {
+        this.blocked.push(box);
+    }
+
     /** Places and draws every queued label; returns how many were left out */
     flush(visual: MapVisual): number {
-        const placed: Box[] = [];
+        const placed: Box[] = [...this.blocked];
         let skipped = 0;
         this.labels.sort((a, b) => b.priority - a.priority || a.order - b.order);
         for (const label of this.labels) {
@@ -108,6 +148,7 @@ export class MapLabels {
             visual.text(label.text, chosen.pos, label.style);
         }
         this.labels = [];
+        this.blocked = [];
         return skipped;
     }
 }
