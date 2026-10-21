@@ -150,9 +150,19 @@ export function roomEnergyPerCreep(
 export const BUDGET_HIGH = 0.95;
 /** Below this share (bucket > 9000) it allows one more */
 export const BUDGET_LOW = 0.75;
-/** Bucket counted as full, and how long it must stay full to allow a room up to BUDGET_HIGH */
+/** Bucket counted as full, and how long it must stay full to allow a room while above BUDGET_LOW */
 export const BUDGET_FULL_BUCKET = 9900;
 export const BUDGET_FULL_TICKS = 1000;
+/**
+ * One more room only when the average plus that room's CPU stays under this share of the limit:
+ * a margin under BUDGET_HIGH, so the room added is not dropped again (shard0 at ~90% of 20 CPU:
+ * 7 -> 8 -> 7 rooms in 5 of 6 windows of 1000 ticks, the bucket falling)
+ */
+export const BUDGET_FIT = 0.9;
+/** Least CPU per tick counted for one remote room (official CPU with intents, ~1.2 on shard0) */
+export const BUDGET_ROOM_CPU_MIN = 1.2;
+/** No room added for this many ticks after a drop: the dropped room's creeps die out, the average settles */
+export const BUDGET_RAISE_HOLD = 5000;
 /** Weight of one tick in the CPU average: ~400 ticks */
 const CPU_AVG_DECAY = 1 / 400;
 
@@ -176,6 +186,15 @@ export interface BudgetState {
     /** Remote rooms mined now, and rooms the homes would mine without a cap */
     currentRooms: number;
     possibleRooms: number;
+    /** Measured CPU per tick of one remote room (its remote creeps; undefined: not measured yet) */
+    roomCpu?: number;
+    /** Ticks since the cap last went down (undefined: never) */
+    ticksSinceDrop?: number;
+}
+
+/** CPU counted for one more remote room: the measurement, at least BUDGET_ROOM_CPU_MIN */
+export function budgetRoomCpu(measured: number | undefined): number {
+    return Math.max(BUDGET_ROOM_CPU_MIN, measured ?? 0);
 }
 
 /** Next cap on remote rooms (undefined: none); the caller limits the changes to one per 1000 ticks */
@@ -183,6 +202,9 @@ export function budgetRooms(state: BudgetState): number | undefined {
     const { cpuAvg, limit, bucket, maxRooms } = state;
     if (cpuAvg > limit * BUDGET_HIGH || bucket < 5000) return Math.max(0, state.currentRooms - 1);
     if (maxRooms === undefined) return undefined;
+    if (state.ticksSinceDrop !== undefined && state.ticksSinceDrop < BUDGET_RAISE_HOLD) return maxRooms;
+    const fits = cpuAvg + budgetRoomCpu(state.roomCpu) <= limit * BUDGET_FIT;
+    if (!fits) return maxRooms;
     const spare = cpuAvg < limit * BUDGET_LOW && bucket > 9000;
     // A bucket full for long: the CPU left over is spent on nothing (shard0 W27N5 at 15/20 stayed capped)
     const unused = state.fullBucketTicks >= BUDGET_FULL_TICKS;
