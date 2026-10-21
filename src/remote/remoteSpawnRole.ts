@@ -23,6 +23,7 @@ import {
     remoteSources,
     sourceEnergyCapacity
 } from "./RemoteMining";
+import { cpuPressure, reservationValue } from "./remoteIncome";
 
 export const REMOTE_HARVESTER = "remoteHarvester";
 export const REMOTE_HAULER = "remoteHauler";
@@ -47,13 +48,60 @@ function energyLimit(room: Room): number {
     return Math.min(room.energyCapacityAvailable, Math.max(room.energyCapacityAvailable * 0.9, room.energyAvailable));
 }
 
+/** Our reservation left on a remote controller: live when visible, else extrapolated from our last reserver's lastClaim */
+function reservationLeft(roomName: string): number {
+    const reservation = Game.rooms[roomName]?.controller?.reservation;
+    if (reservation) return reservation.username === Memory.username ? reservation.ticksToEnd : 0;
+    const lastClaim = Memory.rooms[roomName]?.lastClaim;
+    return lastClaim ? Math.max(0, lastClaim.value + lastClaim.time - Game.time) : 0;
+}
+
+/** reservationPays per home and remote room, for the current tick (haulerOption sums every source's demand) */
+let paysCache: { time: number; rooms: { [key: string]: boolean } } = { time: -1, rooms: {} };
+
+/**
+ * Whether a home keeps a remote room reserved. Not in Hivemind (which reserves every room it can):
+ * while CPU is the binding constraint (`cpuPressure`: remote budget capped, or CPU average above 85%
+ * of the limit), a room whose reservation adds less energy per official CPU than a neutral source
+ * would mine with that CPU is left neutral (remoteIncome reservationValue: in practice the rooms
+ * mined for one source). Another player's or an invader's reservation is still attacked (reserverOption).
+ */
+function reservationPays(home: Room, roomName: string): boolean {
+    if (!cpuPressure()) return true;
+    if (paysCache.time !== Game.time) paysCache = { time: Game.time, rooms: {} };
+    const key = `${home.name}>${roomName}`;
+    if (paysCache.rooms[key] === undefined) {
+        const sources = remoteSources(home.name).filter(s => s.room === roomName);
+        const economy = {
+            generation: SOURCE_ENERGY_CAPACITY / ENERGY_REGEN_TIME,
+            distance: sources.length > 0 ? _.sum(sources, s => s.travelTime) / sources.length : 0,
+            roads: haulerMove(home) === MoveMode.ROAD,
+            maintenanceWork: 0
+        };
+        paysCache.rooms[key] =
+            sources.length === 0 || reservationValue(economy, sources.length, home.energyCapacityAvailable).pays;
+    }
+    return paysCache.rooms[key];
+}
+
+/**
+ * Energy a remote source regenerates: 3000 while our reservation runs or the room is reserved, 1500
+ * for a room left neutral (RemoteMining sourceEnergyCapacity assumes every reservable room reserved)
+ */
+function expectedSourceCapacity(home: Room, source: RemoteSource): number {
+    const capacity = sourceEnergyCapacity(home, source);
+    if (capacity !== SOURCE_ENERGY_CAPACITY || reservationLeft(source.room) > 0) return capacity;
+    return reservationPays(home, source.room) ? capacity : SOURCE_ENERGY_NEUTRAL_CAPACITY;
+}
+
 /** CARRY needed to bring a source's output home: 2 * travel * energy per tick / 50 */
 function requiredCarry(home: Room, source: RemoteSource): number {
-    return Math.ceil((2 * source.travelTime * sourceEnergyCapacity(home, source)) / ENERGY_REGEN_TIME / CARRY_CAPACITY);
+    const capacity = expectedSourceCapacity(home, source);
+    return Math.ceil((2 * source.travelTime * capacity) / ENERGY_REGEN_TIME / CARRY_CAPACITY);
 }
 
 function requiredWork(home: Room, source: RemoteSource): number {
-    return sourceEnergyCapacity(home, source) / ENERGY_REGEN_TIME / HARVEST_POWER;
+    return expectedSourceCapacity(home, source) / ENERGY_REGEN_TIME / HARVEST_POWER;
 }
 
 function harvesterSize(home: Room, source: RemoteSource): number {
@@ -201,6 +249,8 @@ function reserverOption(home: Room, source: RemoteSource): RemoteOption | null {
     if (!intel?.controllerPos || intel.owner) return null;
     const positions = intel.reservePositions ?? 0;
     const reservedByOther = !!intel.reserver && intel.reserver !== Memory.username;
+    // Under CPU pressure a reservation that doesn't pay per CPU is left out; another one is still attacked
+    if (!reservedByOther && !reservationPays(home, source.room)) return null;
     if (home.energyCapacityAvailable < 1300 && !(home.energyCapacityAvailable >= 650 && (positions > 1 || reservedByOther))) {
         return null;
     }

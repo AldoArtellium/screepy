@@ -35,6 +35,8 @@ export function runReserver(creep: Creep): void {
             creep.attackController(controller);
             return;
         }
+        // At the cap a reserve adds nothing but still costs an intent (0.2 official CPU)
+        if (mine && reservation!.ticksToEnd + creep.getActiveBodyparts(CLAIM) > CONTROLLER_RESERVE_MAX) return;
         creep.reserveController(controller);
     });
 }
