@@ -418,7 +418,7 @@ function neededBuilderWork(room: Room): number {
     else if (energy > 400000) work *= 2;
     else if (energy > 200000) work *= 1.5;
     if (rcl > 3) work += sites / 2;
-    if (!hasStorage) work = Math.min(work, Math.max(MIN_BUILDER_WORK, affordableBuilderWork(room, energy, sites > 0)));
+    if (!hasStorage) work = Math.min(work, Math.max(MIN_BUILDER_WORK, affordableBuilderWork(room, energy)));
     return work;
 }
 
@@ -429,8 +429,9 @@ function neededBuilderWork(room: Room): number {
  * builders empty and its extensions empty, the spawn busy replacing them.
  * Budget = local harvest + remote energy hauled home - spawn upkeep of the other creeps - upgraders
  * + the stock spent within 250 ticks (energy left lying around asks for more builders, as in
- * Hivemind); a builder WORK spends BUILD_POWER (UPGRADE_CONTROLLER_POWER without sites: builders
- * upgrade) on half of its ticks, the other half fetching, plus its own body upkeep.
+ * Hivemind); a builder WORK spends BUILD_POWER on half of its ticks, the other half fetching, plus its
+ * own body upkeep. Also without sites (builders upgrade then): pricing them at UPGRADE_CONTROLLER_POWER let
+ * 5x more WORK through, shard0 W28N7 (RCL 3, no site) ran 7-9 builders of 9-11 parts that only upgraded.
  */
 const MIN_BUILDER_WORK = 2;
 const BUILDER_DUTY = 0.5;
@@ -449,14 +450,14 @@ function roomIncome(room: Room): number {
     return local + Math.min(harvested, hauled);
 }
 
-function affordableBuilderWork(room: Room, energy: number, building: boolean): number {
+function affordableBuilderWork(room: Room, energy: number): number {
     const upkeep = _.sum(
         _.filter(Game.creeps, c => c.memory.room === room.name && c.memory.role !== "builder"),
         c => _.sum(c.body, part => BODYPART_COST[part.type]) / CREEP_LIFE_TIME
     );
     const upgraders = activeParts(creepsByRole(room.name, "upgrader"), WORK) * UPGRADE_CONTROLLER_POWER;
     const budget = roomIncome(room) - upkeep - upgraders + energy / (CREEP_LIFE_TIME / 6);
-    const spend = (building ? BUILD_POWER : UPGRADE_CONTROLLER_POWER) * BUILDER_DUTY;
+    const spend = BUILD_POWER * BUILDER_DUTY;
     return budget / (spend + BUILDER_UPKEEP_PER_WORK);
 }
 
