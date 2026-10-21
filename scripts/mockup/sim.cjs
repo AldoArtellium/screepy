@@ -956,6 +956,18 @@ async function main() {
     const pick = (re) => Object.entries(counters).filter(([k]) => re.test(k)).map(([k, v]) => `${k}=${Math.round(v)}`).join(" ");
     console.log(`Defense: ${pick(/^(tower:attack|safeMode|spawned:(guardian|brawler))$/)} | spawns ${await db["rooms.objects"].count({ room: ROOM, type: "spawn" })}`);
   }
+  // Remote harvester handover: source ticks without a harvester at work, travel ticks vs path length, spawn wait
+  if (counters["remote:sourceTicks"]) {
+    const share = (k) => (((counters[k] || 0) / counters["remote:sourceTicks"]) * 100).toFixed(1);
+    const arrivals = counters["remote:arrivals"] || 0;
+    const waits = counters["remote:spawnWaits"] || 0;
+    console.log(
+      `Remote handover: gap none ${share("remote:gap:none")}% / en route ${share("remote:gap:enRoute")}% of ${counters["remote:sourceTicks"]} source ticks` +
+        ` | travel ${arrivals ? (counters["remote:travel"] / counters["remote:travelPath"]).toFixed(2) : "n/a"} x path (${arrivals} arrivals)` +
+        ` | spawn wait ${waits ? (counters["remote:spawnWait"] / waits).toFixed(0) : "n/a"} ticks (${waits})` +
+        ` | replacements late ${counters["remote:replacements"] ? (counters["remote:late"] / counters["remote:replacements"]).toFixed(0) : "n/a"} ticks (${counters["remote:replacements"] || 0})`
+    );
+  }
   console.log(`Tasks ${completed} completed / ${failed} failed`);
   console.log(`Module errors ${moduleErrors.length} | console errors ${errorCount}`);
   const memorySize = Object.fromEntries(Object.entries(memory).map(([k, v]) => [k, JSON.stringify(v).length]));

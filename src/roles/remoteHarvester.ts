@@ -9,7 +9,9 @@ import { intelManager } from "../modules/IntelManager";
 import { trafficManager } from "../modules/TrafficManager";
 import { containerPos, getRemoteSource, hasRemoteContainer, remoteContainer, remotePath, sourcePos } from "../remote/RemoteMining";
 import { REMOTE_HARVESTER } from "../remote/remoteSpawnRole";
+import { recordTravel } from "../remote/travel";
 import { buildEnergy, countRemoteHarvest, countWork, harvestEnergy } from "../utils/history";
+import { countStat, recordSample } from "../utils/stats";
 import { fleeIfThreatened } from "./flee";
 import { performRecycle } from "./recycle";
 import { registerRole } from "./registry";
@@ -26,6 +28,16 @@ export function runRemoteHarvester(creep: Creep): void {
     if (creep.room.name !== source.room || creep.pos.getRangeTo(target) > 2) {
         if (!followPath(creep, remotePath(source), true, 40)) trafficManager.requestMove(creep, target, { range: 1, priority: 40 });
         return;
+    }
+    if (!creep.memory.arrived) {
+        creep.memory.arrived = true;
+        // Ticks from the spawn to the source, which the next replacement is timed on
+        const travel = CREEP_LIFE_TIME - (creep.ticksToLive ?? CREEP_LIFE_TIME);
+        countStat("remote:travel", travel);
+        countStat("remote:travelPath", source.travelTime);
+        countStat("remote:arrivals");
+        recordTravel(source.key, travel);
+        recordSample("remoteTravel", `${source.key} ${travel}/${source.travelTime} move ${creep.getActiveBodyparts(MOVE)}/${creep.body.length}`);
     }
 
     const work = creep.getActiveBodyparts(CARRY) > 0 ? creep.getActiveBodyparts(WORK) : 0;
