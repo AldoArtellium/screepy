@@ -56,9 +56,128 @@ export function sourceNet(source: SourceEconomy): number {
     return generation - harvesterCost - haulerCost - builderCost - CONTAINER_UPKEEP;
 }
 
-/** One CLAIM + MOVE reserver kept on the controller: 650 energy per (600 - distance) ticks */
-export function reserverCost(distance: number): number {
-    return (BODYPART_COST[CLAIM] + BODYPART_COST[MOVE]) / Math.max(1, CREEP_CLAIM_LIFE_TIME - distance);
+/**
+ * One CLAIM + MOVE reserver kept on the controller: 650 energy per (600 - distance) ticks. Under CPU
+ * pressure (`cpuPressure`) its official CPU is priced too, at the energy per CPU of a neutral remote
+ * source at that distance (`neutralEnergyPerCpu`): a room whose reservation doesn't pay per CPU is
+ * not reserved then (remoteSpawnRole `reservationPays`), and the CPU-priced reserver brings the
+ * reserved score of such a room down to about its unreserved income (sourceNet at 5 energy per tick).
+ */
+export function reserverCost(distance: number, pressure = cpuPressure()): number {
+    const energy = (BODYPART_COST[CLAIM] + BODYPART_COST[MOVE]) / Math.max(1, CREEP_CLAIM_LIFE_TIME - distance);
+    if (!pressure) return energy;
+    return energy + reserverCpu(1, distance) * neutralEnergyPerCpu(distance);
+}
+
+// ------------------------------------------------------------------ reservations under CPU pressure
+
+/** Official CPU of an intent */
+export const INTENT_CPU = 0.2;
+/** Code CPU of a remote creep per tick (shard0: remote haulers 0.069; mockup: reservers 0.03-0.05) */
+export const CREEP_CODE_CPU = 0.06;
+/** Share of the CPU limit above which the reservations are judged per CPU (or while the remote budget is capped) */
+export const RESERVE_CPU_PRESSURE = 0.85;
+
+/** CPU is the binding constraint: the remote budget is capped, or the CPU average is above 85% of the limit */
+export function cpuPressure(): boolean {
+    if (typeof Memory === "undefined" || typeof Game === "undefined") return false;
+    if (Memory.remoteMining?.maxRooms !== undefined) return true;
+    return (Memory.stats?.cpuAvg ?? 0) > Game.cpu.limit * RESERVE_CPU_PRESSURE;
+}
+
+/** CLAIM parts of the reservers a home of `capacity` energy spawns (remoteSpawnRole reserverBody) */
+export function reserverClaimParts(capacity: number): number {
+    const unit = BODYPART_COST[CLAIM] + BODYPART_COST[MOVE];
+    return Math.min(Math.floor(CONTROLLER_RESERVE_MAX / CREEP_CLAIM_LIFE_TIME), Math.floor(capacity / unit));
+}
+
+/**
+ * Ticks one reserver keeps a reservation up: on station it adds `claimParts` per tick against a decay
+ * of 1, so a 2-CLAIM reserver holds the room for twice its time on station (when it is not sent before
+ * the reservation needs it, see remoteSpawnRole reserverOption).
+ */
+export function reserverPeriod(claimParts: number, distance: number): number {
+    return Math.max(1, claimParts) * Math.max(1, CREEP_CLAIM_LIFE_TIME - distance);
+}
+
+/** Official CPU per tick of keeping a room reserved: code over the reserver's life, a move per tile, a reserve per tick on station */
+export function reserverCpu(claimParts: number, distance: number): number {
+    return (CREEP_CLAIM_LIFE_TIME * (CREEP_CODE_CPU + INTENT_CPU)) / reserverPeriod(claimParts, distance);
+}
+
+/** CARRY per remote hauler a home of `capacity` energy builds (remoteSpawnRole haulerSize upper bound) */
+export function haulerCarryParts(capacity: number, roads: boolean): number {
+    return Math.max(
+        1,
+        Math.min(
+            Math.floor(MAX_CREEP_SIZE / (roads ? 1.5 : 2)),
+            Math.floor((0.9 * CONTAINER_CAPACITY) / CARRY_CAPACITY),
+            Math.floor(capacity / (BODYPART_COST[CARRY] + BODYPART_COST[MOVE] / (roads ? 2 : 1)))
+        )
+    );
+}
+
+/**
+ * Official CPU per tick of mining a remote source: the harvester (code, a move per tile on its way, a
+ * harvest per tick while the source has energy: its WORK drain it faster than it regenerates) and the
+ * haulers (code, a move per tile both ways and a withdraw + a transfer per trip of `haulerCarry` CARRY).
+ * Remote builders left out (storage era, the same with or without a reservation).
+ */
+export function sourceCpu(source: SourceEconomy, haulerCarry: number): number {
+    const { generation, distance } = source;
+    const lifetime = Math.max(1, CREEP_LIFE_TIME - distance);
+    const work = Math.ceil(generation / HARVEST_POWER) + 1;
+    const harvests = generation / (work * HARVEST_POWER);
+    const harvester = (CREEP_LIFE_TIME * CREEP_CODE_CPU + distance * INTENT_CPU) / lifetime + harvests * INTENT_CPU;
+    const trips = generation / (Math.max(1, haulerCarry) * CARRY_CAPACITY);
+    const haulers = trips * (2 * distance * (CREEP_CODE_CPU + INTENT_CPU) + 2 * INTENT_CPU);
+    return harvester + haulers;
+}
+
+/** Energy per official CPU of a neutral (5 energy per tick) remote source at `distance`, plains bodies */
+export function neutralEnergyPerCpu(distance: number, capacity = 1300): number {
+    const neutral: SourceEconomy = {
+        generation: SOURCE_ENERGY_NEUTRAL_CAPACITY / ENERGY_REGEN_TIME,
+        distance,
+        roads: false,
+        maintenanceWork: 0
+    };
+    return Math.max(0, sourceNet(neutral)) / sourceCpu(neutral, haulerCarryParts(capacity, false));
+}
+
+export interface ReservationValue {
+    /** Energy per tick the reservation adds: the sources at 10 instead of 5, minus their bigger crews and the reservers */
+    energy: number;
+    /** Official CPU per tick it adds: reservers, and the haulers' extra trips */
+    cpu: number;
+    /** energy / cpu */
+    perCpu: number;
+    /** Energy per CPU of a neutral source at the same distance: what the CPU would mine elsewhere */
+    alternative: number;
+    pays: boolean;
+}
+
+/**
+ * Whether reserving a remote room pays per official CPU (not in Hivemind, which reserves every room
+ * it can): the energy the reservation adds over the CPU it adds, against the energy per CPU of a
+ * neutral source, which the remote budget would mine with that CPU instead. `source` describes the
+ * room's average source (its `generation` is ignored), `sources` the sources mined there.
+ * A 2-CLAIM reserver (1300 capacity) only holds a room 1100 of every ~1100 ticks: one-source rooms
+ * pay then too; with 1-CLAIM reservers (650-1299) a one-source room doesn't.
+ */
+export function reservationValue(source: SourceEconomy, sources: number, capacity: number): ReservationValue {
+    const claimParts = Math.max(1, reserverClaimParts(capacity));
+    const haulerCarry = haulerCarryParts(capacity, source.roads);
+    const reserved = { ...source, generation: SOURCE_ENERGY_CAPACITY / ENERGY_REGEN_TIME };
+    const neutral = { ...source, generation: SOURCE_ENERGY_NEUTRAL_CAPACITY / ENERGY_REGEN_TIME };
+    const period = reserverPeriod(claimParts, source.distance);
+    const reserverEnergy = (claimParts * (BODYPART_COST[CLAIM] + BODYPART_COST[MOVE])) / period;
+    const energy = sources * (sourceNet(reserved) - sourceNet(neutral)) - reserverEnergy;
+    const haulCpu = sourceCpu(reserved, haulerCarry) - sourceCpu(neutral, haulerCarry);
+    const cpu = sources * haulCpu + reserverCpu(claimParts, source.distance);
+    const perCpu = cpu > 0 ? energy / cpu : 0;
+    const alternative = Math.max(0, sourceNet(neutral)) / sourceCpu(neutral, haulerCarry);
+    return { energy, cpu, perCpu, alternative, pays: energy > 0 && perCpu >= alternative };
 }
 
 /**
