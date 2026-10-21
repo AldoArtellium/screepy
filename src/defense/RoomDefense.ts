@@ -5,7 +5,9 @@
  * opening for friendly creeps are left out (no diplomacy yet).
  */
 
-import { tickCache } from "../core/roomState";
+import { structuresOfType, tickCache } from "../core/roomState";
+import { jitter } from "../utils/jitter";
+import { RoomPlan } from "../planner/RoomPlan";
 import { roomPlanner } from "../planner/RoomPlanner";
 
 declare global {
@@ -92,23 +94,45 @@ function enemyInfo(room: Room): { attack: number; heal: number; invaderOnly: boo
     return { attack, heal, invaderOnly };
 }
 
+/**
+ * Planned main rampart tiles (x + 50 * y), on-ramps left out, per plan object (the planner replaces the
+ * object on a replan; the rampart counts guard against an in-place change)
+ */
+const mainRampartsByPlan = new WeakMap<RoomPlan, { count: number; ramps: number; tiles: number[] }>();
+
+function plannedMainRamparts(plan: RoomPlan): number[] {
+    const count = plan.count("rampart");
+    const ramps = plan.count("rampart.ramp");
+    let cached = mainRampartsByPlan.get(plan);
+    if (!cached || cached.count !== count || cached.ramps !== ramps) {
+        const tiles = plan
+            .getLocations("rampart")
+            .filter(pos => !plan.has(pos, "rampart.ramp"))
+            .map(pos => pos.x + 50 * pos.y);
+        cached = { count, ramps, tiles };
+        mainRampartsByPlan.set(plan, cached);
+    }
+    return cached.tiles;
+}
+
 /** Hits of the weakest planned main rampart, 0 when one is missing (Hivemind getLowestWallStrength) */
 export function lowestWallStrength(room: Room): number {
     return tickCache(`lowestWall:${room.name}`, () => {
         const plan = roomPlanner.getPlan(room.name);
         if (!plan) return 0;
+        const tiles = plannedMainRamparts(plan);
+        if (tiles.length === 0) return 0;
         const ramparts = new Map<number, number>();
-        for (const s of room.find(FIND_MY_STRUCTURES)) {
-            if (s.structureType === STRUCTURE_RAMPART) ramparts.set(s.pos.x + 50 * s.pos.y, s.hits);
+        for (const s of structuresOfType<StructureRampart>(room, STRUCTURE_RAMPART)) {
+            if (s.my) ramparts.set(s.pos.x + 50 * s.pos.y, s.hits);
         }
         let min = Infinity;
-        for (const pos of plan.getLocations("rampart")) {
-            if (plan.has(pos, "rampart.ramp")) continue;
-            const hits = ramparts.get(pos.x + 50 * pos.y);
+        for (const tile of tiles) {
+            const hits = ramparts.get(tile);
             if (hits === undefined) return 0;
             min = Math.min(min, hits);
         }
-        return min === Infinity ? 0 : min;
+        return min;
     });
 }
 
@@ -120,7 +144,9 @@ export function isWallIntact(room: Room): boolean {
 
 export function enemyStrength(room: Room): EnemyStrength {
     return tickCache(`enemyStrength:${room.name}`, () => {
-        const towers = room.find(FIND_MY_STRUCTURES, { filter: s => s.structureType === STRUCTURE_TOWER }).length;
+        // No hostile: no attack to weigh (skips the tower count and the rampart scan)
+        if (hostileCreeps(room).length === 0) return ENEMY_STRENGTH_NONE;
+        const towers = structuresOfType<StructureTower>(room, STRUCTURE_TOWER).filter(t => t.my).length;
         const towerStrength = (TOWER_POWER_ATTACK * towers) / 2;
         // Active defense: 2 creeps with as many ATTACK as MOVE parts
         const defenders =
@@ -338,6 +364,32 @@ export function canKillBeforeFleeing(room: Room, target: Creep): boolean {
     const distanceToExit = 24 - target.pos.getRangeTo(25, 25);
     if (distanceToExit <= 0) return false;
     return effectiveDamage(target, potential) * distanceToExit > target.hits;
+}
+
+interface ActiveTowers {
+    /** RCL and tower count the ids were computed for (isActive only changes with them) */
+    key: string;
+    ids: Id<StructureTower>[];
+    expires: number;
+}
+const activeTowerCache = new Map<string, ActiveTowers>();
+
+/**
+ * Our active towers (isActive() walks every structure of the room: cached until the RCL or the tower
+ * count changes, or a jittered ~1000 ticks)
+ */
+export function activeTowers(room: Room): StructureTower[] {
+    const towers = structuresOfType<StructureTower>(room, STRUCTURE_TOWER).filter(t => t.my);
+    if (towers.length === 0) return towers;
+    const key = `${room.controller?.level ?? 0}:${towers.length}`;
+    let cached = activeTowerCache.get(room.name);
+    if (!cached || cached.key !== key || Game.time >= cached.expires) {
+        cached = { key, ids: towers.filter(t => t.isActive()).map(t => t.id), expires: Game.time + jitter(1000) };
+        activeTowerCache.set(room.name, cached);
+    }
+    if (cached.ids.length === towers.length) return towers;
+    const ids = new Set(cached.ids);
+    return towers.filter(t => ids.has(t.id));
 }
 
 export { myRooms };

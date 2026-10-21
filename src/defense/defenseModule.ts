@@ -8,6 +8,7 @@
 import { log } from "../utils/logger";
 import { countStat } from "../utils/stats";
 import {
+    activeTowers,
     canKillBeforeFleeing,
     ENEMY_STRENGTH_NONE,
     ENEMY_STRENGTH_NORMAL,
@@ -33,11 +34,11 @@ const IMPORTANT_STRUCTURES: StructureConstant[] = [
 ];
 
 function manageTowers(room: Room): void {
-    const towers = room.find(FIND_MY_STRUCTURES, {
-        filter: s => s.structureType === STRUCTURE_TOWER && s.store.energy > 0 && s.isActive()
-    }) as StructureTower[];
-    if (towers.length === 0) return;
     const hostiles = hostileCreeps(room);
+    // Nothing to shoot or repair without hostiles: only a wounded creep needs the towers
+    if (hostiles.length === 0 && !room.find(FIND_MY_CREEPS).some(c => c.hits < c.hitsMax)) return;
+    const towers = activeTowers(room).filter(t => t.store.energy > 0);
+    if (towers.length === 0) return;
     const strength = enemyStrength(room);
     for (const tower of towers) {
         if (towerAttack(room, tower, hostiles)) continue;
