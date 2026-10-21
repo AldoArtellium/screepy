@@ -35,6 +35,7 @@ import {
     sourceParts
 } from "./remoteIncome";
 import { blockerCost } from "./blockers";
+import { isRemoteExcluded } from "./remoteBalance";
 
 export interface RemoteSource {
     /** `${room}:${x}:${y}` */
@@ -635,6 +636,8 @@ function selectRemotes(): void {
             const generation = capacity / ENERGY_REGEN_TIME;
             let net = 0;
             for (const source of intel.sources!) {
+                // Measured to lose energy for this home (remoteBalance.ts)
+                if (isRemoteExcluded(sourceKey(roomName, source.x, source.y), home.name)) continue;
                 const path = pathFor(home, new RoomPosition(source.x, source.y, roomName));
                 if (!path || path.length === 0) continue;
                 const economy = {

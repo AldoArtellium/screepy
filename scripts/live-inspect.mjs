@@ -2,7 +2,7 @@
 /**
  * Read-only inspection of the bot's history (src/utils/history.ts, RawMemory segments 6-7):
  * counter rates per 1000 ticks (empire and per room), the last spawns, the remote source balance,
- * module and role CPU.
+ * module and role CPU, the remote sources excluded by their measured balance (src/remote/remoteBalance.ts).
  *
  * Usage:
  *   node scripts/live-inspect.mjs [--server main|pserver] [--shard shard0] [--config screeps.json]
@@ -143,8 +143,10 @@ function decodeHistory(segments) {
     sources: Object.fromEntries(
       (text ? text.split(";") : []).map(part => {
         const [key, values] = part.split("=");
-        const [harvested, delivered, cost] = values.split(",").map(v => parseInt(v, 36) || 0);
-        return [key, { harvested, delivered, cost }];
+        // harvested, delivered, cost (base 36), steady (1 / 0), home (since 2026-10-21)
+        const [harvested, delivered, cost, steady, home] = values.split(",");
+        const n = v => parseInt(v, 36) || 0;
+        return [key, { harvested: n(harvested), delivered: n(delivered), cost: n(cost), steady: steady === "1", home: home ?? "" }];
       })
     )
   }));
@@ -272,7 +274,10 @@ function printRemotes(remotes, memory) {
     .sort((a, b) => (selected[a[0]]?.homeRoom ?? "").localeCompare(selected[b[0]]?.homeRoom ?? "") || b[1].delivered - a[1].delivered)
     .map(([key, s]) => {
       const l = last.sources[key] ?? { harvested: 0, delivered: 0, cost: 0 };
-      const home = selected[key]?.homeRoom ?? "-";
+      // Home: the selection's, else the last one the balance recorded (source no longer selected)
+      const recorded = [...remotes].reverse().find(r => r.sources[key]?.home)?.sources[key].home;
+      const home = selected[key]?.homeRoom ?? (recorded ? `${recorded} (dropped)` : "- (dropped)");
+      const steady = remotes.slice(-3).filter(r => r.sources[key]?.steady).length;
       const net = s.delivered - s.cost;
       return [
         key,
@@ -283,10 +288,27 @@ function printRemotes(remotes, memory) {
         fmt(per1k(s.cost, ticks)),
         fmt(per1k(net, ticks)),
         s.harvested > 0 ? `${Math.round((100 * s.delivered) / s.harvested)}%` : "-",
-        fmt(per1k(l.delivered - l.cost, last.ticks))
+        fmt(per1k(l.delivered - l.cost, last.ticks)),
+        `${steady}/3`
       ];
     });
-  table(["source", "home", "travel", "harvested", "delivered", "cost", "net", "deliv/harv", "net last"], rows);
+  table(["source", "home", "travel", "harvested", "delivered", "cost", "net", "deliv/harv", "net last", "steady"], rows, [0, 1]);
+  console.log("steady: windows of the last 3 that measure the source cleanly (remote/remoteBalance.ts judges 3 of 3)");
+}
+
+function printExcluded(memory, time) {
+  const excluded = memory.remoteExcluded ?? {};
+  const keys = Object.keys(excluded);
+  section(`Remote sources excluded by their measured balance (${keys.length})`);
+  if (keys.length === 0) return;
+  table(
+    ["source", "home", "net/1000", "since", "until", "ticks left"],
+    keys.map(key => {
+      const e = excluded[key];
+      return [key, e.home, e.net, e.since, e.until, time !== undefined ? e.until - time : "?"];
+    }),
+    [0, 1]
+  );
 }
 
 function printCpu(entries, memory) {
@@ -337,6 +359,7 @@ try {
     printCpu(entries, source.memory);
   }
   printRemotes(history.remotes, source.memory);
+  printExcluded(source.memory, source.time);
   printSpawns(history.spawns);
 } catch (e) {
   console.error(`live-inspect: ${e.message}`);
