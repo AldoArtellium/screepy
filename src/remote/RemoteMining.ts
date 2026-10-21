@@ -599,6 +599,14 @@ function updateBudget(currentRooms: number, possibleRooms: number): void {
     log.info("RemoteMining", `CPU ${cpuAvg.toFixed(1)}/${limit} (room ${room}), bucket ${bucket}: remote rooms ${cap}`);
 }
 
+/**
+ * Container of every source seen with one (heap): a source dropped from the selection loses its
+ * memory entry, and once selected again out of sight its standing container was unknown until a
+ * creep got there (shard0 W29N5, both containers standing: harvesters sized for building one and no
+ * hauler counted for the source)
+ */
+const knownContainers = new Map<string, Id<StructureContainer>>();
+
 type Candidate = { source: RemoteSource; net: number; parts: number; crew: SourceCrew };
 type HomeSelection = {
     home: Room;
@@ -694,7 +702,7 @@ function selectRemotes(): void {
                         homeRoom: home.name,
                         travelTime: path.length,
                         free: source.free || 1,
-                        containerId: previous?.containerId,
+                        containerId: previous?.containerId ?? knownContainers.get(key),
                         servedAt: previous?.homeRoom === home.name ? previous.servedAt : Game.time
                     },
                     net: sourceIncome,
@@ -768,6 +776,9 @@ function selectRemotes(): void {
         paths()[source.key] = mine;
         pathStore.touch();
     }
+    for (const source of Object.values(memory().sources)) {
+        if (source.containerId) knownContainers.set(source.key, source.containerId);
+    }
     const before = Object.keys(memory().sources).sort().join();
     memory().sources = selected;
     const after = Object.keys(selected).sort().join();
@@ -805,8 +816,10 @@ export function remoteContainer(source: RemoteSource): StructureContainer | null
     if (source.containerId) {
         const container = Game.getObjectById(source.containerId);
         if (container) return container;
-        if (Game.rooms[source.room]) delete source.containerId;
-        else return null;
+        if (Game.rooms[source.room]) {
+            delete source.containerId;
+            knownContainers.delete(source.key);
+        } else return null;
     }
     const room = Game.rooms[source.room];
     const pos = containerPos(source);
