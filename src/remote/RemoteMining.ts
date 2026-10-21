@@ -77,6 +77,12 @@ declare global {
             cpuAvg?: number;
             maxRooms?: number;
             budgetChanged?: number;
+            /** Last tick the cap went down (no room added for BUDGET_RAISE_HOLD ticks after it) */
+            budgetDropped?: number;
+            /** Slow average of the CPU per tick of one mined remote room (its remote roles' CPU) */
+            roomCpu?: number;
+            /** Sum of the remote roles' CPU counters at the last budget update, and its tick */
+            roleCpu?: { total: number; tick: number };
             /** First tick of the current run of ticks with a full (decision) bucket */
             bucketFullSince?: number;
             /** Sources a home's spawn can keep harvested (none = no cap yet), by home room */
@@ -510,9 +516,12 @@ function maxRemotes(home: Room): number {
  * bulk of the creeps (a room at RCL 2 with 5 remotes ran ~55 small creeps, 18 of 20 CPU on
  * shard0); the official CPU includes the 0.2 per intent, so the tick CPU is the right signal.
  * Above 95% of the limit (or bucket < 5000) the worst remote room goes, below 75% (bucket > 9000)
- * one more is allowed, and also below 95% once the bucket has stayed full for BUDGET_FULL_TICKS
+ * one more is allowed, and also above it once the bucket has stayed full for BUDGET_FULL_TICKS
  * (shard0 W27N5: 15/20 CPU with a full bucket stayed capped); at most one change per 1000 ticks so
- * the creeps of a dropped remote can die out.
+ * the creeps of a dropped remote can die out. A room is only added when the average plus one
+ * room's measured CPU (remote roles' CPU over the mined rooms, at least 1.2) stays under 90%, and
+ * not within BUDGET_RAISE_HOLD ticks of a drop (shard0 at ~90% of 20 CPU: 7 -> 8 -> 7 in 5 of 6
+ * windows of 1000 ticks, the bucket falling, the spawn energy spent on creeps of a dropped room).
  * (85% / 70% cut W7N3 by 27% in the mockup: it oscillated while the bucket stayed full.)
  * The average covers every tick (sampleCpu): one sample per selection, 20 ticks apart, stayed in
  * phase with the other periodic modules (shard0: 19.3 for a real 16.5-17.5), and the tick of a
@@ -539,8 +548,26 @@ function sampleCpu(): void {
     else mem.bucketFullSince ??= Game.time;
 }
 
+/** Roles whose CPU counts as remote room CPU (CreepRunner counters `cpu:<role>`) */
+const REMOTE_CPU_ROLES = ["remoteHarvester", "remoteHauler", "reserver", "remoteBuilder"];
+
+/** Updates the average CPU per tick of one remote room from the remote roles' CPU counters */
+function sampleRoomCpu(currentRooms: number): void {
+    const mem = memory();
+    const counters = Memory.stats?.counters;
+    if (!counters) return;
+    const total = _.sum(REMOTE_CPU_ROLES, role => counters[`cpu:${role}`] ?? 0);
+    const last = mem.roleCpu;
+    mem.roleCpu = { total, tick: Game.time };
+    // Counters reset (mockup state load): start again from here
+    if (!last || total < last.total || Game.time <= last.tick || currentRooms === 0) return;
+    const ticks = Game.time - last.tick;
+    mem.roomCpu = cpuAverage(mem.roomCpu, (total - last.total) / currentRooms, ticks);
+}
+
 function updateBudget(currentRooms: number, possibleRooms: number): void {
     const mem = memory();
+    sampleRoomCpu(currentRooms);
     if (cpuSamples.count === 0) return;
     const cpuAvg = cpuAverage(mem.cpuAvg, cpuSamples.sum, cpuSamples.count)!;
     mem.cpuAvg = cpuAvg;
@@ -557,13 +584,18 @@ function updateBudget(currentRooms: number, possibleRooms: number): void {
         fullBucketTicks: mem.bucketFullSince === undefined ? 0 : Game.time - mem.bucketFullSince,
         maxRooms: mem.maxRooms,
         currentRooms,
-        possibleRooms
+        possibleRooms,
+        roomCpu: mem.roomCpu,
+        ticksSinceDrop: mem.budgetDropped === undefined ? undefined : Game.time - mem.budgetDropped
     });
     if (next === mem.maxRooms) return;
+    if (next !== undefined && (mem.maxRooms === undefined || next < mem.maxRooms)) mem.budgetDropped = Game.time;
     mem.maxRooms = next;
     mem.budgetChanged = Game.time;
     countStat("remote:budgetChange");
-    log.info("RemoteMining", `CPU ${cpuAvg.toFixed(1)}/${limit}, bucket ${bucket}: remote rooms ${next === undefined ? "uncapped" : `capped at ${next}`}`);
+    const room = (mem.roomCpu ?? 0).toFixed(2);
+    const cap = next === undefined ? "uncapped" : `capped at ${next}`;
+    log.info("RemoteMining", `CPU ${cpuAvg.toFixed(1)}/${limit} (room ${room}), bucket ${bucket}: remote rooms ${cap}`);
 }
 
 type Candidate = { source: RemoteSource; net: number; parts: number; crew: SourceCrew };
