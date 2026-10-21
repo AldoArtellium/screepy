@@ -1,6 +1,7 @@
 /**
  * Offline check of remote/remoteIncome: creeps a remote source keeps alive for homes of different
- * energy capacities, and the energy per creep the CPU budget ranks remote rooms by.
+ * energy capacities, the energy per creep the CPU budget ranks remote rooms by, and the budget's
+ * CPU average and cap decisions.
  *
  *   node tests/remoteIncome/run.mjs
  */
@@ -37,7 +38,7 @@ Object.assign(globalThis, {
     CONTAINER_DECAY: 5000, CONTAINER_DECAY_TIME: 100, REPAIR_POWER: 100, CONTAINER_CAPACITY: 2000,
 });
 
-const { sourceCreeps, sourceNet, roomEnergyPerCreep } = require(join(OUT, "remote", "remoteIncome.js"));
+const { sourceCreeps, sourceNet, roomEnergyPerCreep, cpuAverage, budgetRooms } = require(join(OUT, "remote", "remoteIncome.js"));
 
 let failures = 0;
 const check = (name, ok, detail) => {
@@ -70,5 +71,26 @@ check("the big home's remote pays more energy per creep", perBig > perSmall * 1.
 const two = roomEnergyPerCreep(
     [{ net: sourceNet(big), crew: bigCrew }, { net: sourceNet(big), crew: bigCrew }], 1.1, 1);
 check("a two-source room pays more per creep than a one-source room", two > perBig);
+
+// CPU budget: the average of every tick, a global reset spike barely moves it
+let avg;
+for (let i = 0; i < 40; i++) avg = cpuAverage(avg, 20 * 16.5, 20);
+const spiked = cpuAverage(avg, 19 * 16.5 + 93, 20);
+check("the CPU average is the tick average", Math.abs(avg - 16.5) < 1e-9, avg.toFixed(2));
+check("a 93 CPU tick moves the average by less than 0.3", spiked - avg < 0.3, (spiked - avg).toFixed(3));
+let longAvg = 10;
+for (let i = 0; i < 20; i++) longAvg = cpuAverage(longAvg, 20 * 20, 20);
+check("400 ticks at a new level cover most of the way", longAvg > 16 && longAvg < 17, longAvg.toFixed(2));
+check("no sample keeps the average", cpuAverage(12, 0, 0) === 12);
+
+// shard0 W27N5, second dump: 15/20 CPU, bucket full, capped at 7
+const capped = { cpuAvg: 15, limit: 20, bucket: 10000, fullBucketTicks: 0, maxRooms: 7, currentRooms: 7, possibleRooms: 9 };
+check("75% CPU with a fresh full bucket keeps the cap", budgetRooms(capped) === 7);
+check("a bucket full for 1000 ticks allows one more room", budgetRooms({ ...capped, fullBucketTicks: 1000 }) === 8);
+check("below 75% one more room", budgetRooms({ ...capped, cpuAvg: 14.9 }) === 8);
+check("one more than possible lifts the cap", budgetRooms({ ...capped, maxRooms: 9, fullBucketTicks: 2000 }) === undefined);
+check("above 95% drops a room even with a full bucket", budgetRooms({ ...capped, cpuAvg: 19.1, fullBucketTicks: 5000 }) === 6);
+check("a low bucket drops a room", budgetRooms({ ...capped, cpuAvg: 10, bucket: 4000 }) === 6);
+check("uncapped stays uncapped below 95%", budgetRooms({ ...capped, maxRooms: undefined, cpuAvg: 18 }) === undefined);
 
 process.exit(failures ? 1 : 0);

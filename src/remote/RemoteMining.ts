@@ -16,13 +16,24 @@ import { intelManager } from "../modules/IntelManager";
 import { hasInvaderCore, isRoomUnderAttack } from "../modules/RoomIntel";
 import { roomPlanner } from "../planner/RoomPlanner";
 import { log } from "../utils/logger";
+import { spawnManager } from "../modules/SpawnManager";
 import { decisionBucket } from "../utils/throttle";
 import { decodePath, encodePath } from "../utils/pathCodec";
 import { parseRoomName, roomsInRange } from "../utils/rooms";
 import { segmentStore } from "../utils/segments";
 import { countStat } from "../utils/stats";
 import { jitter, jitterFor } from "../utils/jitter";
-import { reserverCost, roomEnergyPerCreep, SourceCrew, sourceCreeps, sourceNet, sourceParts } from "./remoteIncome";
+import {
+    BUDGET_FULL_BUCKET,
+    budgetRooms,
+    cpuAverage,
+    reserverCost,
+    roomEnergyPerCreep,
+    SourceCrew,
+    sourceCreeps,
+    sourceNet,
+    sourceParts
+} from "./remoteIncome";
 import { blockerCost } from "./blockers";
 
 export interface RemoteSource {
@@ -66,9 +77,11 @@ declare global {
             cpuAvg?: number;
             maxRooms?: number;
             budgetChanged?: number;
+            /** First tick of the current run of ticks with a full (decision) bucket */
+            bucketFullSince?: number;
             /** Sources a home's spawn can keep harvested (none = no cap yet), by home room */
             sourceCaps?: { [home: string]: { max: number; changed: number } };
-            /** Share of the ticks every spawn of a home was spawning, ~400 ticks average, by home room */
+            /** Share of the ticks every spawn of a home was spawning or waiting for energy, ~400 ticks average, by home */
             spawnBusy?: { [home: string]: number };
         };
     }
@@ -407,8 +420,10 @@ const KEEP_BONUS = 1.1;
  * source without remote harvester for STARVED_TICKS (not under attack, no invader core) means the
  * spawn can't keep up: the home mines one source less (the worst per spawn part), at most once per
  * SOURCE_CAP_STEP ticks; after SOURCE_CAP_PROBE ticks without starving source it tries one more.
- * Only while the spawns are busy (SPAWN_BUSY of the time): a spawn waiting for energy (before the
- * storage) leaves harvesters unspawned too, and fewer remotes only made it poorer (W9N5 -45%).
+ * Only while the spawns are busy (SPAWN_BUSY of the time), waiting for energy included (sampleSpawns):
+ * a spawn idle for lack of energy used to excuse every unserved source (shard0 W27N5). Before the
+ * busy test the cap cost W9N5 45% while its first remote harvesters were priority 1; they are 3 now
+ * (remoteSpawnRole.ts), so a starved source is one the spawn really can't serve.
  * A static spawn-time budget (500 parts per spawn and 1500 ticks minus the home's creeps) kept W7N3
  * at 5-6 of its 8 sources (-10%): a spawn short of time still gains from a source it serves late.
  */
@@ -417,7 +432,11 @@ const SOURCE_CAP_STEP = 1000;
 const SOURCE_CAP_PROBE = 5000;
 const SPAWN_BUSY = 0.8;
 
-/** Ticks every spawn of a home was spawning since the last selection (heap) */
+/**
+ * Ticks every spawn of a home was spawning, or a free spawn waited for energy, since the last selection
+ * (heap). Waiting counts as busy: shard0 W27N5 (RCL 4, no storage) waited for energy 45% of the time on
+ * builders while 3 of its 5 selected sources never got a harvester, and the idle test excused them.
+ */
 const spawnSamples: Map<string, { busy: number; total: number }> = new Map();
 
 function sampleSpawns(): void {
@@ -429,7 +448,7 @@ function sampleSpawns(): void {
         let sample = spawnSamples.get(name);
         if (!sample) spawnSamples.set(name, (sample = { busy: 0, total: 0 }));
         sample.total++;
-        if (spawns.every(spawn => spawn.spawning)) sample.busy++;
+        if (spawns.every(spawn => spawn.spawning) || spawnManager.nextRole(name) !== undefined) sample.busy++;
     }
 }
 
@@ -454,7 +473,10 @@ function updateSourceCap(home: Room): number | undefined {
     let starved = false;
     const idle = spawnBusy(home.name) < SPAWN_BUSY;
     for (const source of mine) {
-        const excused = idle || isRoomUnderAttack(home.name) || isRemoteUnderAttack(source) || hasInvaderCore(source.room);
+        const threatened = isRoomUnderAttack(home.name) || isRemoteUnderAttack(source) || hasInvaderCore(source.room);
+        // Selected source ticks without remote harvester (and no threat), by home
+        if (!threatened && !harvested.has(source.key)) countStat(`remote:unserved:${home.name}`, SELECT_INTERVAL);
+        const excused = idle || threatened;
         if (excused || harvested.has(source.key) || source.servedAt === undefined) source.servedAt = Game.time;
         else if (Game.time - source.servedAt > STARVED_TICKS) starved = true;
     }
@@ -488,33 +510,60 @@ function maxRemotes(home: Room): number {
  * bulk of the creeps (a room at RCL 2 with 5 remotes ran ~55 small creeps, 18 of 20 CPU on
  * shard0); the official CPU includes the 0.2 per intent, so the tick CPU is the right signal.
  * Above 95% of the limit (or bucket < 5000) the worst remote room goes, below 75% (bucket > 9000)
- * one more is allowed; at most one change per 1000 ticks so the creeps of a dropped remote can die out.
+ * one more is allowed, and also below 95% once the bucket has stayed full for BUDGET_FULL_TICKS
+ * (shard0 W27N5: 15/20 CPU with a full bucket stayed capped); at most one change per 1000 ticks so
+ * the creeps of a dropped remote can die out.
  * (85% / 70% cut W7N3 by 27% in the mockup: it oscillated while the bucket stayed full.)
+ * The average covers every tick (sampleCpu): one sample per selection, 20 ticks apart, stayed in
+ * phase with the other periodic modules (shard0: 19.3 for a real 16.5-17.5), and the tick of a
+ * global reset (93 CPU on shard0) is left out.
  */
-const BUDGET_HIGH = 0.95;
-const BUDGET_LOW = 0.75;
 const BUDGET_STEP_TICKS = 1000;
+
+/** Tick CPU since the last selection (heap) */
+const cpuSamples = { sum: 0, count: 0, lastTick: -1 };
+/** First tick of this global: its CPU (code load, heap rebuilt) is not a sample */
+let globalStart: number | undefined;
+
+/** Adds the last tick's CPU (Memory.stats.cpu, recorded at the end of the previous loop) */
+function sampleCpu(): void {
+    globalStart ??= Game.time;
+    const stats = Memory.stats;
+    if (!stats || stats.tick !== Game.time - 1 || stats.tick === cpuSamples.lastTick) return;
+    cpuSamples.lastTick = stats.tick;
+    if (stats.tick === globalStart) return;
+    cpuSamples.sum += stats.cpu;
+    cpuSamples.count++;
+    const mem = memory();
+    if (decisionBucket() < BUDGET_FULL_BUCKET) delete mem.bucketFullSince;
+    else mem.bucketFullSince ??= Game.time;
+}
 
 function updateBudget(currentRooms: number, possibleRooms: number): void {
     const mem = memory();
-    const cpu = Memory.stats?.cpu;
-    if (cpu === undefined) return;
-    // ~400 ticks average (updated every SELECT_INTERVAL ticks)
-    mem.cpuAvg = mem.cpuAvg === undefined ? cpu : mem.cpuAvg * 0.95 + cpu * 0.05;
+    if (cpuSamples.count === 0) return;
+    const cpuAvg = cpuAverage(mem.cpuAvg, cpuSamples.sum, cpuSamples.count)!;
+    mem.cpuAvg = cpuAvg;
+    cpuSamples.sum = 0;
+    cpuSamples.count = 0;
     mem.budgetChanged ??= Game.time;
     if (Game.time - mem.budgetChanged < BUDGET_STEP_TICKS) return;
     const limit = Game.cpu.limit;
     const bucket = decisionBucket();
-    let next = mem.maxRooms;
-    if (mem.cpuAvg > limit * BUDGET_HIGH || bucket < 5000) next = Math.max(0, currentRooms - 1);
-    else if (mem.cpuAvg < limit * BUDGET_LOW && bucket > 9000 && mem.maxRooms !== undefined) {
-        next = mem.maxRooms >= possibleRooms ? undefined : mem.maxRooms + 1;
-    }
+    const next = budgetRooms({
+        cpuAvg,
+        limit,
+        bucket,
+        fullBucketTicks: mem.bucketFullSince === undefined ? 0 : Game.time - mem.bucketFullSince,
+        maxRooms: mem.maxRooms,
+        currentRooms,
+        possibleRooms
+    });
     if (next === mem.maxRooms) return;
     mem.maxRooms = next;
     mem.budgetChanged = Game.time;
     countStat("remote:budgetChange");
-    log.info("RemoteMining", `CPU ${mem.cpuAvg.toFixed(1)}/${limit}, bucket ${bucket}: remote rooms ${next === undefined ? "uncapped" : `capped at ${next}`}`);
+    log.info("RemoteMining", `CPU ${cpuAvg.toFixed(1)}/${limit}, bucket ${bucket}: remote rooms ${next === undefined ? "uncapped" : `capped at ${next}`}`);
 }
 
 type Candidate = { source: RemoteSource; net: number; parts: number; crew: SourceCrew };
@@ -867,6 +916,7 @@ export function sourceEnergyCapacity(home: Room, source: RemoteSource): number {
 
 export const remoteMiningModule = () => {
     sampleSpawns();
+    sampleCpu();
     // Paths not loaded yet (first tick after requesting the segment): don't recompute them all
     if (!pathStore.ready) return;
     const mem = memory();
