@@ -53,6 +53,9 @@ jobs:
       - name: Remote balance check
         run: node tests/remoteBalance/run.mjs
 
+      - name: Remote travel check
+        run: node tests/remoteTravel/run.mjs
+
       - uses: actions/upload-artifact@v4
         with:
           name: bundle

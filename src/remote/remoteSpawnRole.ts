@@ -10,6 +10,7 @@ import { activeParts, creepsByRole, effectiveEnergy } from "../core/roomState";
 import { ENEMY_STRENGTH_NORMAL, enemyStrength } from "../defense/RoomDefense";
 import { intelManager } from "../modules/IntelManager";
 import { hasInvaderCore } from "../modules/RoomIntel";
+import { countStat } from "../utils/stats";
 import { harvesterSizeFactor } from "../utils/throttle";
 import type { SpawnOption, SpawnRole } from "../spawning/spawnRoles";
 import {
@@ -19,11 +20,13 @@ import {
     maintenanceWork,
     needsRepairs,
     remoteContainer,
+    remotePath,
     RemoteSource,
     remoteSources,
     sourceEnergyCapacity
 } from "./RemoteMining";
 import { cpuPressure, reservationValue } from "./remoteIncome";
+import { pathTerrain, recordSpawnLateness, spawnLeadObserved, travelObserved, walkTicks } from "./travel";
 
 export const REMOTE_HARVESTER = "remoteHarvester";
 export const REMOTE_HAULER = "remoteHauler";
@@ -39,10 +42,20 @@ declare global {
         source?: string;
         /** Remote room a reserver holds */
         reserveRoom?: string;
+        /** Remote harvester that reached its source once */
+        arrived?: boolean;
     }
 }
 
-type RemoteOption = SpawnOption & { unit: "hauler" | "builder" | "harvester" | "reserver"; remote?: RemoteSource };
+type RemoteOption = SpawnOption & {
+    unit: "hauler" | "builder" | "harvester" | "reserver";
+    remote?: RemoteSource;
+    /** Replacement harvester: the tick it had to spawn to arrive as the youngest harvester left dies */
+    deadline?: number;
+};
+
+/** Each source's pending harvester option (heap): first tick it was offered, replacement deadline */
+const harvesterWanted = new Map<string, { since: number; deadline?: number }>();
 
 function energyLimit(room: Room): number {
     return Math.min(room.energyCapacityAvailable, Math.max(room.energyCapacityAvailable * 0.9, room.energyAvailable));
@@ -140,7 +153,8 @@ function harvesterBody(home: Room, option: RemoteOption): BodyPartConstant[] {
     return buildBody({
         weights: { [WORK]: 20, [CARRY]: 1 },
         partLimits: { [WORK]: option.size ? option.size * (established ? harvesterSizeFactor(home) : 1) + 1 : 0 },
-        moveMode: established ? MoveMode.ROAD : MoveMode.PLAINS,
+        // Road bodies only once the home builds remote roads (storage era): off roads they walk at half speed
+        moveMode: established && haulerMove(home) === MoveMode.ROAD ? MoveMode.ROAD : MoveMode.PLAINS,
         carryContentLevel: 0,
         energyLimit: energyLimit(home)
     });
@@ -219,6 +233,21 @@ function builderOption(home: Room, demand: number): RemoteOption | null {
  */
 const HARVESTER_PRIORITY = 3;
 
+/** Longest replacement lead: past it the old harvester and its replacement overlap more than they gap */
+const MAX_LEAD = 500;
+
+/**
+ * Ticks a new harvester of `body` takes to reach its source: the path length (Hivemind) raised to the
+ * walk the path terrain and the body's fatigue give (empty CARRY weighs nothing) and to the travel
+ * observed on arrival (traffic, detours, roads not known out of sight)
+ */
+function harvesterTravel(source: RemoteSource, body: BodyPartConstant[]): number {
+    const path = remotePath(source);
+    const work = body.filter(p => p === WORK).length;
+    const estimate = path.length > 0 ? walkTicks(pathTerrain(source.key, path), work, body.filter(p => p === MOVE).length) : 0;
+    return Math.max(source.travelTime, estimate, travelObserved(source.key) ?? 0);
+}
+
 function harvesterOption(home: Room, source: RemoteSource): RemoteOption | null {
     const intel = intelManager.getIntel(source.room);
     const reservedByUs = intel?.reserver === Memory.username && (intel?.reservationTicks ?? 0) >= 500;
@@ -235,12 +264,18 @@ function harvesterOption(home: Room, source: RemoteSource): RemoteOption | null 
         size,
         remote: source
     };
-    const spawnTime = harvesterBody(home, option).length * CREEP_SPAWN_TIME;
-    const harvesters = all.filter(c => c.spawning || (c.ticksToLive ?? 0) > Math.min(source.travelTime + spawnTime, 500));
+    // Replace a harvester early enough to cover the walk, the spawn time and the spawn queue (Hivemind: path length)
+    const body = harvesterBody(home, option);
+    const spawnTime = body.length * CREEP_SPAWN_TIME;
+    const travel = harvesterTravel(source, body);
+    const lead = Math.min(travel + spawnTime + spawnLeadObserved(home.name), MAX_LEAD);
+    const harvesters = all.filter(c => c.spawning || (c.ticksToLive ?? 0) > lead);
     if (harvesters.length >= source.free) return null;
     // Without a container, extra WORK builds it ((BUILD_POWER + HARVEST_POWER) / BUILD_POWER)
     const saturation = hasRemoteContainer(source) ? 0.9 : (BUILD_POWER + HARVEST_POWER) / BUILD_POWER;
     if (activeParts(harvesters, WORK) >= size * saturation) return null;
+    const leaving = all.filter(c => !c.spawning && !harvesters.includes(c));
+    if (leaving.length > 0) option.deadline = Game.time + _.max(leaving.map(c => c.ticksToLive ?? 0)) - travel - spawnTime;
     return option;
 }
 
@@ -303,6 +338,10 @@ export const remoteSpawnRole: SpawnRole = {
             const builder = builderOption(home, buildDemand);
             if (builder) return [builder];
             const harvester = harvesterOption(home, source);
+            if (!harvester) harvesterWanted.delete(source.key);
+            else if (!harvesterWanted.has(source.key)) {
+                harvesterWanted.set(source.key, { since: Game.time, deadline: harvester.deadline });
+            }
             if (harvester) return [harvester];
             if (reserved.has(source.room) || !canReserveFrom(home, source.room)) continue;
             reserved.add(source.room);
@@ -325,7 +364,20 @@ export const remoteSpawnRole: SpawnRole = {
         const remote = option as RemoteOption;
         if (remote.unit === "hauler") return { role: REMOTE_HAULER, room: home.name, delivering: false };
         if (remote.unit === "builder") return { role: REMOTE_BUILDER, room: home.name, returning: true };
-        if (remote.unit === "harvester") return { role: REMOTE_HARVESTER, room: home.name, source: remote.remote!.key };
+        if (remote.unit === "harvester") {
+            const wanted = harvesterWanted.get(remote.remote!.key);
+            if (wanted) {
+                harvesterWanted.delete(remote.remote!.key);
+                countStat("remote:spawnWait", Game.time - wanted.since);
+                countStat("remote:spawnWaits");
+                if (wanted.deadline !== undefined) {
+                    countStat("remote:replacements");
+                    countStat("remote:late", Math.max(0, Game.time - wanted.deadline));
+                    recordSpawnLateness(home.name, Game.time - wanted.deadline);
+                }
+            }
+            return { role: REMOTE_HARVESTER, room: home.name, source: remote.remote!.key };
+        }
         return { role: RESERVER, room: home.name, reserveRoom: remote.remote!.room };
     }
 };

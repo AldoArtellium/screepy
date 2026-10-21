@@ -476,13 +476,21 @@ function updateSourceCap(home: Room): number | undefined {
     const mem = memory();
     const caps = (mem.sourceCaps ??= {});
     const mine = Object.values(mem.sources).filter(s => s.homeRoom === home.name);
-    const harvested = new Set(creepsByRole(home.name, "remoteHarvester").map(c => c.memory.source));
+    const harvesters = creepsByRole(home.name, "remoteHarvester");
+    const harvested = new Set(harvesters.map(c => c.memory.source));
+    const working = new Set(harvesters.filter(c => c.memory.arrived).map(c => c.memory.source));
     let starved = false;
     const idle = spawnBusy(home.name) < SPAWN_BUSY;
     for (const source of mine) {
         const threatened = isRoomUnderAttack(home.name) || isRemoteUnderAttack(source) || hasInvaderCore(source.room);
         // Selected source ticks without remote harvester (and no threat), by home
         if (!threatened && !harvested.has(source.key)) countStat(`remote:unserved:${home.name}`, SELECT_INTERVAL);
+        // Source ticks without a harvester at the source: none alive, or only one still on its way
+        if (!threatened) {
+            countStat("remote:sourceTicks", SELECT_INTERVAL);
+            if (!harvested.has(source.key)) countStat("remote:gap:none", SELECT_INTERVAL);
+            else if (!working.has(source.key)) countStat("remote:gap:enRoute", SELECT_INTERVAL);
+        }
         const excused = idle || threatened;
         if (excused || harvested.has(source.key) || source.servedAt === undefined) source.servedAt = Game.time;
         else if (Game.time - source.servedAt > STARVED_TICKS) starved = true;
