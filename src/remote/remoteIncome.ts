@@ -5,6 +5,7 @@
  * our spawn role actually builds (remoteSpawnRole.ts). Not in Hivemind (3000 / path length).
  * Harabi's spawn-time budget (500 parts per spawn and 1500 ticks, minus the home's creeps) was
  * measured and dropped twice: see CLAUDE.md. sourceParts only ranks sources (RemoteMining.ts).
+ * Also the CPU budget's average and cap decision (pure, checked by tests/remoteIncome/run.mjs).
  */
 
 export interface SourceEconomy {
@@ -141,4 +142,50 @@ export function roomEnergyPerCreep(
         creeps += crew.creeps;
     }
     return creeps > 0 ? net / creeps : 0;
+}
+
+// ------------------------------------------------------------------ CPU budget (RemoteMining.ts updateBudget)
+
+/** Above this share of the CPU limit (or below 5000 bucket) the remote budget drops a room */
+export const BUDGET_HIGH = 0.95;
+/** Below this share (bucket > 9000) it allows one more */
+export const BUDGET_LOW = 0.75;
+/** Bucket counted as full, and how long it must stay full to allow a room up to BUDGET_HIGH */
+export const BUDGET_FULL_BUCKET = 9900;
+export const BUDGET_FULL_TICKS = 1000;
+/** Weight of one tick in the CPU average: ~400 ticks */
+const CPU_AVG_DECAY = 1 / 400;
+
+/** Slow average of the tick CPU after `count` more ticks summing `sum` CPU; each tick weighs 1/400 */
+export function cpuAverage(previous: number | undefined, sum: number, count: number): number | undefined {
+    if (count === 0) return previous;
+    const window = sum / count;
+    if (previous === undefined) return window;
+    const alpha = 1 - Math.pow(1 - CPU_AVG_DECAY, count);
+    return previous * (1 - alpha) + window * alpha;
+}
+
+export interface BudgetState {
+    cpuAvg: number;
+    limit: number;
+    bucket: number;
+    /** Ticks the bucket has stayed at BUDGET_FULL_BUCKET or more */
+    fullBucketTicks: number;
+    /** Current cap (undefined: none) */
+    maxRooms: number | undefined;
+    /** Remote rooms mined now, and rooms the homes would mine without a cap */
+    currentRooms: number;
+    possibleRooms: number;
+}
+
+/** Next cap on remote rooms (undefined: none); the caller limits the changes to one per 1000 ticks */
+export function budgetRooms(state: BudgetState): number | undefined {
+    const { cpuAvg, limit, bucket, maxRooms } = state;
+    if (cpuAvg > limit * BUDGET_HIGH || bucket < 5000) return Math.max(0, state.currentRooms - 1);
+    if (maxRooms === undefined) return undefined;
+    const spare = cpuAvg < limit * BUDGET_LOW && bucket > 9000;
+    // A bucket full for long: the CPU left over is spent on nothing (shard0 W27N5 at 15/20 stayed capped)
+    const unused = state.fullBucketTicks >= BUDGET_FULL_TICKS;
+    if (!spare && !unused) return maxRooms;
+    return maxRooms >= state.possibleRooms ? undefined : maxRooms + 1;
 }

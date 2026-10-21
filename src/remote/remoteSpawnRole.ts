@@ -162,6 +162,15 @@ function builderOption(home: Room, demand: number): RemoteOption | null {
     return { role: REMOTE_BUILDER, unit: "builder", priority: 3, weight: 0, size };
 }
 
+/**
+ * Remote harvesters of a selected source are spawned at priority 3, the first one included. Hivemind: 1 for the
+ * first one, after the whole local economy. shard0 W27N5 (RCL 4, no storage, waiting for energy on builders at 4
+ * and transporters at 3) left 3 of its 5 selected sources without harvester for thousands of ticks; in the mockup
+ * a young RCL 4 home next to W7N3 never spawned one in 5000 ticks. 3 only once the source has a container (or its
+ * site) still left that home's sources unserved and cost W1N3 12% over 8000 ticks (see CLAUDE.md).
+ */
+const HARVESTER_PRIORITY = 3;
+
 function harvesterOption(home: Room, source: RemoteSource): RemoteOption | null {
     const intel = intelManager.getIntel(source.room);
     const reservedByUs = intel?.reserver === Memory.username && (intel?.reservationTicks ?? 0) >= 500;
@@ -173,7 +182,7 @@ function harvesterOption(home: Room, source: RemoteSource): RemoteOption | null 
     const option: RemoteOption = {
         role: REMOTE_HARVESTER,
         unit: "harvester",
-        priority: all.length > 0 ? 3 : 1,
+        priority: HARVESTER_PRIORITY,
         weight: 1 - source.travelTime / 100,
         size,
         remote: source
