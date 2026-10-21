@@ -50,6 +50,9 @@ jobs:
       - name: Pixels check
         run: node tests/pixels/run.mjs
 
+      - name: Remote balance check
+        run: node tests/remoteBalance/run.mjs
+
       - uses: actions/upload-artifact@v4
         with:
           name: bundle

@@ -8,7 +8,8 @@
  *   creeps and the room counters below. Ring of HISTORY_SIZE snapshots.
  * - `historyDetail` (segment 7): the last SPAWN_LOG_SIZE spawns (tick, room, role, priority, weight,
  *   cost, parts, reason) and the remote source balance of each snapshot (energy harvested, delivered
- *   home, spawn cost of the creeps serving it). Separate from `history` so each segment stays under
+ *   home, spawn cost of the creeps serving it, whether the window is a steady measure of it, its
+ *   home; read by remote/remoteBalance.ts). Separate from `history` so each segment stays under
  *   MAX_STORE_CHARS and the spawn log (changed every few ticks) never rewrites the snapshots.
  *
  * Room counters (energy harvested, built, repaired, upgraded, spawn energy by role, idle ticks by
@@ -64,8 +65,31 @@ interface HistoryData {
 interface HistoryDetail {
     /** Last spawns, oldest first */
     s: SpawnLogEntry[];
-    /** Remote balance per snapshot: [tick, ticks covered, "room:x:y=harvested,delivered,cost;..." base 36] */
+    /**
+     * Remote balance per snapshot: [tick, ticks covered, "room:x:y=harvested,delivered,cost,steady,home;..."],
+     * numbers in base 36, `steady` 1 when the window is a clean measure (steadyWindow), `home` the
+     * source's home room (the last one it had when no longer selected). Entries written before
+     * 2026-10-21 have no steady / home field.
+     */
     r: [number, number, string][];
+}
+
+/** One remote source in one balance window (remoteBalanceWindows) */
+export interface SourceBalance {
+    harvested: number;
+    delivered: number;
+    cost: number;
+    /** Mined the whole window in steady conditions (see steadyWindow) */
+    steady: boolean;
+    /** Home room ("" unknown) */
+    home: string;
+}
+
+export interface BalanceWindow {
+    tick: number;
+    /** Ticks the window covers */
+    ticks: number;
+    sources: { [key: string]: SourceBalance };
 }
 
 const historyStore = segmentStore<HistoryData>("history", [6], SNAPSHOT_INTERVAL);
@@ -76,6 +100,22 @@ let accSince: number | undefined;
 let roomAcc: { [room: string]: { [key: string]: number } } = {};
 /** Remote source key -> [harvested, delivered home, spawn cost] */
 let sourceAcc: { [key: string]: [number, number, number] } = {};
+/** State of each selected remote source, sampled every SOURCE_SAMPLE_INTERVAL ticks (steadyWindow) */
+export interface SourceSamples {
+    home: string;
+    homeChanged: boolean;
+    samples: number;
+    harvester: number;
+    container: number;
+    threat: number;
+    /** Samples with the remote controller in sight, reserved by us or not */
+    reserved: number;
+    unreserved: number;
+}
+let sourceSamples: { [key: string]: SourceSamples } = {};
+let lastSourceSample: number | undefined;
+/** Last home of every source seen selected: a source dropped from the selection keeps it in the balance */
+const lastHome = new Map<string, string>();
 let spawnQueue: SpawnLogEntry[] = [];
 let cpuSum = 0;
 let cpuTicks = 0;
@@ -267,13 +307,110 @@ function roomEnergy(room: Room): number {
     return (room.storage?.store.energy ?? 0) + (room.terminal?.store.energy ?? 0);
 }
 
-function encodeSources(): string {
+const SOURCE_SAMPLE_INTERVAL = 10;
+/** Share of the samples a steady window needs (selected, harvester, container, one reservation state) */
+const STEADY_SHARE = 0.9;
+
+/** Living hostiles (not just a safe-mode sighting) or an invader core in the room */
+function threatened(roomName: string): boolean {
+    const enemies = Memory.rooms?.[roomName]?.enemies;
+    if (!enemies) return false;
+    return !!enemies.hasInvaderCore || (!enemies.safe && (enemies.expires ?? 0) > Game.time);
+}
+
+/** Samples the state of every selected remote source (every SOURCE_SAMPLE_INTERVAL ticks) */
+function sampleSources(): void {
+    const sources = Memory.remoteMining?.sources;
+    if (!sources) return;
+    const harvested = new Set<string>();
+    for (const name in Game.creeps) {
+        const creep = Game.creeps[name];
+        if (creep.memory.role === "remoteHarvester" && creep.memory.source && !creep.spawning) harvested.add(creep.memory.source);
+    }
+    for (const key in sources) {
+        const source = sources[key];
+        lastHome.set(key, source.homeRoom);
+        const s = (sourceSamples[key] ??= {
+            home: source.homeRoom,
+            homeChanged: false,
+            samples: 0,
+            harvester: 0,
+            container: 0,
+            threat: 0,
+            reserved: 0,
+            unreserved: 0
+        });
+        if (s.home !== source.homeRoom) {
+            s.homeChanged = true;
+            s.home = source.homeRoom;
+        }
+        s.samples++;
+        if (harvested.has(key)) s.harvester++;
+        const room = Game.rooms[source.room];
+        // Out of sight a known container is assumed standing (RemoteMining.hasRemoteContainer)
+        if (source.containerId && (!room || Game.getObjectById(source.containerId))) s.container++;
+        if (threatened(source.room) || threatened(source.homeRoom)) s.threat++;
+        const controller = room?.controller;
+        if (controller) {
+            if (controller.reservation?.username === Memory.username) s.reserved++;
+            else s.unreserved++;
+        }
+    }
+}
+
+/**
+ * Whether a source's balance over a window is a clean measure of its steady state: selected by the
+ * same home the whole window (a source picked or dropped midway, or moved to another home, is not),
+ * a remote harvester and a built container on 90% of the samples (the first windows pay the
+ * harvester and the container build with little energy delivered), no hostile or invader core in
+ * the source room or the home (a raid stops the harvest while haulers and reservers are still
+ * paid), and one reservation state on 90% of the samples (a first reservation pays the reserver
+ * while the source still regenerates 1500). A window shortened by a global reset is not steady.
+ */
+export function steadyWindow(s: SourceSamples | undefined, ticks: number): boolean {
+    if (!s || ticks < SNAPSHOT_INTERVAL * STEADY_SHARE) return false;
+    if (s.samples < Math.floor(ticks / SOURCE_SAMPLE_INTERVAL) * STEADY_SHARE) return false;
+    if (s.homeChanged || s.threat > 0) return false;
+    if (s.harvester < s.samples * STEADY_SHARE || s.container < s.samples * STEADY_SHARE) return false;
+    const seen = s.reserved + s.unreserved;
+    return Math.min(s.reserved, s.unreserved) <= seen * (1 - STEADY_SHARE);
+}
+
+function encodeSources(ticks: number): string {
+    const selected = Memory.remoteMining?.sources ?? {};
     const parts: string[] = [];
     for (const key in sourceAcc) {
         const values = sourceAcc[key].map(v => Math.round(v).toString(36));
-        parts.push(`${key}=${values.join(",")}`);
+        const steady = steadyWindow(sourceSamples[key], ticks) ? 1 : 0;
+        const home = selected[key]?.homeRoom ?? lastHome.get(key) ?? "";
+        parts.push(`${key}=${values.join(",")},${steady},${home}`);
     }
     return parts.join(";");
+}
+
+/** Decodes one remote balance string of the history (see HistoryDetail.r) */
+export function decodeBalance(text: string): { [key: string]: SourceBalance } {
+    const sources: { [key: string]: SourceBalance } = {};
+    if (!text) return sources;
+    for (const part of text.split(";")) {
+        const [key, values] = part.split("=");
+        if (!values) continue;
+        const [harvested, delivered, cost, steady, home] = values.split(",");
+        sources[key] = {
+            harvested: parseInt(harvested, 36) || 0,
+            delivered: parseInt(delivered, 36) || 0,
+            cost: parseInt(cost, 36) || 0,
+            steady: steady === "1",
+            home: home ?? ""
+        };
+    }
+    return sources;
+}
+
+/** Remote balance windows of the history, oldest first (none while the segment is not loaded) */
+export function remoteBalanceWindows(): BalanceWindow[] {
+    if (!detailStore.ready) return [];
+    return normalizedDetail().r.map(([tick, ticks, text]) => ({ tick, ticks, sources: decodeBalance(text) }));
 }
 
 function trim(data: { length: number; shift(): unknown }, size: () => number): void {
@@ -358,7 +495,8 @@ function snapshot(data: HistoryData, detail: HistoryDetail, counters: { [name: s
     trim(data.e, () => JSON.stringify(data).length);
     historyStore.touchNow();
 
-    detail.r.push([Game.time, entry.rd ?? entry.d, encodeSources()]);
+    const covered = entry.rd ?? entry.d;
+    detail.r.push([Game.time, covered, encodeSources(covered)]);
     if (detail.r.length > HISTORY_SIZE) detail.r.splice(0, detail.r.length - HISTORY_SIZE);
     trim(detail.r, () => JSON.stringify(detail).length);
     detailStore.touchNow();
@@ -371,6 +509,7 @@ function resetAccumulators(): void {
     accSince = Game.time;
     roomAcc = {};
     sourceAcc = {};
+    sourceSamples = {};
     cpuSum = 0;
     cpuTicks = 0;
     bucketMin = Infinity;
@@ -385,6 +524,10 @@ export const historyModule = (): void => {
         cpuTicks++;
     }
     bucketMin = Math.min(bucketMin, Game.cpu.bucket);
+    if (lastSourceSample === undefined || Game.time - lastSourceSample >= SOURCE_SAMPLE_INTERVAL) {
+        lastSourceSample = Game.time;
+        sampleSources();
+    }
 
     if (!historyStore.ready || !detailStore.ready) return;
     const detail = normalizedDetail();
