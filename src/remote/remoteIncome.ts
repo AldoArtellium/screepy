@@ -162,8 +162,8 @@ export interface ReservationValue {
  * it can): the energy the reservation adds over the CPU it adds, against the energy per CPU of a
  * neutral source, which the remote budget would mine with that CPU instead. `source` describes the
  * room's average source (its `generation` is ignored), `sources` the sources mined there.
- * A 2-CLAIM reserver (1300 capacity) only holds a room 1100 of every ~1100 ticks: one-source rooms
- * pay then too; with 1-CLAIM reservers (650-1299) a one-source room doesn't.
+ * A one-source room doesn't pay, with 1-CLAIM (650-1299 capacity, 3.8 vs 5.3 at 50 tiles) or 2-CLAIM reservers
+ * (7.6 vs 8.4): close margins, so the decision follows CREEP_CODE_CPU; two-source rooms pay (5.7, 11.2).
  */
 export function reservationValue(source: SourceEconomy, sources: number, capacity: number): ReservationValue {
     const claimParts = Math.max(1, reserverClaimParts(capacity));
