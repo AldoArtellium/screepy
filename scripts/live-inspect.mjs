@@ -143,10 +143,14 @@ function decodeHistory(segments) {
     sources: Object.fromEntries(
       (text ? text.split(";") : []).map(part => {
         const [key, values] = part.split("=");
-        // harvested, delivered, cost (base 36), steady (1 / 0), home (since 2026-10-21)
-        const [harvested, delivered, cost, steady, home] = values.split(",");
+        // harvested, delivered, cost (base 36), steady (1 / 0), home (since 2026-10-21), flags (lot J:
+        // 1 selected the whole window, 2 threat, 4 container site built; history.ts windowFlags)
+        const [harvested, delivered, cost, steady, home, flags] = values.split(",");
         const n = v => parseInt(v, 36) || 0;
-        return [key, { harvested: n(harvested), delivered: n(delivered), cost: n(cost), steady: steady === "1", home: home ?? "" }];
+        return [
+          key,
+          { harvested: n(harvested), delivered: n(delivered), cost: n(cost), steady: steady === "1", home: home ?? "", flags: flags ? n(flags) : undefined }
+        ];
       })
     )
   }));
@@ -278,6 +282,7 @@ function printRemotes(remotes, memory) {
       const recorded = [...remotes].reverse().find(r => r.sources[key]?.home)?.sources[key].home;
       const home = selected[key]?.homeRoom ?? (recorded ? `${recorded} (dropped)` : "- (dropped)");
       const steady = remotes.slice(-3).filter(r => r.sources[key]?.steady).length;
+      const states = remotes.slice(-3).map(r => windowState(r.sources[key])).join("");
       const net = s.delivered - s.cost;
       return [
         key,
@@ -289,11 +294,26 @@ function printRemotes(remotes, memory) {
         fmt(per1k(net, ticks)),
         s.harvested > 0 ? `${Math.round((100 * s.delivered) / s.harvested)}%` : "-",
         fmt(per1k(l.delivered - l.cost, last.ticks)),
-        `${steady}/3`
+        `${steady}/3`,
+        states
       ];
     });
-  table(["source", "home", "travel", "harvested", "delivered", "cost", "net", "deliv/harv", "net last", "steady"], rows, [0, 1]);
+  table(["source", "home", "travel", "harvested", "delivered", "cost", "net", "deliv/harv", "net last", "steady", "last 3"], rows, [0, 1]);
   console.log("steady: windows of the last 3 that measure the source cleanly (remote/remoteBalance.ts judges 3 of 3)");
+  console.log(
+    "last 3 (oldest first): S steady, U selected the whole window but not steady (the unsteady rule judges UUU), " +
+      "T threat, B container site built, p selected part of the window, - absent, ? written without flags"
+  );
+}
+
+/** One letter for a source's state in a balance window (see printRemotes) */
+function windowState(balance) {
+  if (!balance) return "-";
+  if (balance.steady) return "S";
+  if (balance.flags === undefined) return "?";
+  if (balance.flags & 2) return "T";
+  if (balance.flags & 4) return "B";
+  return balance.flags & 1 ? "U" : "p";
 }
 
 function printExcluded(memory, time) {
@@ -302,10 +322,10 @@ function printExcluded(memory, time) {
   section(`Remote sources excluded by their measured balance (${keys.length})`);
   if (keys.length === 0) return;
   table(
-    ["source", "home", "net/1000", "since", "until", "ticks left"],
+    ["source", "home", "reason", "net/1000", "since", "until", "ticks left"],
     keys.map(key => {
       const e = excluded[key];
-      return [key, e.home, e.net, e.since, e.until, time !== undefined ? e.until - time : "?"];
+      return [key, e.home, e.reason ?? "measured", e.net, e.since, e.until, time !== undefined ? e.until - time : "?"];
     }),
     [0, 1]
   );

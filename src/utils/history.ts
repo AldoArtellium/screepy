@@ -66,10 +66,12 @@ interface HistoryDetail {
     /** Last spawns, oldest first */
     s: SpawnLogEntry[];
     /**
-     * Remote balance per snapshot: [tick, ticks covered, "room:x:y=harvested,delivered,cost,steady,home;..."],
+     * Remote balance per snapshot: [tick, ticks covered, "room:x:y=harvested,delivered,cost,steady,home,flags;..."],
      * numbers in base 36, `steady` 1 when the window is a clean measure (steadyWindow), `home` the
-     * source's home room (the last one it had when no longer selected). Entries written before
-     * 2026-10-21 have no steady / home field.
+     * source's home room (the last one it had when no longer selected), `flags` the window state
+     * (windowFlags: selected the whole window, threat, container site built). Entries written before
+     * 2026-10-21 have no steady / home field, and no flags field before lot J; a source selected the
+     * whole window with nothing spawned, harvested or delivered gets an entry with zeros since then.
      */
     r: [number, number, string][];
 }
@@ -83,6 +85,12 @@ export interface SourceBalance {
     steady: boolean;
     /** Home room ("" unknown) */
     home: string;
+    /** Selected by that home the whole window, no global reset (undefined: entry without flags) */
+    full?: boolean;
+    /** A hostile or an invader core in the source room or the home on a sample */
+    threat?: boolean;
+    /** The source's container site made progress (or was finished) during the window */
+    building?: boolean;
 }
 
 export interface BalanceWindow {
@@ -111,6 +119,11 @@ export interface SourceSamples {
     /** Samples with the remote controller in sight, reserved by us or not */
     reserved: number;
     unreserved: number;
+    /** Progress of a container site next to the source on the first and last sample that saw one */
+    siteFirst?: number;
+    siteLast?: number;
+    /** A container stood on a sample after a site was seen (the site was finished) */
+    siteDone?: boolean;
 }
 let sourceSamples: { [key: string]: SourceSamples } = {};
 let lastSourceSample: number | undefined;
@@ -199,6 +212,16 @@ export function countRemoteDelivery(sourceKey: string, energy: number): void {
 
 const SPLIT_BY_TRAVEL = ["remoteHauler", "remoteBuilder"];
 
+/** Sources with a remote harvester alive or spawning */
+function remoteHarvesterSources(): Set<string> {
+    const keys = new Set<string>();
+    for (const name in Game.creeps) {
+        const memory = Game.creeps[name].memory;
+        if (memory.role === "remoteHarvester" && memory.source) keys.add(memory.source);
+    }
+    return keys;
+}
+
 /**
  * Spawn cost of a remote creep on the sources it serves: a remote harvester's on its source, a
  * reserver's split over its room's sources, haulers' and remote builders' (one pool per home) over
@@ -215,7 +238,14 @@ function addSpawnCost(home: string, memory: Partial<CreepMemory>, cost: number):
     if (memory.reserveRoom) {
         served = _.filter(sources, s => s.homeRoom === home && s.room === memory.reserveRoom).map(s => ({ key: s.key, travelTime: 1 }));
     } else if (SPLIT_BY_TRAVEL.includes(memory.role ?? "")) {
-        served = _.filter(sources, s => s.homeRoom === home).map(s => ({ key: s.key, travelTime: Math.max(1, s.travelTime) }));
+        // Only the sources the pool works for: remote builders pick sources with a remote harvester,
+        // haulers are only counted for a source with a harvester and a container (remoteSpawnRole).
+        // Split over every source, the farthest one, never served, took the biggest share (shard0
+        // W27N6:43:32, 103 tiles: 3095 charged in a window without harvester)
+        const all = _.filter(sources, s => s.homeRoom === home);
+        const harvested = remoteHarvesterSources();
+        const worked = all.filter(s => harvested.has(s.key) && (memory.role !== "remoteHauler" || !!s.containerId));
+        served = (worked.length > 0 ? worked : all).map(s => ({ key: s.key, travelTime: Math.max(1, s.travelTime) }));
     }
     const total = _.sum(served, s => s.travelTime);
     for (const s of served) addSource(s.key, 2, (cost * s.travelTime) / total);
@@ -350,12 +380,53 @@ function sampleSources(): void {
         // Out of sight a known container is assumed standing (RemoteMining.hasRemoteContainer)
         if (source.containerId && (!room || Game.getObjectById(source.containerId))) s.container++;
         if (threatened(source.room) || threatened(source.homeRoom)) s.threat++;
+        if (room) sampleContainerSite(s, room, source.x, source.y, !!source.containerId && !!Game.getObjectById(source.containerId));
         const controller = room?.controller;
         if (controller) {
             if (controller.reservation?.username === Memory.username) s.reserved++;
             else s.unreserved++;
         }
     }
+}
+
+/** Container site next to a visible source: its progress, and whether it got finished */
+function sampleContainerSite(s: SourceSamples, room: Room, x: number, y: number, container: boolean): void {
+    if (container) {
+        if (s.siteFirst !== undefined) s.siteDone = true;
+        return;
+    }
+    const site = room
+        .lookForAtArea(LOOK_CONSTRUCTION_SITES, Math.max(0, y - 1), Math.max(0, x - 1), Math.min(49, y + 1), Math.min(49, x + 1), true)
+        .find(r => r.constructionSite.my && r.constructionSite.structureType === STRUCTURE_CONTAINER)?.constructionSite;
+    if (!site) return;
+    s.siteFirst ??= site.progress;
+    s.siteLast = site.progress;
+}
+
+/** windowFlags bits */
+export const WINDOW_FULL = 1;
+export const WINDOW_THREAT = 2;
+export const WINDOW_BUILDING = 4;
+
+/**
+ * State of a source over a window, for the rules that judge windows which are not steady
+ * (remoteBalance.ts): selected by the same home the whole window without a global reset
+ * (WINDOW_FULL), a threat on a sample (WINDOW_THREAT), its container site made progress or was
+ * finished (WINDOW_BUILDING: the source is still being set up).
+ */
+export function windowFlags(s: SourceSamples | undefined, ticks: number): number {
+    if (!s) return 0;
+    let flags = 0;
+    if (
+        ticks >= SNAPSHOT_INTERVAL * STEADY_SHARE &&
+        s.samples >= Math.floor(ticks / SOURCE_SAMPLE_INTERVAL) * STEADY_SHARE &&
+        !s.homeChanged
+    ) {
+        flags |= WINDOW_FULL;
+    }
+    if (s.threat > 0) flags |= WINDOW_THREAT;
+    if (s.siteDone || (s.siteFirst !== undefined && (s.siteLast ?? 0) > s.siteFirst)) flags |= WINDOW_BUILDING;
+    return flags;
 }
 
 /**
@@ -379,11 +450,15 @@ export function steadyWindow(s: SourceSamples | undefined, ticks: number): boole
 function encodeSources(ticks: number): string {
     const selected = Memory.remoteMining?.sources ?? {};
     const parts: string[] = [];
-    for (const key in sourceAcc) {
-        const values = sourceAcc[key].map(v => Math.round(v).toString(36));
+    // Sources with a balance, and sources selected the whole window with nothing to count (an
+    // unserved source must show up: remoteBalance.ts judges consecutive windows)
+    const keys = new Set(Object.keys(sourceAcc));
+    for (const key in sourceSamples) if (windowFlags(sourceSamples[key], ticks) & WINDOW_FULL) keys.add(key);
+    for (const key of keys) {
+        const values = (sourceAcc[key] ?? [0, 0, 0]).map(v => Math.round(v).toString(36));
         const steady = steadyWindow(sourceSamples[key], ticks) ? 1 : 0;
         const home = selected[key]?.homeRoom ?? lastHome.get(key) ?? "";
-        parts.push(`${key}=${values.join(",")},${steady},${home}`);
+        parts.push(`${key}=${values.join(",")},${steady},${home},${windowFlags(sourceSamples[key], ticks).toString(36)}`);
     }
     return parts.join(";");
 }
@@ -395,7 +470,7 @@ export function decodeBalance(text: string): { [key: string]: SourceBalance } {
     for (const part of text.split(";")) {
         const [key, values] = part.split("=");
         if (!values) continue;
-        const [harvested, delivered, cost, steady, home] = values.split(",");
+        const [harvested, delivered, cost, steady, home, flagText] = values.split(",");
         sources[key] = {
             harvested: parseInt(harvested, 36) || 0,
             delivered: parseInt(delivered, 36) || 0,
@@ -403,6 +478,12 @@ export function decodeBalance(text: string): { [key: string]: SourceBalance } {
             steady: steady === "1",
             home: home ?? ""
         };
+        if (flagText !== undefined && flagText !== "") {
+            const flags = parseInt(flagText, 36) || 0;
+            sources[key].full = (flags & WINDOW_FULL) !== 0;
+            sources[key].threat = (flags & WINDOW_THREAT) !== 0;
+            sources[key].building = (flags & WINDOW_BUILDING) !== 0;
+        }
     }
     return sources;
 }
