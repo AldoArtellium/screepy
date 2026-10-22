@@ -353,5 +353,39 @@ const corridor = ["#######", ".......", "#######"];
     check("no reverse swap: both wait", moves.get("bayFiller") === key(2, 1) && moves.get("builder") === key(1, 1));
 }
 
+{
+    // a packed block of idle creeps pushed into from outside must not exhaust the budget for a lone
+    // mover elsewhere in the room (review: 49 idle creeps took 9.5 ms and froze it)
+    // 6x6 block of creeps holding their range: own tile + 3 tiles, all inside the block
+    const creeps = [];
+    const inBlock = (x, y) => x >= 1 && x <= 6 && y >= 1 && y <= 6;
+    for (let x = 1; x <= 6; x++) {
+        for (let y = 1; y <= 6; y++) {
+            const alt = [[x + 1, y], [x, y + 1], [x - 1, y]].filter(([ax, ay]) => inBlock(ax, ay)).map(([ax, ay]) => key(ax, ay));
+            creeps.push({ id: `b${x},${y}`, pos: key(x, y), priority: 50, targets: [key(x, y), ...alt] });
+        }
+    }
+    creeps.push({ id: "intruder", pos: key(7, 3), priority: 60, targets: [key(6, 3)] });
+    creeps.push({ id: "lone", pos: key(15, 10), priority: 1, targets: [key(16, 10)] });
+    const start = process.hrtime.bigint();
+    const { moves } = resolveTraffic(creeps);
+    const ms = Number(process.hrtime.bigint() - start) / 1e6;
+    checkConsistent("dense block", creeps, moves);
+    check("dense block: the lone mover still moves", moves.get("lone") === key(16, 10));
+    check("dense block: resolved in under 5 ms", ms < 5, `${ms.toFixed(2)} ms`);
+}
+{
+    // never step a lower priority mover back onto an exit tile: the engine would carry it out of the room
+    const edge = ["#.#", "#.#", "#.#"];
+    const creeps = scenario(edge, [0, 0], [
+        { name: "arrived", x: 1, y: 0, step: [1, 1], priority: 91 },
+        { name: "builder", x: 1, y: 1, step: [1, 2], priority: 51 },
+        { name: "miner", x: 1, y: 2, hold: true, priority: 96 },
+    ]);
+    const { moves } = resolveTraffic(creeps);
+    checkConsistent("exit tile", creeps, moves);
+    check("exit tile: no step back onto an exit tile", moves.get("builder") === key(1, 1));
+}
+
 console.log(failures ? `\n${failures} check(s) failed` : "\nall checks passed");
 process.exit(failures ? 1 : 0);

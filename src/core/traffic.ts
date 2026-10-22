@@ -33,8 +33,19 @@ export interface TrafficResult {
 /** Longest push chain followed (W28N7's jam needed 4) */
 const MAX_DEPTH = 12;
 
-/** Push attempts per room and tick, bounds the CPU in a crowded room */
+/**
+ * Push attempts per room and tick, bounds the CPU in a crowded room: past it the remaining creeps only
+ * take free tiles and swaps, no pushes
+ */
 const MAX_STEPS = 2000;
+
+/** Exit tile: a creep left there is carried into the next room */
+function isEdge(tile: number): boolean {
+    if (tile >= 2500) return false;
+    const x = tile % 50;
+    const y = Math.floor(tile / 50);
+    return x === 0 || x === 49 || y === 0 || y === 49;
+}
 
 export function resolveTraffic(creeps: TrafficCreep[]): TrafficResult {
     const occupant = new Map<number, TrafficCreep>();
@@ -44,6 +55,8 @@ export function resolveTraffic(creeps: TrafficCreep[]): TrafficResult {
     const assigned = new Map<TrafficCreep, number>();
     /** Creeps of the push chain being tried: their tiles are being left */
     const visiting = new Set<TrafficCreep>();
+    /** Creeps that could not be placed in the current root's search: not tried again (memo) */
+    const failed = new Set<TrafficCreep>();
     let steps = 0;
     let pushed = 0;
 
@@ -84,7 +97,7 @@ export function resolveTraffic(creeps: TrafficCreep[]): TrafficResult {
             return true;
         }
         // A lower priority mover that can't advance steps back onto our tile
-        if (isMover(other) && other.priority < creep.priority && !claimed.has(creep.pos)) {
+        if (isMover(other) && other.priority < creep.priority && !claimed.has(creep.pos) && !isEdge(creep.pos)) {
             assigned.set(creep, tile);
             assign(other, creep.pos);
             pushed++;
@@ -94,11 +107,12 @@ export function resolveTraffic(creeps: TrafficCreep[]): TrafficResult {
         return false;
     };
 
-    const place = (creep: TrafficCreep, depth: number): boolean => {
-        if (depth > MAX_DEPTH || ++steps > MAX_STEPS) return false;
+    const place = (creep: TrafficCreep, depth: number, passes = 3): boolean => {
+        if (failed.has(creep) || depth > MAX_DEPTH) return false;
+        if (depth > 0 && ++steps > MAX_STEPS) return false;
         visiting.add(creep);
         let placed = false;
-        for (let pass = 0; pass < 3; pass++) {
+        for (let pass = 0; pass < passes; pass++) {
             for (const tile of creep.targets) {
                 if (tryTile(creep, tile, pass, depth)) {
                     placed = true;
@@ -108,6 +122,7 @@ export function resolveTraffic(creeps: TrafficCreep[]): TrafficResult {
             if (placed) break;
         }
         visiting.delete(creep);
+        if (!placed) failed.add(creep);
         return placed;
     };
 
@@ -123,7 +138,9 @@ export function resolveTraffic(creeps: TrafficCreep[]): TrafficResult {
         .map(({ creep }) => creep);
     let blocked = 0;
     for (const creep of order) {
-        if (assigned.has(creep) || place(creep, 0)) continue;
+        if (assigned.has(creep)) continue;
+        failed.clear();
+        if (place(creep, 0, steps < MAX_STEPS ? 3 : 2)) continue;
         // Stays: its tile was never claimed (failed pushes release their claims)
         assign(creep, creep.pos);
         if (isMover(creep)) blocked++;

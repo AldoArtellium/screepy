@@ -24,6 +24,7 @@ import {
     reconcileTraffic
 } from "screeps-cartographer";
 import { resolveTraffic, TrafficCreep } from "../core/traffic";
+import { log } from "../utils/logger";
 import { countStat, recordSample } from "../utils/stats";
 import { jitter } from "../utils/jitter";
 
@@ -331,7 +332,14 @@ class TrafficManager {
             for (const name in Game.creeps) rooms.add(Game.creeps[name].pos.roomName);
             for (const roomName of rooms) {
                 const room = Game.rooms[roomName];
-                if (room) this.resolveRoom(room);
+                if (!room) continue;
+                try {
+                    this.resolveRoom(room);
+                } catch (error) {
+                    // the room keeps cartographer's own resolution this tick
+                    log.error("TrafficManager", `resolveTraffic failed in ${roomName}:`, (error as Error).stack);
+                    countStat("traffic:error");
+                }
             }
         } finally {
             // creeps must move even if the resolution failed
@@ -357,24 +365,42 @@ class TrafficManager {
         if (intents.creep.size === 0) return;
         if (intents.pullers.size || intents.pullees.size || intents.blockedSquares.size) return;
         const creeps: (Creep | PowerCreep)[] = [...room.find(FIND_MY_CREEPS), ...room.find(FIND_MY_POWER_CREEPS)];
-        // targets across the room edge get keys from 2500 up
+        // targets across the room edge get keys from 2500 up, one per tile
         const outside: RoomPosition[] = [];
-        const pack = (pos: RoomPosition): number =>
-            pos.roomName === room.name ? pos.y * 50 + pos.x : 2500 + outside.push(pos) - 1;
+        const outsideKeys = new Map<string, number>();
+        const pack = (pos: RoomPosition): number => {
+            if (pos.roomName === room.name) return pos.y * 50 + pos.x;
+            const name = `${pos.roomName}:${pos.x},${pos.y}`;
+            let packed = outsideKeys.get(name);
+            if (packed === undefined) {
+                packed = 2500 + outside.push(pos) - 1;
+                outsideKeys.set(name, packed);
+            }
+            return packed;
+        };
         const entries: { creep: Creep | PowerCreep; traffic: TrafficCreep }[] = [];
         for (const creep of creeps) {
             if ("spawning" in creep && creep.spawning) continue;
             const intent = intents.creep.get(creep.id);
-            const targets = intent?.targets ?? [creep.pos, ...adjacentWalkablePositions(creep.pos, true)];
+            // a tired creep can't be shoved (cartographer's registerMove keeps it in place)
+            const tired = "fatigue" in creep && creep.fatigue > 0;
+            const targets =
+                intent?.targets ?? (tired ? [creep.pos] : [creep.pos, ...adjacentWalkablePositions(creep.pos, true)]);
             entries.push({
                 creep,
-                traffic: { id: creep.id, pos: pack(creep.pos), priority: intent?.priority ?? 0, targets: targets.map(pack) }
+                traffic: {
+                    id: creep.id,
+                    pos: pack(creep.pos),
+                    priority: intent?.priority ?? 0,
+                    targets: targets.map(pack)
+                }
             });
         }
         const { moves, pushed, blocked } = resolveTraffic(entries.map(e => e.traffic));
         for (const { creep, traffic } of entries) {
             const tile = moves.get(traffic.id) ?? traffic.pos;
-            const pos = tile < 2500 ? new RoomPosition(tile % 50, Math.floor(tile / 50), room.name) : outside[tile - 2500];
+            const pos =
+                tile < 2500 ? new RoomPosition(tile % 50, Math.floor(tile / 50), room.name) : outside[tile - 2500];
             move(creep, [pos], traffic.priority);
         }
         if (pushed) countStat("traffic:pushed", pushed);
