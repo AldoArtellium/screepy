@@ -3,7 +3,9 @@
  *
  * Features:
  * - Path caching, repath when stuck (cartographer)
- * - Priority-based traffic reconciliation: swapping and shoving idle creeps (cartographer)
+ * - Priority-based traffic reconciliation: each room's intents are resolved first by `resolveTraffic`
+ *   (push chains, swaps; cartographer's greedy pass froze two flows through a one-tile choke), then
+ *   handed back to cartographer with one target per creep
  * - Stuck tracking for task failure detection
  * - Idle position finding
  *
@@ -12,7 +14,16 @@
  * "stay in range" intent so the reconciler doesn't shove it away.
  */
 
-import { clearCachedPath, move, moveTo, preTick, reconcileTraffic } from "screeps-cartographer";
+import {
+    adjacentWalkablePositions,
+    clearCachedPath,
+    getMoveIntents,
+    move,
+    moveTo,
+    preTick,
+    reconcileTraffic
+} from "screeps-cartographer";
+import { resolveTraffic, TrafficCreep } from "../core/traffic";
 import { countStat, recordSample } from "../utils/stats";
 import { jitter } from "../utils/jitter";
 
@@ -315,7 +326,17 @@ class TrafficManager {
      * Resolve all registered moves. Call once per tick, after all creep logic.
      */
     processMovement(): void {
-        reconcileTraffic();
+        try {
+            const rooms = new Set<string>();
+            for (const name in Game.creeps) rooms.add(Game.creeps[name].pos.roomName);
+            for (const roomName of rooms) {
+                const room = Game.rooms[roomName];
+                if (room) this.resolveRoom(room);
+            }
+        } finally {
+            // creeps must move even if the resolution failed
+            reconcileTraffic();
+        }
 
         // Drop stuck tracking for dead/inactive creeps
         if (Game.time % 100 === 0) {
@@ -323,6 +344,41 @@ class TrafficManager {
                 if (!Game.creeps[name] || state.tick < Game.time - 10) this.stuck.delete(name);
             }
         }
+    }
+
+    /**
+     * Resolves the room's move intents with `resolveTraffic` and registers each creep again with the
+     * one tile it gets, so cartographer's reconcile only applies them. Creeps without an intent can be
+     * shoved to any adjacent walkable tile, as in cartographer. Rooms with pulls or blocked squares
+     * (none of our code uses them) are left to cartographer.
+     */
+    private resolveRoom(room: Room): void {
+        const intents = getMoveIntents(room.name);
+        if (intents.creep.size === 0) return;
+        if (intents.pullers.size || intents.pullees.size || intents.blockedSquares.size) return;
+        const creeps: (Creep | PowerCreep)[] = [...room.find(FIND_MY_CREEPS), ...room.find(FIND_MY_POWER_CREEPS)];
+        // targets across the room edge get keys from 2500 up
+        const outside: RoomPosition[] = [];
+        const pack = (pos: RoomPosition): number =>
+            pos.roomName === room.name ? pos.y * 50 + pos.x : 2500 + outside.push(pos) - 1;
+        const entries: { creep: Creep | PowerCreep; traffic: TrafficCreep }[] = [];
+        for (const creep of creeps) {
+            if ("spawning" in creep && creep.spawning) continue;
+            const intent = intents.creep.get(creep.id);
+            const targets = intent?.targets ?? [creep.pos, ...adjacentWalkablePositions(creep.pos, true)];
+            entries.push({
+                creep,
+                traffic: { id: creep.id, pos: pack(creep.pos), priority: intent?.priority ?? 0, targets: targets.map(pack) }
+            });
+        }
+        const { moves, pushed, blocked } = resolveTraffic(entries.map(e => e.traffic));
+        for (const { creep, traffic } of entries) {
+            const tile = moves.get(traffic.id) ?? traffic.pos;
+            const pos = tile < 2500 ? new RoomPosition(tile % 50, Math.floor(tile / 50), room.name) : outside[tile - 2500];
+            move(creep, [pos], traffic.priority);
+        }
+        if (pushed) countStat("traffic:pushed", pushed);
+        if (blocked) countStat("traffic:blocked", blocked);
     }
 
     /**
