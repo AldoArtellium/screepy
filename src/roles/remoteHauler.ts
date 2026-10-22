@@ -20,6 +20,7 @@ import {
 } from "../remote/RemoteMining";
 import { REMOTE_HARVESTER, REMOTE_HAULER } from "../remote/remoteSpawnRole";
 import { countRemoteDelivery } from "../utils/history";
+import { countStat } from "../utils/stats";
 import { fleeIfThreatened } from "./flee";
 import { registerRole } from "./registry";
 import { performDeliver } from "./transporter";
@@ -111,19 +112,32 @@ function pickup(creep: Creep): void {
     });
 }
 
-/** Piles, tombstones and ruins at range 3, outside our rooms */
+/**
+ * Piles, tombstones and ruins at range 3, outside our rooms. Every resource once the home has a
+ * storage to keep them (the tombstones of boosted invaders hold part of their compounds), else energy
+ * only (The International logisticsProcs: energy only in remotes)
+ */
 function pickupNearby(creep: Creep): boolean {
     if (creep.room.controller?.my || creep.store.getFreeCapacity() === 0) return false;
-    const pile = creep.pos.findInRange(FIND_DROPPED_RESOURCES, 3).find(r => r.resourceType === RESOURCE_ENERGY && r.amount >= 20);
+    const home = Game.rooms[creep.memory.room ?? ""];
+    const anyResource = !!home?.storage?.my;
+    const wanted = (resourceType: ResourceConstant) => resourceType === RESOURCE_ENERGY || anyResource;
+    const pile = creep.pos
+        .findInRange(FIND_DROPPED_RESOURCES, 3)
+        .find(r => wanted(r.resourceType) && r.amount >= (r.resourceType === RESOURCE_ENERGY ? 20 : 1));
     if (pile) {
-        whenInRange(creep, 1, pile, () => creep.pickup(pile));
+        whenInRange(creep, 1, pile, () => {
+            if (creep.pickup(pile) === OK && pile.resourceType !== RESOURCE_ENERGY) countStat(`loot:${pile.resourceType}`, pile.amount);
+        });
         return true;
     }
-    const grave = [...creep.pos.findInRange(FIND_TOMBSTONES, 3), ...creep.pos.findInRange(FIND_RUINS, 3)].find(
-        g => g.store.energy > 0
-    );
-    if (grave) {
-        whenInRange(creep, 1, grave, () => creep.withdraw(grave, RESOURCE_ENERGY));
+    for (const grave of [...creep.pos.findInRange(FIND_TOMBSTONES, 3), ...creep.pos.findInRange(FIND_RUINS, 3)]) {
+        const resourceType = (Object.keys(grave.store) as ResourceConstant[]).find(r => grave.store[r] > 0 && wanted(r));
+        if (!resourceType) continue;
+        whenInRange(creep, 1, grave, () => {
+            const amount = Math.min(grave.store[resourceType], creep.store.getFreeCapacity());
+            if (creep.withdraw(grave, resourceType) === OK && resourceType !== RESOURCE_ENERGY) countStat(`loot:${resourceType}`, amount);
+        });
         return true;
     }
     return false;

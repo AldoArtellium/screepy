@@ -844,6 +844,8 @@ async function main() {
   for (tick = 1; tick <= TICKS; tick++) {
     if (!presetDone) presetDone = await applyPlanPreset(server, user, await readMemory(user));
     for (const raid of RAIDS.filter((r) => r.tick === tick)) {
+      // ageTime like the backend's invaders: the engine sizes the tombstone loot from it (NaN without)
+      const ageTime = Number(await server.world.gameTime) + 1500;
       const names = [];
       const raidRoom = raid.room || ROOM;
       if (!fixture.rooms[raidRoom]) throw new Error(`Raid room ${raidRoom} is not in the fixture`);
@@ -856,7 +858,7 @@ async function main() {
         const name = `invader_${raidRoom}_${tick}_${i}`;
         await db["rooms.objects"].insert({
           type: "creep", user: "2", body: body.map((t) => (boosted && RAID_BOOSTS[t] ? { type: t, hits: 100, boost: RAID_BOOSTS[t] } : { type: t, hits: 100 })), hits: body.length * 100,
-          hitsMax: body.length * 100, ticksToLive: 1500, x, y, room: raidRoom, fatigue: 0, store: {}, storeCapacity: 0, name
+          hitsMax: body.length * 100, ticksToLive: 1500, ageTime, x, y, room: raidRoom, fatigue: 0, store: {}, storeCapacity: 0, name
         });
         names.push(name);
       }

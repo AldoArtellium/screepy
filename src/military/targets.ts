@@ -1,28 +1,39 @@
 /**
- * Automatic targets (when Memory.military.attack is unset), by return on investment after Harabi's
- * "ROI-driven target selection": score = durability x distance penalty / threat, lowest first.
+ * Automatic targets (when Memory.military.attack is unset), by return on investment in energy (roi.ts):
+ * what a target brings against what its squad costs, the best return of at least 1 wins.
  *
  * 1. Strongholds (invader cores of level 1 to maxStrongholdLevel, default 1) near our rooms or
- *    remotes: they spawn defenders that raid our remotes, so they come first. Level 0 cores in our
- *    remotes are already cleared by the remote defense ATTACKER (remote/remoteDefense.ts).
- * 2. Player rooms, only with `Memory.military.auto = true` (never by default): durability from the
- *    weakest rampart (1 = 1M hits) and the towers, threat from the player's infamy (energy they made us
- *    lose) plus a baseline for armed rooms within 5 rooms; the current target's score is halved
- *    (hysteresis), rooms in safe mode or recently failed are skipped.
- * Only targets the chosen squad can fight (sizing.ts feasible). Our design.
+ *    remotes: their loot seen in sight and the remote income they block until they collapse (their
+ *    room's sources). Level 0 cores in our remotes are already cleared by the remote defense ATTACKER
+ *    (remote/remoteDefense.ts).
+ * 2. Player rooms, only with `Memory.military.auto = true` (never by default): their loot seen in
+ *    sight (storage, terminal, containers) and the energy the player made us lose (infamy); rooms in
+ *    safe mode or without spawn are skipped.
+ * Rooms that failed in the last FAILURE_MEMORY ticks are left alone, and only targets the chosen squad
+ * can fight (sizing.ts feasible) count. Before, Harabi's score (durability x distance / threat) with
+ * strongholds always first: the mockup quad lost 8 creeps (~16k energy each way) for 22 units of loot.
+ * Our design.
  */
 
+import { intelManager } from "../modules/IntelManager";
 import { remoteSources } from "../remote/RemoteMining";
 import { HostileRoom, militaryMemory } from "./intel";
-import { planSquad } from "./sizing";
+import { pickTarget, remoteValue, squadCost, targetValue } from "./roi";
+import { planSquad, squadMemberCosts } from "./sizing";
 
 const MAX_DISTANCE = 10;
 /** Linear distance of a stronghold from our rooms (remotes: one less) */
 const STRONGHOLD_RANGE = 2;
-const PLAYER_BASELINE_RANGE = 5;
-const PLAYER_BASELINE = 1000;
 /** A failed target is left alone this long */
 const FAILURE_MEMORY = 20000;
+
+export interface AutoTarget {
+    room: string;
+    reason: "stronghold" | "player";
+    roi: number;
+    value: number;
+    cost: number;
+}
 
 interface Origin {
     room: Room;
@@ -61,49 +72,49 @@ function nearOurTerritory(roomName: string): boolean {
     return false;
 }
 
-function strongholdScore(intel: HostileRoom, roomName: string, distance: number): number | null {
+function isStronghold(intel: HostileRoom, roomName: string): boolean {
     const maxLevel = militaryMemory().maxStrongholdLevel ?? 1;
-    if (!intel.coreLevel || intel.coreLevel > maxLevel) return null;
+    if (!intel.coreLevel || intel.coreLevel > maxLevel) return false;
     // Not deployed yet (nothing to fight for a while), or collapsing soon on its own
-    if ((intel.coreDeploy ?? 0) > Game.time + 500) return null;
-    if (intel.collapse !== undefined && intel.collapse - Game.time < 2000) return null;
-    if (!nearOurTerritory(roomName)) return null;
-    return intel.coreLevel + distance / 10;
+    if ((intel.coreDeploy ?? 0) > Game.time + 500) return false;
+    if (intel.collapse !== undefined && intel.collapse - Game.time < 2000) return false;
+    return nearOurTerritory(roomName);
 }
 
-function playerScore(intel: HostileRoom, distance: number, current: boolean): number | null {
-    const memory = militaryMemory();
-    if (!intel.owner || intel.owner === Memory.username || intel.spawns === 0) return null;
-    if ((intel.safeMode ?? 0) > Game.time) return null;
-    const durability = Math.max(0.05, intel.barrier / 1e6) + 0.25 * intel.towers;
-    const baseline = intel.towers > 0 && distance <= PLAYER_BASELINE_RANGE ? PLAYER_BASELINE : 0;
-    const threat = Math.max(1, (memory.infamy?.[intel.owner] ?? 0) + baseline);
-    const score = (durability * (1 + Math.log2(1 + distance))) / threat;
-    return current ? score / 2 : score;
+function isPlayerTarget(intel: HostileRoom): boolean {
+    if (!militaryMemory().auto) return false;
+    if (!intel.owner || intel.owner === Memory.username || intel.spawns === 0) return false;
+    return (intel.safeMode ?? 0) <= Game.time;
 }
 
-/** Best automatic target, strongholds before players (null: nothing worth it) */
-export function chooseAutoTarget(): { room: string; reason: "stronghold" | "player" } | null {
+/** Every feasible target with its return (value / cost in energy) */
+export function rankTargets(): AutoTarget[] {
     const memory = militaryMemory();
     const from = origins();
-    if (from.length === 0) return null;
-    let best: { room: string; reason: "stronghold" | "player"; score: number } | null = null;
+    const targets: AutoTarget[] = [];
+    if (from.length === 0) return targets;
     for (const [roomName, intel] of Object.entries(memory.rooms ?? {})) {
         if (recentlyFailed(roomName)) continue;
         const near = closest(from, roomName);
         if (!near) continue;
-        const stronghold = strongholdScore(intel, roomName, near.distance);
-        const player =
-            stronghold === null && memory.auto
-                ? playerScore(intel, near.distance, memory.target?.room === roomName)
-                : null;
-        if (stronghold === null && player === null) continue;
-        if (!planSquad(roomName, near.origin.room.energyCapacityAvailable, memory.squad, stronghold !== null).feasible)
-            continue;
-        // Strongholds always before players
-        const score = stronghold !== null ? stronghold - 1000 : player!;
-        if (!best || score < best.score)
-            best = { room: roomName, reason: stronghold !== null ? "stronghold" : "player", score };
+        const reason = isStronghold(intel, roomName) ? "stronghold" : isPlayerTarget(intel) ? "player" : null;
+        if (!reason) continue;
+        const energy = near.origin.room.energyCapacityAvailable;
+        const plan = planSquad(roomName, energy, memory.squad, reason === "stronghold");
+        if (!plan.feasible) continue;
+        const cost = squadCost(squadMemberCosts(plan.type, energy));
+        const ticksLeft = (intel.collapse ?? Infinity) - Game.time;
+        const value = targetValue({
+            loot: intel.loot ?? 0,
+            remote: reason === "stronghold" ? remoteValue(intelManager.sourceCount(roomName), ticksLeft) : 0,
+            infamy: reason === "player" ? memory.infamy?.[intel.owner!] ?? 0 : 0
+        });
+        targets.push({ room: roomName, reason, roi: value / cost, value: Math.round(value), cost });
     }
-    return best && { room: best.room, reason: best.reason };
+    return targets;
+}
+
+/** Best automatic target (null: nothing pays for its squad) */
+export function chooseAutoTarget(): AutoTarget | null {
+    return pickTarget(rankTargets(), militaryMemory().target?.room);
 }

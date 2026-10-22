@@ -4,7 +4,10 @@
  * Harabi's ROI target selection: the energy a player made us lose). Our design.
  */
 
+import { energyPrice } from "../modules/MarketManager";
 import { remoteSources } from "../remote/RemoteMining";
+import { lootRamparts } from "./loot";
+import { lootValue, RAID_MIN_LOOT } from "./roi";
 
 export interface HostileRoom {
     /** Tick of the record */
@@ -26,6 +29,12 @@ export interface HostileRoom {
     /** Damage and healing per tick of the hostile creeps */
     damage: number;
     heal: number;
+    /** Loot seen in the room, in energy (roi.ts lootValue at market prices) */
+    loot?: number;
+    /** Energy in the hostile towers (raids need them empty) */
+    towerEnergy?: number;
+    /** Hits of the strongest hostile rampart over loot (raids: a dismantler must open it) */
+    lootBarrier?: number;
 }
 
 declare global {
@@ -35,10 +44,12 @@ declare global {
             attack?: string;
             /** Allow automatic attacks on player rooms (default off: strongholds only) */
             auto?: boolean;
+            /** Allow raids on rooms with loot and no defense (loot.ts; default off) */
+            raid?: boolean;
             /** Force the squad type of new missions ("duo" or "quad"; default: sized from the threat) */
             squad?: "duo" | "quad";
             /** Automatic target (strongholds near our rooms, players with `auto`) */
-            target?: { room: string; reason: "stronghold" | "player"; since: number };
+            target?: { room: string; reason: "stronghold" | "player"; since: number; roi?: number };
             duos: { [name: string]: import("./duo").DuoMemory };
             quads?: { [name: string]: import("./quad").QuadMemory };
             /** Lowest RCL of the attacking room (default 4; lower it to test sooner) */
@@ -51,6 +62,8 @@ declare global {
             rooms?: { [room: string]: HostileRoom };
             /** Energy each player made us lose (decays) */
             infamy?: { [player: string]: number };
+            /** Rooms looted after a successful attack (loot.ts) */
+            loot?: { [room: string]: import("./loot").LootMission };
         };
     }
 }
@@ -83,13 +96,43 @@ function combatPower(creeps: Creep[]): { damage: number; heal: number } {
     return { damage, heal };
 }
 
-function recordRoom(room: Room): void {
+/** Loot in sight, in energy: stores that are not ours (containers, ruins, others' storage and terminal) */
+/** Our rooms and the rooms we mine (their containers are ours) */
+function ourRooms(): Set<string> {
+    const ours = new Set<string>();
+    for (const name in Game.rooms) {
+        if (!Game.rooms[name].controller?.my) continue;
+        ours.add(name);
+        for (const source of remoteSources(name)) ours.add(source.room);
+    }
+    return ours;
+}
+
+function roomLoot(room: Room, ours: Set<string>): number {
+    if (room.controller?.my) return 0;
+    // The containers of the rooms we mine are ours
+    const mined = ours.has(room.name);
+    const store: { [resourceType: string]: number } = {};
+    const add = (s: Store<ResourceConstant, boolean>) => {
+        for (const r of Object.keys(s) as ResourceConstant[]) store[r] = (store[r] ?? 0) + (s[r] ?? 0);
+    };
+    for (const ruin of room.find(FIND_RUINS)) add(ruin.store);
+    for (const s of room.find(FIND_STRUCTURES)) {
+        if (s.structureType === STRUCTURE_CONTAINER && !mined) add(s.store);
+        else if ((s.structureType === STRUCTURE_STORAGE || s.structureType === STRUCTURE_TERMINAL) && !s.my) add(s.store);
+    }
+    return Math.round(lootValue(store, r => energyPrice(r as ResourceConstant)));
+}
+
+function recordRoom(room: Room, ours: Set<string>): void {
     const memory = militaryMemory();
     const owner = room.controller?.owner?.username;
     const hostileOwner = !!owner && !room.controller?.my;
     const structures = room.find(FIND_HOSTILE_STRUCTURES);
     const core = structures.find(s => s.structureType === STRUCTURE_INVADER_CORE) as StructureInvaderCore | undefined;
-    if (!hostileOwner && !core && !structures.some(s => s.structureType === STRUCTURE_TOWER)) {
+    const loot = roomLoot(room, ours);
+    // Kept with enough loot even without owner, core or tower: an abandoned base (raids)
+    if (!hostileOwner && !core && !structures.some(s => s.structureType === STRUCTURE_TOWER) && loot < RAID_MIN_LOOT) {
         if (memory.rooms?.[room.name]) delete memory.rooms[room.name];
         return;
     }
@@ -99,18 +142,23 @@ function recordRoom(room: Room): void {
     });
     const collapse = core?.effects?.find(e => e.effect === EFFECT_COLLAPSE_TIMER);
     const power = combatPower(room.find(FIND_HOSTILE_CREEPS, { filter: c => c.owner.username !== "Source Keeper" }));
+    const towers = structures.filter((s): s is StructureTower => s.structureType === STRUCTURE_TOWER);
+    const lootBarrier = _.max([0, ...lootRamparts(room).map(r => r.hits)]);
     memory.rooms = memory.rooms ?? {};
     memory.rooms[room.name] = {
         t: Game.time,
         ...(hostileOwner && { owner, rcl: room.controller!.level }),
-        towers: structures.filter(s => s.structureType === STRUCTURE_TOWER).length,
+        towers: towers.length,
         spawns: structures.filter(s => s.structureType === STRUCTURE_SPAWN).length,
         ...(room.controller?.safeMode && { safeMode: Game.time + room.controller.safeMode }),
         barrier: barriers.length ? _.min(barriers.map(s => s.hits)) : 0,
         ...(core && { coreLevel: core.level, coreDeploy: Game.time + (core.ticksToDeploy ?? 0) }),
         ...(collapse && { collapse: Game.time + collapse.ticksRemaining }),
         damage: power.damage,
-        heal: power.heal
+        heal: power.heal,
+        ...(loot > 0 && { loot }),
+        ...(towers.length > 0 && { towerEnergy: _.sum(towers, t => t.store.energy) }),
+        ...(lootBarrier > 0 && { lootBarrier })
     };
 }
 
@@ -124,12 +172,7 @@ function bodyCost(creep: Creep): number {
 /** Infamy: energy value of the player creeps that came into our rooms or remotes */
 function recordInfamy(): void {
     const memory = militaryMemory();
-    const ours = new Set<string>();
-    for (const name in Game.rooms) {
-        if (!Game.rooms[name].controller?.my) continue;
-        ours.add(name);
-        for (const source of remoteSources(name)) ours.add(source.room);
-    }
+    const ours = ourRooms();
     for (const roomName of ours) {
         const room = Game.rooms[roomName];
         if (!room) continue;
@@ -155,7 +198,8 @@ function recordInfamy(): void {
 export function updateMilitaryIntel(): void {
     recordInfamy();
     if (Game.time % RECORD_EVERY !== 0) return;
-    for (const name in Game.rooms) recordRoom(Game.rooms[name]);
+    const ours = ourRooms();
+    for (const name in Game.rooms) recordRoom(Game.rooms[name], ours);
     const rooms = militaryMemory().rooms ?? {};
     for (const name in rooms) if (Game.time - rooms[name].t > FORGET_AFTER) delete rooms[name];
 }

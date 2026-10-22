@@ -14,6 +14,7 @@ import type { SpawnOption, SpawnRole } from "../spawning/spawnRoles";
 import { log } from "../utils/logger";
 import { DUO_ATTACKER, DUO_HEALER, DuoMemory, runDuo } from "./duo";
 import { hostileRoom, militaryMemory, updateMilitaryIntel } from "./intel";
+import { lootRamparts, startLooting, startRaids, updateLootMissions } from "./loot";
 import { QUAD_ATTACKER, QUAD_HEALER, QUAD_ROSTER, runQuad } from "./quad";
 import { duoAttackerBody, duoHealerBody, planSquad, quadAttackerBody, quadHealerBody } from "./sizing";
 import { chooseAutoTarget } from "./targets";
@@ -49,9 +50,10 @@ export function currentTarget(): string | undefined {
 function finish(
     kind: "duo" | "quad",
     name: string,
-    mission: { targetRoom: string; losses: number },
+    mission: { targetRoom: string; spawnRoom: string; losses: number },
     result: "success" | "abandoned"
 ): void {
+    if (result === "success") startLooting(mission.targetRoom, mission.spawnRoom);
     const memory = militaryMemory();
     memory.log = [
         ...(memory.log ?? []).slice(-9),
@@ -64,7 +66,7 @@ function finish(
     log.info("Military", `Attack on ${mission.targetRoom} (${kind}): ${result} (${mission.losses} creeps lost)`);
 }
 
-/** Visible room without spawn, tower or invader core left */
+/** Visible room without spawn, tower or invader core left, nor a hostile rampart over loot (loot.ts) */
 function isNeutralized(roomName: string): boolean {
     const room = Game.rooms[roomName];
     if (!room) return false;
@@ -74,7 +76,7 @@ function isNeutralized(roomName: string): boolean {
             s.structureType === STRUCTURE_TOWER ||
             s.structureType === STRUCTURE_INVADER_CORE
     });
-    return left.length === 0;
+    return left.length === 0 && lootRamparts(room).length === 0;
 }
 
 /** A duo that lost a pair against a room now sized for a quad (unless the squad type is forced) */
@@ -114,12 +116,14 @@ function startMission(target: string): void {
 
 export const militaryModule = (): void => {
     updateMilitaryIntel();
+    updateLootMissions();
+    startRaids();
     const memory = militaryMemory();
     if (!memory.attack && Game.time % AUTO_TARGET_EVERY === 0) {
         const auto = chooseAutoTarget();
         if (auto && auto.room !== memory.target?.room) {
-            memory.target = { ...auto, since: Game.time };
-            log.info("Military", `Automatic target: ${auto.room} (${auto.reason})`);
+            memory.target = { room: auto.room, reason: auto.reason, since: Game.time, roi: Math.round(auto.roi * 100) / 100 };
+            log.info("Military", `Automatic target: ${auto.room} (${auto.reason}, value ${auto.value} for a squad of ${auto.cost} energy)`);
         } else if (!auto && memory.target && !hasMission(memory.target.room)) delete memory.target;
     }
     const target = currentTarget();

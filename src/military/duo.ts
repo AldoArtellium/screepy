@@ -16,6 +16,7 @@ import { trafficManager } from "../modules/TrafficManager";
 import { log } from "../utils/logger";
 import { countStat } from "../utils/stats";
 import { incomingDamage, verdict } from "./combat";
+import { lootRamparts } from "./loot";
 
 export const DUO_ATTACKER = "duoAttacker";
 export const DUO_HEALER = "duoHealer";
@@ -57,14 +58,17 @@ function members(name: string): { attacker?: Creep; healer?: Creep } {
     return { attacker: all.find(c => c.memory.role === DUO_ATTACKER), healer: all.find(c => c.memory.role === DUO_HEALER) };
 }
 
-/** Structure a squad goes for in the target room: towers, the invader core, spawns, then the rest */
+/**
+ * Structure a squad goes for in the target room: towers, the invader core, spawns, then the ramparts
+ * over loot (loot.ts: a store can't be withdrawn from under them), then the rest
+ */
 export function pickTarget(room: Room, from: RoomPosition): Structure | null {
     const hostile = room.find(FIND_HOSTILE_STRUCTURES).filter(s => !IGNORED.includes(s.structureType));
     for (const type of TARGET_ORDER) {
         const target = from.findClosestByRange(hostile.filter(s => s.structureType === type));
         if (target) return target;
     }
-    return from.findClosestByRange(hostile);
+    return from.findClosestByRange(lootRamparts(room)) ?? from.findClosestByRange(hostile);
 }
 
 /** Ramparts and walls cost by their hits (the path goes through the weakest), other obstacles block */
