@@ -10,7 +10,8 @@
  * A deal waits until the terminal holds the amount and the energy for the transfer (transporters fill
  * it: room.memory.fillTerminal).
  *
- * Not ported: energy buying (off by default in Hivemind), pixels, commodities and deposit resources.
+ * Commodities and deposit resources (loot) are all sold: instant sell and a sell order (isCommodity).
+ * Not ported: energy buying (off by default in Hivemind), pixels.
  * Not in Hivemind: at most 10 deals per tick, terminals on cooldown or already used this tick skipped,
  * credits spent on a run are deducted from what the next buys may spend, an instant buy never spends more
  * than the credits above the reserve.
@@ -318,6 +319,16 @@ function manageOverflowingTerminals(): void {
     }
 }
 
+/**
+ * Factory products and deposit resources (bars, battery, wire, silicon...): nothing uses them without
+ * a factory, so all of them are sold (they come from loot, military/loot.ts). Not in Hivemind.
+ */
+function isCommodity(resourceType: ResourceConstant): boolean {
+    if (resourceType === RESOURCE_ENERGY || resourceType === RESOURCE_GHODIUM || resourceTier(resourceType) === 1) return false;
+    const products = Object.values(COMMODITIES) as { components: { [r: string]: number } }[];
+    return resourceType in COMMODITIES || products.some(c => resourceType in c.components);
+}
+
 /** Own orders older than 100 000 ticks or done */
 function removeOldOrders(): void {
     for (const id in Game.market.orders) {
@@ -341,6 +352,7 @@ export const marketManagerModule = (): void => {
     for (const resourceType of RESOURCES_ALL) {
         if (resourceTier(resourceType) === 1) manageBaseMineral(resourceType, states);
         else if (recipes[resourceType]) manageCompound(resourceType, states);
+        else if (isCommodity(resourceType)) manageSurplus(resourceType, states, 0, 0);
     }
     manageSurplus(RESOURCE_POWER, states, 20000, 10000);
     manageSurplus(RESOURCE_OPS, states, 10000, 5000);

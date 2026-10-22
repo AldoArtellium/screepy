@@ -51,6 +51,8 @@ declare global {
             rooms?: { [room: string]: HostileRoom };
             /** Energy each player made us lose (decays) */
             infamy?: { [player: string]: number };
+            /** Rooms looted after a successful attack (loot.ts) */
+            loot?: { [room: string]: import("./loot").LootMission };
         };
     }
 }
