@@ -130,6 +130,14 @@ function calculateWorth(resourceType: ResourceConstant): number {
     return worth;
 }
 
+/** Price of a resource in energy (market averages), 1 without price history (military/roi.ts loot value) */
+export function energyPrice(resourceType: ResourceConstant): number {
+    if (resourceType === RESOURCE_ENERGY) return 1;
+    const price = priceData(resourceType)?.average;
+    const energy = priceData(RESOURCE_ENERGY)?.average;
+    return price && energy ? price / energy : 1;
+}
+
 /** Order size from the traded volume: 10 000, 1000, 100, 10 or 1 */
 function maxOrderAmount(resourceType: ResourceConstant): number {
     const history = priceData(resourceType);

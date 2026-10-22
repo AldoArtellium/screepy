@@ -38,6 +38,15 @@ export function quadHealerBody(energy: number): BodyPartConstant[] {
     return buildBody({ weights: { [HEAL]: 3, [RANGED_ATTACK]: 1 }, moveMode: MoveMode.PLAINS, energyLimit: energy });
 }
 
+/** Spawn cost of each member of a squad (roi.ts squadCost) */
+export function squadMemberCosts(type: SquadType, energy: number): number[] {
+    const cost = (body: BodyPartConstant[]) => _.sum(body, p => BODYPART_COST[p]);
+    if (type === "duo") return [cost(duoAttackerBody(energy)), cost(duoHealerBody(energy))];
+    const attacker = cost(quadAttackerBody(energy));
+    const healer = cost(quadHealerBody(energy));
+    return [attacker, attacker, healer, healer];
+}
+
 function count(body: BodyPartConstant[], type: BodyPartConstant): number {
     return body.filter(p => p === type).length;
 }

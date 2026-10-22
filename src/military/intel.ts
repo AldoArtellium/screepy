@@ -4,7 +4,9 @@
  * Harabi's ROI target selection: the energy a player made us lose). Our design.
  */
 
+import { energyPrice } from "../modules/MarketManager";
 import { remoteSources } from "../remote/RemoteMining";
+import { lootValue } from "./roi";
 
 export interface HostileRoom {
     /** Tick of the record */
@@ -26,6 +28,8 @@ export interface HostileRoom {
     /** Damage and healing per tick of the hostile creeps */
     damage: number;
     heal: number;
+    /** Loot seen in the room, in energy (roi.ts lootValue at market prices) */
+    loot?: number;
 }
 
 declare global {
@@ -38,7 +42,7 @@ declare global {
             /** Force the squad type of new missions ("duo" or "quad"; default: sized from the threat) */
             squad?: "duo" | "quad";
             /** Automatic target (strongholds near our rooms, players with `auto`) */
-            target?: { room: string; reason: "stronghold" | "player"; since: number };
+            target?: { room: string; reason: "stronghold" | "player"; since: number; roi?: number };
             duos: { [name: string]: import("./duo").DuoMemory };
             quads?: { [name: string]: import("./quad").QuadMemory };
             /** Lowest RCL of the attacking room (default 4; lower it to test sooner) */
@@ -85,6 +89,20 @@ function combatPower(creeps: Creep[]): { damage: number; heal: number } {
     return { damage, heal };
 }
 
+/** Loot in sight, in energy: stores that are not ours (containers, ruins, others' storage and terminal) */
+function roomLoot(room: Room): number {
+    const store: { [resourceType: string]: number } = {};
+    const add = (s: Store<ResourceConstant, boolean>) => {
+        for (const r of Object.keys(s) as ResourceConstant[]) store[r] = (store[r] ?? 0) + (s[r] ?? 0);
+    };
+    for (const ruin of room.find(FIND_RUINS)) add(ruin.store);
+    for (const s of room.find(FIND_STRUCTURES)) {
+        if (s.structureType === STRUCTURE_CONTAINER) add(s.store);
+        else if ((s.structureType === STRUCTURE_STORAGE || s.structureType === STRUCTURE_TERMINAL) && !s.my) add(s.store);
+    }
+    return Math.round(lootValue(store, r => energyPrice(r as ResourceConstant)));
+}
+
 function recordRoom(room: Room): void {
     const memory = militaryMemory();
     const owner = room.controller?.owner?.username;
@@ -101,6 +119,7 @@ function recordRoom(room: Room): void {
     });
     const collapse = core?.effects?.find(e => e.effect === EFFECT_COLLAPSE_TIMER);
     const power = combatPower(room.find(FIND_HOSTILE_CREEPS, { filter: c => c.owner.username !== "Source Keeper" }));
+    const loot = roomLoot(room);
     memory.rooms = memory.rooms ?? {};
     memory.rooms[room.name] = {
         t: Game.time,
@@ -112,7 +131,8 @@ function recordRoom(room: Room): void {
         ...(core && { coreLevel: core.level, coreDeploy: Game.time + (core.ticksToDeploy ?? 0) }),
         ...(collapse && { collapse: Game.time + collapse.ticksRemaining }),
         damage: power.damage,
-        heal: power.heal
+        heal: power.heal,
+        ...(loot > 0 && { loot })
     };
 }
 
