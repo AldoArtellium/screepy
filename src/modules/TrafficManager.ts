@@ -365,6 +365,7 @@ class TrafficManager {
         if (intents.creep.size === 0) return;
         if (intents.pullers.size || intents.pullees.size || intents.blockedSquares.size) return;
         const creeps: (Creep | PowerCreep)[] = [...room.find(FIND_MY_CREEPS), ...room.find(FIND_MY_POWER_CREEPS)];
+        if (!hasConflict(room.name, creeps, intents.creep)) return;
         // targets across the room edge get keys from 2500 up, one per tile
         const outside: RoomPosition[] = [];
         const outsideKeys = new Map<string, number>();
@@ -399,6 +400,8 @@ class TrafficManager {
         const { moves, pushed, blocked } = resolveTraffic(entries.map(e => e.traffic));
         for (const { creep, traffic } of entries) {
             const tile = moves.get(traffic.id) ?? traffic.pos;
+            // cartographer reaches the same tile when it is the first target (no one else claims it)
+            if (tile === traffic.targets[0]) continue;
             const pos =
                 tile < 2500 ? new RoomPosition(tile % 50, Math.floor(tile / 50), room.name) : outside[tile - 2500];
             move(creep, [pos], traffic.priority);
@@ -516,6 +519,28 @@ class TrafficManager {
             requestsThisTick: this.requestsTick === Game.time ? this.requestsThisTick : 0
         };
     }
+}
+
+/**
+ * Some creep wants a tile held by another creep, or two creeps want the same first tile: without
+ * that, cartographer's greedy pass gives every creep its first target and the room needs no resolution.
+ */
+function hasConflict(
+    roomName: string,
+    creeps: (Creep | PowerCreep)[],
+    intents: Map<Id<Creep | PowerCreep>, { creep: Creep | PowerCreep; targets: RoomPosition[] }>
+): boolean {
+    const occupied = new Set<number>();
+    for (const creep of creeps) occupied.add(creep.pos.y * 50 + creep.pos.x);
+    const wanted = new Set<number>();
+    for (const { creep, targets } of intents.values()) {
+        const target = targets[0];
+        if (!target || target.roomName !== roomName || target.isEqualTo(creep.pos)) continue;
+        const tile = target.y * 50 + target.x;
+        if (occupied.has(tile) || wanted.has(tile)) return true;
+        wanted.add(tile);
+    }
+    return false;
 }
 
 /** `b` is the tile across a room edge from `a` (where the engine carries a creep standing on exit tile `a`) */
