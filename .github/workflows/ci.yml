@@ -56,6 +56,9 @@ jobs:
       - name: Remote travel check
         run: node tests/remoteTravel/run.mjs
 
+      - name: Traffic check
+        run: node tests/traffic/run.mjs
+
       - uses: actions/upload-artifact@v4
         with:
           name: bundle
