@@ -77,5 +77,30 @@ check("current kept against a slightly better one", pickTarget([a, b], "A")?.roo
 check("current replaced by a clearly better one", pickTarget([a, c], "A")?.room === "C");
 check("current below MIN_ROI dropped", pickTarget([{ room: "A", roi: 0.8 }], "A") === null);
 
+// --- Raids: rooms with loot and no defense, looted without a squad ---
+const { isRaidable, lootersNeeded, raidCost, RAID_MIN_LOOT, RAID_INTEL_AGE } = require(join(OUT, "military", "roi.js"));
+const NOW = 100000;
+const MAX_BARRIER = 200000;
+const abandoned = { t: NOW - 100, loot: 50000, towers: 0, spawns: 0, barrier: 0, damage: 0, heal: 0 };
+check("RAID_MIN_LOOT is 10000", RAID_MIN_LOOT === 10000);
+check("raid: abandoned storage, no tower", isRaidable(abandoned, NOW, MAX_BARRIER));
+check("raid: towers with energy", !isRaidable({ ...abandoned, towers: 1, towerEnergy: 500 }, NOW, MAX_BARRIER));
+check("raid: empty tower", isRaidable({ ...abandoned, towers: 1, towerEnergy: 0 }, NOW, MAX_BARRIER));
+check("raid: armed creeps seen", !isRaidable({ ...abandoned, damage: 30 }, NOW, MAX_BARRIER));
+check("raid: safe mode", !isRaidable({ ...abandoned, safeMode: NOW + 10 }, NOW, MAX_BARRIER));
+check("raid: stronghold", !isRaidable({ ...abandoned, coreLevel: 1 }, NOW, MAX_BARRIER));
+check("raid: rampart too strong to dismantle", !isRaidable({ ...abandoned, lootBarrier: 300000 }, NOW, MAX_BARRIER));
+check("raid: rampart a dismantler opens", isRaidable({ ...abandoned, lootBarrier: 100000 }, NOW, MAX_BARRIER));
+check("raid: too little loot", !isRaidable({ ...abandoned, loot: 5000 }, NOW, MAX_BARRIER));
+check("raid: stale intel", !isRaidable({ ...abandoned, t: NOW - RAID_INTEL_AGE - 1 }, NOW, MAX_BARRIER));
+
+// Looters (Overmind DirectiveHaul): amount x 2 x route tiles / (1500 x capacity), 1 to 3
+check("looters: 50k one room away, 1250 capacity", lootersNeeded(50000, 1, 1250) === 3, lootersNeeded(50000, 1, 1250));
+check("looters: 1000 units", lootersNeeded(1000, 1, 1250) === 1);
+check("looters: nothing left", lootersNeeded(0, 1, 1250) === 0);
+// Cost: looters + a dismantler when ramparts cover the loot
+check("raid cost with ramparts", raidCost(50000, 1, 2500, 1250, 3750, true) === 3 * 2500 + 3750, raidCost(50000, 1, 2500, 1250, 3750, true));
+check("raid cost without ramparts", raidCost(50000, 1, 2500, 1250, 3750, false) === 3 * 2500);
+
 console.log(failures === 0 ? "\nall checks passed" : `\n${failures} check(s) failed`);
 process.exit(failures === 0 ? 0 : 1);

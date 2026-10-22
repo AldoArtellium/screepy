@@ -15,6 +15,7 @@ import { creepsByRole } from "../core/roomState";
 import { ENEMY_STRENGTH_NORMAL, enemyStrength } from "../defense/RoomDefense";
 import type { SpawnOption, SpawnRole } from "../spawning/spawnRoles";
 import { jitter } from "../utils/jitter";
+import { lootDismantlePositions } from "../military/loot";
 import { canDismantle, isBlocking } from "./blockers";
 import { forgetRemotePath, isRemoteUnderAttack, remotePath, RemoteSource, remoteSources } from "./RemoteMining";
 
@@ -71,7 +72,10 @@ export function dismantlePositions(source: RemoteSource): RoomPosition[] {
     return positions;
 }
 
-/** Blocked tiles of a home's remotes not under attack, closest source first, without duplicates */
+/**
+ * Blocked tiles of a home's remotes not under attack, closest source first, then the ramparts over
+ * the loot of its raids and loot missions (military/loot.ts), without duplicates
+ */
 export function dismantleTargets(homeRoom: string): RoomPosition[] {
     const seen = new Set<string>();
     const targets: RoomPosition[] = [];
@@ -83,6 +87,12 @@ export function dismantleTargets(homeRoom: string): RoomPosition[] {
             seen.add(key);
             targets.push(pos);
         }
+    }
+    for (const pos of lootDismantlePositions(homeRoom)) {
+        const key = `${pos.roomName}:${pos.x}:${pos.y}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        targets.push(pos);
     }
     return targets;
 }

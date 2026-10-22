@@ -14,7 +14,7 @@ import type { SpawnOption, SpawnRole } from "../spawning/spawnRoles";
 import { log } from "../utils/logger";
 import { DUO_ATTACKER, DUO_HEALER, DuoMemory, runDuo } from "./duo";
 import { hostileRoom, militaryMemory, updateMilitaryIntel } from "./intel";
-import { lootRamparts, startLooting, updateLootMissions } from "./loot";
+import { lootRamparts, startLooting, startRaids, updateLootMissions } from "./loot";
 import { QUAD_ATTACKER, QUAD_HEALER, QUAD_ROSTER, runQuad } from "./quad";
 import { duoAttackerBody, duoHealerBody, planSquad, quadAttackerBody, quadHealerBody } from "./sizing";
 import { chooseAutoTarget } from "./targets";
@@ -117,6 +117,7 @@ function startMission(target: string): void {
 export const militaryModule = (): void => {
     updateMilitaryIntel();
     updateLootMissions();
+    startRaids();
     const memory = militaryMemory();
     if (!memory.attack && Game.time % AUTO_TARGET_EVERY === 0) {
         const auto = chooseAutoTarget();
