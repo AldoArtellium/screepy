@@ -32,6 +32,8 @@ Joueurs à moins de 3 à 5 salles de nos salles. « Points / mois » = score du 
 | volotsyouga | 31 | 21 (RCL 8) | 174 à 322 M | Référence haut de gamme : 5 creeps de 9 à 50 parts dans une RCL 8 |
 | Robinlub_UG_NL | 26 | 14 (RCL 8) | 48 à 58 M | |
 
+Vitesse GCL mesurée sur 2 027 ticks (deux relevés `/user/find` à 2 h d'intervalle, points de contrôle par tick) : nous 92 (67 en moyenne sur 20 000 ticks), Blindfold 79, Robinlub 96, asdpof 57, volotsyouga 308, Reyals 258, doorknobnob 15, WitchDocter 14. Par salle, nous upgradons déjà plus vite que Blindfold (23 contre 11) : l'écart de GCL vient du nombre de salles.
+
 Observations sur les salles (room-objects) :
 
 - **Blindfold** fait tourner 12 à 17 creeps par salle (nous : 6 à 11), avec beaucoup de petits creeps (fillers de 5 à 6 parts, harvesters de 10 à 13 parts, haulers de 26 à 36). Ses storages sont presque vides (2 à 39 k ; nous : 16 à 96 k, environ 225 k au total) et il a 5 à 15 chantiers ouverts par salle : il dépense tout et construit en continu. Avec 7 salles pour 9 remotes, il mise sur le nombre de salles plutôt que sur les remotes (1,3 remote par salle ; nous : 1,75).
