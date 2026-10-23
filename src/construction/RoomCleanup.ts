@@ -9,9 +9,9 @@
  *   their content, looted by the dispatcher's grave source). Waiting to loot a previous owner's
  *   storage first stalled the room: room.storage is set whoever owns it (mockup, a 20k storage left
  *   in W7N3: still RCL 1 at tick 3000).
- * - Once the plan is final: walls not planned (novice walls can't be destroyed and are left), and our
- *   extensions, labs, links and containers on a tile planned for another structure (or an extension,
- *   lab or link on a planned road). Our spawns, towers, storage, terminal and ramparts are never
+ * - Once the plan is final: walls not planned (respawn and novice area walls, without hits, can't be
+ *   destroyed and are left), and our extensions, labs, links and containers on a tile planned for
+ *   another structure (or an extension, lab or link on a planned road). Our spawns, towers, storage, terminal and ramparts are never
  *   destroyed.
  *
  * destroy() fails while hostile creeps are in the room: the room is skipped until they are gone.
@@ -22,6 +22,7 @@ import { RoomPlan } from "../planner/RoomPlan";
 import { roomPlanner } from "../planner/RoomPlanner";
 import { log } from "../utils/logger";
 import { countStat } from "../utils/stats";
+import { isIndestructible } from "../utils/structures";
 
 /** Our structures destroyed when they block a planned tile of another type (Hivemind clean*) */
 const MOVABLE: StructureConstant[] = [STRUCTURE_EXTENSION, STRUCTURE_LAB, STRUCTURE_LINK, STRUCTURE_CONTAINER];
@@ -68,9 +69,8 @@ function cleanPlannedTiles(room: Room, plan: RoomPlan): void {
         const type = structure.structureType;
         const types = planned.get(structure.pos.x + 50 * structure.pos.y);
         if (type === STRUCTURE_WALL) {
-            // Novice area walls can't be destroyed (they disappear on their own)
-            const novice = (structure as StructureWall).ticksToLive !== undefined;
-            if (!novice && !types?.has(STRUCTURE_WALL)) destroy(structure, "wall not planned");
+            // Respawn and novice area walls can't be destroyed (they disappear on their own)
+            if (!isIndestructible(structure) && !types?.has(STRUCTURE_WALL)) destroy(structure, "wall not planned");
             continue;
         }
         if (!types || types.has(type) || !(structure as OwnedStructure).my && type !== STRUCTURE_CONTAINER) continue;

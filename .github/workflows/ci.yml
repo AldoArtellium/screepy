@@ -62,6 +62,9 @@ jobs:
       - name: Military ROI check
         run: node tests/militaryRoi/run.mjs
 
+      - name: Room cleanup check
+        run: node tests/roomCleanup/run.mjs
+
       - uses: actions/upload-artifact@v4
         with:
           name: bundle
