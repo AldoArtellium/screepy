@@ -50,6 +50,9 @@ jobs:
       - name: Pixels check
         run: node tests/pixels/run.mjs
 
+      - name: Visuals check
+        run: node tests/visuals/run.mjs
+
       - name: Remote balance check
         run: node tests/remoteBalance/run.mjs
 
