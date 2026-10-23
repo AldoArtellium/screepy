@@ -43,6 +43,16 @@ function watchedRooms(): { owned: string[]; remotes: string[] } {
     return { owned, remotes: [...remotes].filter(name => !owned.includes(name)) };
 }
 
+/** Watched rooms with hostiles not expected dead and their safe flag: the map is redrawn when it changes */
+export function threatSignature(): string {
+    const { owned, remotes } = watchedRooms();
+    return [...owned, ...remotes]
+        .filter(name => (Memory.rooms?.[name]?.enemies?.expires ?? 0) > Game.time)
+        .map(name => (Memory.rooms[name].enemies!.safe ? `${name}:safe` : name))
+        .sort()
+        .join(",");
+}
+
 function drawThreat(visual: MapVisual, labels: MapLabels, threats: Cell[][] | undefined, roomName: string): void {
     const enemies = Memory.rooms?.[roomName]?.enemies;
     if (!enemies || (enemies.expires ?? 0) <= Game.time) return;
