@@ -70,26 +70,36 @@ export function isDangerous(creep: Creep): boolean {
     return creep.body.some(p => p.type !== MOVE && p.type !== TOUGH && (mine || (p.type !== WORK && p.type !== CARRY)));
 }
 
+/** Attack (ATTACK, RANGED_ATTACK, CLAIM, WORK as dismantle) and heal power of a creep, boosts included */
+export function creepPower(creep: Creep): { attack: number; heal: number } {
+    let attack = 0;
+    let heal = 0;
+    for (const part of creep.body) {
+        let power = PART_STRENGTH[part.type] ?? 0;
+        let boost = 1;
+        if (part.boost && typeof part.boost === "string") {
+            const effect = (BOOSTS as unknown as Record<string, Record<string, Record<string, number>>>)[part.type]?.[part.boost] ?? {};
+            boost = effect[BOOST_ATTRIBUTE[part.type] ?? ""] || 1;
+            if (part.type === TOUGH) {
+                power = 100;
+                boost = 1 / (effect.damage || 1);
+            }
+        }
+        if (part.type === ATTACK || part.type === RANGED_ATTACK || part.type === CLAIM || part.type === WORK) attack += power * boost;
+        if (part.type === HEAL) heal += power * boost;
+    }
+    return { attack, heal };
+}
+
 function enemyInfo(room: Room): { attack: number; heal: number; invaderOnly: boolean } {
     let attack = 0;
     let heal = 0;
     let invaderOnly = true;
     for (const creep of hostileCreeps(room)) {
         if (creep.owner.username !== "Invader") invaderOnly = false;
-        for (const part of creep.body) {
-            let power = PART_STRENGTH[part.type] ?? 0;
-            let boost = 1;
-            if (part.boost && typeof part.boost === "string") {
-                const effect = (BOOSTS as unknown as Record<string, Record<string, Record<string, number>>>)[part.type]?.[part.boost] ?? {};
-                boost = effect[BOOST_ATTRIBUTE[part.type] ?? ""] || 1;
-                if (part.type === TOUGH) {
-                    power = 100;
-                    boost = 1 / (effect.damage || 1);
-                }
-            }
-            if (part.type === ATTACK || part.type === RANGED_ATTACK || part.type === CLAIM || part.type === WORK) attack += power * boost;
-            if (part.type === HEAL) heal += power * boost;
-        }
+        const power = creepPower(creep);
+        attack += power.attack;
+        heal += power.heal;
     }
     return { attack, heal, invaderOnly };
 }
@@ -354,6 +364,33 @@ export function towerTarget(room: Room): Creep | null {
         if (target.priority <= 0) continue;
         if (best && best.priority > target.priority) continue;
         best = target;
+    }
+    return best?.creep ?? null;
+}
+
+/**
+ * Not in Hivemind (it only shoots dangerous creeps): a hostile with nothing but MOVE / TOUGH parts that
+ * this tower kills on its own this tick, healing included, not already taken by another tower, closest
+ * first. shard0 W28N7 (doorknobnob, 2026-10-24): up to 27 single-MOVE blockers parked on the chokepoints
+ * to the controller and a source, never shot. A kill in one shot leaves no edge drain; the tower keeps
+ * half its energy for real attacks.
+ */
+export function harmlessTarget(room: Room, tower: StructureTower, taken: Set<Id<Creep>>): Creep | null {
+    if (tower.store.energy < TOWER_CAPACITY / 2) return null;
+    const healers = hostileCreeps(room).filter(h => h.getActiveBodyparts(HEAL) > 0);
+    let best: { creep: Creep; range: number } | null = null;
+    for (const creep of hostileCreeps(room)) {
+        if (isDangerous(creep) || taken.has(creep.id)) continue;
+        const range = tower.pos.getRangeTo(creep);
+        if (best && best.range <= range) continue;
+        let heal = 0;
+        for (const healer of healers) {
+            const distance = healer.pos.getRangeTo(creep);
+            if (distance <= 1) heal += HEAL_POWER * activePower(healer, HEAL, "heal");
+            else if (distance <= 3) heal += RANGED_HEAL_POWER * activePower(healer, HEAL, "heal");
+        }
+        if (effectiveDamage(creep, towerPowerAtRange(range) * TOWER_POWER_ATTACK) < creep.hits + heal) continue;
+        best = { creep, range };
     }
     return best?.creep ?? null;
 }

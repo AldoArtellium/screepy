@@ -14,6 +14,7 @@ import {
     ENEMY_STRENGTH_NORMAL,
     EnemyStrength,
     enemyStrength,
+    harmlessTarget,
     hostileCreeps,
     isDangerous,
     isWallIntact,
@@ -40,11 +41,22 @@ function manageTowers(room: Room): void {
     const towers = activeTowers(room).filter(t => t.store.energy > 0);
     if (towers.length === 0) return;
     const strength = enemyStrength(room);
+    const taken = new Set<Id<Creep>>();
     for (const tower of towers) {
         if (towerAttack(room, tower, hostiles)) continue;
         if (towerHeal(room, tower, strength)) continue;
+        if (towerAttackHarmless(room, tower, taken)) continue;
         towerRampartRepair(room, tower, hostiles, strength);
     }
+}
+
+/** Blockers and scouts (MOVE / TOUGH only): one per tower, each killed in one shot (harmlessTarget) */
+function towerAttackHarmless(room: Room, tower: StructureTower, taken: Set<Id<Creep>>): boolean {
+    const target = harmlessTarget(room, tower, taken);
+    if (!target || tower.attack(target) !== OK) return false;
+    taken.add(target.id);
+    countStat("tower:attackHarmless");
+    return true;
 }
 
 function towerAttack(room: Room, tower: StructureTower, hostiles: Creep[]): boolean {

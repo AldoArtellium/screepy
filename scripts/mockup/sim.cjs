@@ -66,6 +66,13 @@ const RAID_BOOSTS = { tough: "GO", ranged_attack: "KO", work: "ZH", attack: "UH"
  */
 const ENEMY = opt("enemy", null);
 /**
+ * Blockers of the enemy player (needs --enemy): "ROOM:N[:fromTick]", e.g. --blockers W7N3:8:1000. From
+ * fromTick (default 1) the enemy keeps N single-MOVE creeps parked on the free tiles next to ROOM's
+ * controller and sources (shard0 W28N7, 2026-10-24: doorknobnob's blockers cut the controller and a
+ * source off at their chokepoints). The report counts the blockers spawned and alive.
+ */
+const BLOCKERS = opt("blockers", null);
+/**
  * Second owned room from tick 1: "ROOM[:RCL]" (default RCL 1), e.g. --claim W8N3 to test two
  * neighbouring homes sharing remote rooms. Controller and a spawn at the harness spawn spot, like a
  * room the expansion just claimed; raises the GCL to 2.
@@ -185,7 +192,10 @@ async function setupEnemy(server, fixture, spec) {
   const code = fs.readFileSync(path.join(__dirname, "enemy-bot.js"), "utf-8");
   const enemy = await server.world.addBot({ username: "enemy", room, x: spot.x, y: spot.y, gcl: 10, modules: { main: code } });
   const { db, env } = server.common.storage;
-  await env.set(env.keys.MEMORY + enemy.id, JSON.stringify({ defenders: Number(defendersText || 0) }));
+  const blockers = BLOCKERS && BLOCKERS.split(":");
+  const memory = { defenders: Number(defendersText || 0) };
+  if (blockers) memory.blockers = { room: blockers[0], count: Number(blockers[1]), from: Number(blockers[2] || 1), spawned: 0 };
+  await env.set(env.keys.MEMORY + enemy.id, JSON.stringify(memory));
   const time = await server.world.gameTime;
   await db["rooms.objects"].update({ room, type: "controller" }, { $set: { level: rcl, progress: 0, downgradeTime: time + 100000, safeModeAvailable: 0, safeMode: null } });
   await db.rooms.update({ _id: room }, { $set: { active: true } });
@@ -468,7 +478,19 @@ async function enemyStatus(server, enemy) {
   const objects = await server.common.storage.db["rooms.objects"].find({ room: enemy.room, user: enemy.id });
   const count = (type) => objects.filter((o) => o.type === type).length;
   const towerEnergy = objects.filter((o) => o.type === "tower").reduce((sum, o) => sum + ((o.store && o.store.energy) || 0), 0);
-  return { spawns: count("spawn"), towers: count("tower"), towerEnergy, ramparts: count("rampart"), creeps: count("creep") };
+  const status = { spawns: count("spawn"), towers: count("tower"), towerEnergy, ramparts: count("rampart"), creeps: count("creep") };
+  if (BLOCKERS) {
+    const { db, env } = server.common.storage;
+    const blockers = await db["rooms.objects"].find({ type: "creep", user: enemy.id });
+    const memory = JSON.parse((await env.get(env.keys.MEMORY + enemy.id)) || "{}");
+    const room = BLOCKERS.split(":")[0];
+    status.blockers = {
+      spawned: (memory.blockers && memory.blockers.spawned) || 0,
+      alive: blockers.filter((c) => /^blocker/.test(c.name)).length,
+      parked: blockers.filter((c) => /^blocker/.test(c.name) && c.room === room).length
+    };
+  }
+  return status;
 }
 
 async function setupWorld(server, fixture) {
