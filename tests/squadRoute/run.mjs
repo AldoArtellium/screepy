@@ -54,6 +54,14 @@ check("enemy remote", cost("A", { reserver: "doorknobnob" }), ROUTE_COST.enemyRe
 check("enemy remote we also mine", cost("A", { reserver: "doorknobnob" }, true), ROUTE_COST.enemyRemote);
 check("enemy room", cost("A", { owner: "doorknobnob" }), Infinity);
 check("enemy room that is the target", cost("T", { owner: "doorknobnob" }), ROUTE_COST.ally);
+// shard0 2026-10-25: the W27N9 quad was routed through the keeper room W26N5, where cartographer (keepers
+// avoided) refused every step its PathFinder path took: ERR_NO_PATH each tick, ~5 CPU per tick
+check("source keeper room W26N5", cost("W26N5", {}), Infinity);
+check("source keeper room E14S6", cost("E14S6", undefined), Infinity);
+check("sector center W25N5 (no keepers)", cost("W25N5", {}), ROUTE_COST.neutral);
+check("room next to the keeper block W27N5", cost("W27N5", {}), ROUTE_COST.neutral);
+check("highway W30N5", cost("W30N5", {}), ROUTE_COST.neutral);
+check("keeper room that is the target", cost("W26N5", {}, false, "W26N5"), ROUTE_COST.ally);
 check("order ally < neutral < enemy remote < enemy",
     ROUTE_COST.ally < ROUTE_COST.neutral && ROUTE_COST.neutral < ROUTE_COST.enemyRemote && ROUTE_COST.enemyRemote < Infinity, true);
 

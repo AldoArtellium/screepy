@@ -272,8 +272,9 @@ function movePair(attacker: Creep, healer: Creep, to: RoomPosition | null, solo 
         return;
     }
     if (solo && to && attacker.fatigue === 0) {
-        // The healer can't follow there: the attacker goes alone, the healer holds
-        trafficManager.requestMove(attacker, to, { range: 0, priority: ATTACKER_PRIORITY });
+        // The healer can't follow there: the attacker goes alone, the healer holds (`to` is the next
+        // tile of a PathFinder path: no second search, see quad.ts travel)
+        trafficManager.requestStep(attacker, to, ATTACKER_PRIORITY);
         trafficManager.requestMove(healer, healer.pos, { range: 0, priority: HEALER_PRIORITY });
         return;
     }
@@ -282,7 +283,7 @@ function movePair(attacker: Creep, healer: Creep, to: RoomPosition | null, solo 
         trafficManager.requestMove(healer, healer.pos, { range: 0, priority: HEALER_PRIORITY });
         return;
     }
-    trafficManager.requestMove(attacker, to, { range: 0, priority: ATTACKER_PRIORITY });
+    trafficManager.requestStep(attacker, to, ATTACKER_PRIORITY);
     // The healer keeps adjacent: it takes the attacker's tile unless it is already next to the new one
     if (healer.pos.isNearTo(to) && to.roomName === healer.pos.roomName) trafficManager.requestMove(healer, healer.pos, { range: 0, priority: HEALER_PRIORITY });
     else moveHealer(healer, attacker.pos, 0);

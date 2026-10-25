@@ -574,7 +574,9 @@ function travel(group: Creep[], goalRoom: string): void {
             roomCallback
         }
     );
-    if (result.path[0]) trafficManager.requestMove(leader, result.path[0], { range: 0, priority: PRIORITY });
+    // The step PathFinder chose, without a second search: cartographer's own search (keeper tiles avoided,
+    // other costs) refused steps this path took, ERR_NO_PATH every tick (shard0 W26N5, ~5 CPU per tick)
+    if (result.path[0]) trafficManager.requestStep(leader, result.path[0], PRIORITY);
     else hold(leader);
 }
 
