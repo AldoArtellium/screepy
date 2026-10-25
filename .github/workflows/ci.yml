@@ -68,6 +68,9 @@ jobs:
       - name: Combat check
         run: node tests/combat/run.mjs
 
+      - name: Squad route check
+        run: node tests/squadRoute/run.mjs
+
       - name: Room cleanup check
         run: node tests/roomCleanup/run.mjs
 

@@ -39,7 +39,7 @@ import {
     towerPower,
     verdict
 } from "./combat";
-import { isMine, landing, pickTarget, travelMatrix } from "./duo";
+import { isMine, landing, pickTarget, travelCallback } from "./duo";
 import { hostileRoom } from "./intel";
 
 export const QUAD_ATTACKER = "quadAttacker";
@@ -555,6 +555,11 @@ function travel(group: Creep[], goalRoom: string): void {
         hold(leader);
         return;
     }
+    const roomCallback = travelCallback(leader.pos.roomName, goalRoom, group.map(c => c.pos));
+    if (!roomCallback) {
+        hold(leader);
+        return;
+    }
     const result = PathFinder.search(
         leader.pos,
         { pos: new RoomPosition(25, 25, goalRoom), range: 22 },
@@ -562,7 +567,7 @@ function travel(group: Creep[], goalRoom: string): void {
             plainCost: 2,
             swampCost: 10,
             maxOps: 4000,
-            roomCallback: name => travelMatrix(name)
+            roomCallback
         }
     );
     if (result.path[0]) trafficManager.requestMove(leader, result.path[0], { range: 0, priority: PRIORITY });

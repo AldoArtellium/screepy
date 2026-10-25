@@ -18,6 +18,7 @@ import { log } from "../utils/logger";
 import { countStat } from "../utils/stats";
 import { incomingDamage, verdict } from "./combat";
 import { lootRamparts } from "./loot";
+import { cachedObstacles, routeRooms } from "./route";
 
 export const DUO_ATTACKER = "duoAttacker";
 export const DUO_HEALER = "duoHealer";
@@ -107,8 +108,6 @@ function blockerAt(pos: RoomPosition, targetRoom: string): Structure | undefined
     });
 }
 
-/** Rooms on the way: structures that block movement, roads cheap (no creeps: the pair moves through traffic) */
-const travelMatrices: Map<string, { tick: number; matrix: CostMatrix }> = new Map();
 function avoiding(matrix: CostMatrix | boolean, roomName: string, avoid?: RoomPosition): CostMatrix | boolean {
     if (!avoid || avoid.roomName !== roomName || typeof matrix === "boolean") return matrix;
     const copy = matrix.clone();
@@ -116,11 +115,33 @@ function avoiding(matrix: CostMatrix | boolean, roomName: string, avoid?: RoomPo
     return copy;
 }
 
+/**
+ * Rooms on the way: structures that block movement, roads cheap (no creeps: the pair moves through
+ * traffic). A room out of sight keeps the obstacles seen last (route.ts), else it looks empty.
+ */
 export function travelMatrix(roomName: string): CostMatrix | boolean {
-    const room = Game.rooms[roomName];
-    if (!room) return true;
-    const cached = travelMatrices.get(roomName);
-    if (cached && Game.time - cached.tick < 20) return cached.matrix;
+    return cachedObstacles(roomName, obstacleMatrix) ?? true;
+}
+
+/**
+ * PathFinder room callback of a squad's travel: only the rooms of its room route (route.ts), with
+ * their travel matrix; null when every route crosses another player's room
+ */
+export function travelCallback(
+    from: string,
+    to: string,
+    members: RoomPosition[],
+    avoid?: RoomPosition
+): ((roomName: string) => CostMatrix | boolean) | null {
+    const allowed = routeRooms(from, to, members);
+    if (!allowed) {
+        countStat("military:noRoute");
+        return null;
+    }
+    return name => (allowed.has(name) ? avoiding(travelMatrix(name), name, avoid) : false);
+}
+
+function obstacleMatrix(room: Room): CostMatrix {
     const matrix = new PathFinder.CostMatrix();
     for (const s of room.find(FIND_STRUCTURES)) {
         if (s.structureType === STRUCTURE_ROAD) {
@@ -131,7 +152,6 @@ export function travelMatrix(roomName: string): CostMatrix | boolean {
             matrix.set(s.pos.x, s.pos.y, 255);
         }
     }
-    travelMatrices.set(roomName, { tick: Game.time, matrix });
     return matrix;
 }
 
@@ -152,11 +172,13 @@ function nextStep(attacker: Creep, duo: DuoMemory, healerPos?: RoomPosition): { 
         return result.path[0] ? { pos: result.path[0], target } : null;
     }
     const goal = new RoomPosition(25, 25, duo.targetRoom);
+    const roomCallback = travelCallback(room.name, duo.targetRoom, healerPos ? [healerPos] : [], healerPos);
+    if (!roomCallback) return null;
     const result = PathFinder.search(attacker.pos, { pos: goal, range: 22 }, {
         plainCost: 2,
         swampCost: 10,
         maxOps: 4000,
-        roomCallback: name => avoiding(travelMatrix(name), name, healerPos)
+        roomCallback
     });
     return result.path[0] ? { pos: result.path[0] } : null;
 }
@@ -320,11 +342,14 @@ export function runDuo(name: string, duo: DuoMemory): void {
         if (weakest >= READY_HITS) duo.state = "advance";
         else {
             const out = attacker.room.name === duo.targetRoom || attacker.pos.x === 0 || attacker.pos.y === 0 || attacker.pos.x === 49 || attacker.pos.y === 49;
-            const result = out
+            const roomCallback = out
+                ? travelCallback(attacker.room.name, duo.stagingRoom, [healer.pos], healer.pos)
+                : null;
+            const result = roomCallback
                 ? PathFinder.search(attacker.pos, { pos: new RoomPosition(25, 25, duo.stagingRoom), range: 20 }, {
                       plainCost: 2,
                       swampCost: 10,
-                      roomCallback: name => avoiding(travelMatrix(name), name, healer.pos)
+                      roomCallback
                   })
                 : null;
             movePair(attacker, healer, result?.path[0] ?? null, false, duo.targetRoom);

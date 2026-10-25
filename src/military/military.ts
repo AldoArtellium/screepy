@@ -16,6 +16,7 @@ import { DUO_ATTACKER, DUO_HEALER, DuoMemory, runDuo } from "./duo";
 import { hostileRoom, militaryMemory, updateMilitaryIntel } from "./intel";
 import { lootRamparts, startLooting, startRaids, updateLootMissions } from "./loot";
 import { QUAD_ATTACKER, QUAD_HEALER, QUAD_ROSTER, runQuad } from "./quad";
+import { squadRoute } from "./route";
 import {
     duoAttackerBody,
     duoHealerBody,
@@ -68,9 +69,11 @@ function findOrigin(target: string): { spawnRoom: string; stagingRoom: string } 
     const refills = towersRefill(target);
     for (const room of _.filter(Game.rooms, r => !!r.controller?.my && r.controller.level >= minRcl)) {
         if (room.find(FIND_MY_SPAWNS).length === 0) continue;
-        const route = Game.map.findRoute(room.name, target);
-        if (route === ERR_NO_PATH || route.length === 0 || route.length > MAX_ROUTE_ROOMS) continue;
-        const stagingRoom = route.length >= 2 ? route[route.length - 2].room : room.name;
+        // The squad's own room route (route.ts): the staging room is never another player's room
+        const rooms = squadRoute(room.name, target);
+        if (!rooms || rooms.length < 2 || rooms.length - 1 > MAX_ROUTE_ROOMS) continue;
+        const route = rooms.slice(1);
+        const stagingRoom = rooms[rooms.length - 2];
         const energy = room.energyCapacityAvailable;
         const feasible = planSquad(target, energy, militaryMemory().squad, refills, room).feasible;
         if (!best || (feasible && !best.feasible) || (feasible === best.feasible && route.length < best.length))
