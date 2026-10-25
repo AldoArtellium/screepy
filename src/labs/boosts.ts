@@ -98,7 +98,9 @@ function stock(room: Room, resourceType: ResourceConstant): number {
 /**
  * Best compound for `parts` parts of a type with this effect (Hivemind getAvailableBoosts +
  * getBestBoost, boostChoice.ts): enough in storage + terminal (+ labs) beyond what other creeps asked
- * for every part (for at least `minParts` with partial boosts), tier (name length) at most `maxTier`
+ * for every part (for at least `minParts` with partial boosts), tier (name length) at most `maxTier`.
+ * `countRequested = false` ignores what other creeps asked (squad sizing: a squad's own pending requests
+ * would otherwise make its target look infeasible again while it is being boosted)
  */
 export function bestBoost(
     room: Room,
@@ -106,11 +108,12 @@ export function bestBoost(
     effect: BoostEffect,
     parts: number,
     maxTier?: number,
-    minParts?: number
+    minParts?: number,
+    countRequested = true
 ): { compound: ResourceConstant; parts: number } | null {
     if (parts === 0 || operationalLabs(room).length === 0) return null;
     if ((room.storage?.store.energy ?? 0) + (room.terminal?.store.energy ?? 0) < MIN_ENERGY) return null;
-    const requested = requestedBoosts(room);
+    const requested = countRequested ? requestedBoosts(room) : {};
     const available = (compound: ResourceConstant) => {
         const inLabs = _.sum(operationalLabs(room), l => (l.mineralType === compound ? l.store[compound] ?? 0 : 0));
         return Math.floor((stock(room, compound) + inLabs) / LAB_BOOST_MINERAL) - (requested[compound] ?? 0);

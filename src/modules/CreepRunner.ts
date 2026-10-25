@@ -105,7 +105,7 @@ export const creepRunnerModule = () => {
             log.error("CreepRunner", `Role ${role} failed for ${creep.name}:`, (error as Error).stack);
             countStat(`roleError:${role}`);
         }
-        // Code CPU per role (intents excluded on the private server), and creep-ticks to average it
+        // CPU per role, the role's intents included but its moves (TrafficManager), and creep-ticks to average it
         countStat(`cpu:${role}`, Game.cpu.getUsed() - start);
         countStat(`creepTicks:${role}`);
     }
