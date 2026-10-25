@@ -97,12 +97,19 @@ function gain(effect: BoostedEffect, option: BoostOption): number {
     return effect === "tough" ? 1 - option.multiplier : option.multiplier - 1;
 }
 
-function judge(shape: SquadShape, levels: Levels, threat: ThreatModel, refills: boolean, margin: number) {
+/**
+ * `tank`: towers that refill are out-healed on the front, its TOUGH taking its share (combat.ts canTank),
+ * the boost choice's rule; without it, the front creep only lasts SURVIVE_CLOSE_TICKS (feasibility,
+ * as before). Mockup W8N3 RCL 4 with a refilled tower: a quad with XLHO2 alone (it lasts, it doesn't
+ * tank) lost 6 creeps and took 2900 ticks, the strongest boosts 2 creeps and 1230 ticks.
+ */
+function judge(shape: SquadShape, levels: Levels, threat: ThreatModel, refills: boolean, margin: number, tank = false) {
     const heal = shape.heal * levels.heal.multiplier;
     const need = (refills ? threat.close : threat.edge) * margin;
     const frontHits = (shape.frontTough * 100) / levels.tough.multiplier + shape.frontOther * 100;
     const ticks = refills ? SURVIVE_CLOSE_TICKS : SURVIVE_TICKS;
-    const soaks = heal >= need || frontHits >= (need - heal) * ticks;
+    const tough = shape.frontTough > 0 ? levels.tough.multiplier : 1;
+    const soaks = tank && refills ? heal >= need * tough : heal >= need || frontHits >= (need - heal) * ticks;
     // A duo is only chosen when its healer covers the damage and its attacker beats the enemy healing
     // (old type rule); a forced one is judged on its front creep like a quad
     const holds =
@@ -160,7 +167,7 @@ export function chooseSquad(shapes: SquadShape[], threat: ThreatModel, refills: 
                 for (const tough of allowed(shape, "tough", mode, opts.floor))
                     for (const attack of allowed(shape, "attack", mode, opts.floor)) {
                         const levels = { heal, tough, attack };
-                        if (!judge(shape, levels, threat, refills, margin).holds) continue;
+                        if (!judge(shape, levels, threat, refills, margin, true).holds) continue;
                         const choice = result(shape, levels, threat, refills, attrition);
                         const tiers = heal.tier + tough.tier + attack.tier;
                         if (!best || choice.cost < best.choice.cost || (choice.cost === best.choice.cost && tiers < best.tiers))

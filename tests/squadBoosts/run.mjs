@@ -97,12 +97,16 @@ const threat = (towers, creeps = 0, heal = 0) => ({
     check("1 tower at the edge: at most the unboosted quad", c.cost <= 18400, `${c.type} ${JSON.stringify(c.compounds)} ${c.cost}`);
 }
 
-// 2. RCL 4, one tower refilled (shard0 W28N8): close range 600 x margin, the quad needs healing boosts,
-//    the cheapest that holds, never ATTACK (the quad's damage is not judged)
+// 2. RCL 4, one tower refilled (shard0 W28N8): its 600 x margin must be out-healed on the front, TOUGH
+//    included (combat.ts canTank; soaking it with HEAL alone cost 6 creeps in the mockup instead of 2),
+//    the cheapest set that does, never ATTACK (the quad's damage is not judged)
 {
     const c = chooseSquad(shapes(FULL), threat(1), true);
     check("1 refilled tower: feasible", c.feasible, JSON.stringify(c));
     check("1 refilled tower: heal boosted", !!c.compounds.heal, JSON.stringify(c.compounds));
+    check("1 refilled tower: TOUGH boosted", !!c.compounds.tough, JSON.stringify(c.compounds));
+    const toughTaken = COMPOUNDS.tough.find(e => e[0] === c.compounds.tough)?.[1] ?? 1;
+    check("1 refilled tower: tanks the tower", c.heal >= 600 * BOOST_MARGIN * toughTaken, `${c.heal} vs ${600 * BOOST_MARGIN * toughTaken}`);
     check("1 refilled tower: no ATTACK boost", !c.compounds.attack, JSON.stringify(c.compounds));
     check("1 refilled tower: not the strongest everywhere", !(c.compounds.heal === "XLHO2" && c.compounds.tough === "XGHO2"), JSON.stringify(c.compounds));
 }
@@ -146,8 +150,9 @@ const threat = (towers, creeps = 0, heal = 0) => ({
 
 // 8. Escalation: a floor keeps at least the boosts already chosen, a bigger margin asks for more
 {
-    const base = chooseSquad(shapes(FULL), threat(1), true);
-    const floor = chooseSquad(shapes(FULL), threat(1), true, { floor: base.compounds, margin: BOOST_MARGIN * 1.5 });
+    const price = compound => (compound.startsWith("X") ? 20 : compound.length === 2 ? 2 : 6);
+    const base = chooseSquad(shapes(FULL, price), threat(1), true);
+    const floor = chooseSquad(shapes(FULL, price), threat(1), true, { floor: base.compounds, margin: BOOST_MARGIN * 1.5 });
     const gain = (effect, compound) => {
         const entry = COMPOUNDS[effect].find(e => e[0] === compound);
         if (!entry) return 0;
@@ -156,6 +161,23 @@ const threat = (towers, creeps = 0, heal = 0) => ({
     const stronger = ["heal", "tough"].every(e => gain(e, floor.compounds[e]) >= gain(e, base.compounds[e]));
     check("escalation: never weaker than before", stronger, `${JSON.stringify(base.compounds)} -> ${JSON.stringify(floor.compounds)}`);
     check("escalation: more boosts", floor.boostCost > base.boostCost, `${base.boostCost} -> ${floor.boostCost}`);
+}
+
+// 8b. A floor compound out of stock: its tier or above, never weaker
+{
+    const c = chooseSquad(shapes({ LO: 9000, XLHO2: 9000, XGHO2: 9000 }), threat(1), true, { floor: { heal: "LHO2", tough: "GHO2" } });
+    check("floor out of stock: no LO", c.compounds.heal === "XLHO2", JSON.stringify(c.compounds));
+    check("floor out of stock: no weaker TOUGH", c.compounds.tough === "XGHO2", JSON.stringify(c.compounds));
+}
+
+// 8c. A forced duo is judged on its front creep (old feasibility), not dropped
+{
+    const [duo] = shapes(FULL);
+    duo.soak = true;
+    duo.frontTough = 5;
+    duo.frontOther = 30;
+    const c = chooseSquad([duo], threat(2), false);
+    check("forced duo: feasible through its front", c.feasible && c.type === "duo", JSON.stringify(c));
 }
 
 // 9. No labs / no stock: the unboosted squad, feasible or not
