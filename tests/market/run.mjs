@@ -74,9 +74,13 @@ check("buy below average never pays", !instantSellPays(250, h, true));
 
 // Forced buys (stock below 5k): at most FORCED_BUY_MAX_RATIO x the average
 const l = { total: 1e6, average: 700.2, stdDev: 30 };
-check("L at 793.9 (1.13 x average) is bought", forcedBuyPays(793.912, l), `ratio ${FORCED_BUY_MAX_RATIO}`);
-check("L at 3000 is not bought", !forcedBuyPays(3000, l));
-check("no history: not bought", !forcedBuyPays(10, null));
+check("L at 793.9 (1.13 x average) is bought", forcedBuyPays(793.912, l, 700), `ratio ${FORCED_BUY_MAX_RATIO}`);
+check("L at 3000 is not bought", !forcedBuyPays(3000, l, 700));
+check("no history: not bought", !forcedBuyPays(10, null, undefined));
+// H: history average 256.7 dragged down, buyers pay 562, sellers ask 620: the order book is the reference
+check("H at 620 bought (best buy 562 above the average)", forcedBuyPays(620.304, h, 562.739));
+check("H at 900 not bought", !forcedBuyPays(900, h, 562.739));
+check("without buy orders the average is the reference", !forcedBuyPays(620.304, h, undefined));
 
 console.log(failures === 0 ? "\nall checks passed" : `\n${failures} check(s) failed`);
 process.exit(failures === 0 ? 0 : 1);

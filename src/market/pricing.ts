@@ -7,7 +7,8 @@
  *   at 21, so no reagent could be bought and the labs waited);
  * - while credits are below the reserve an instant sell only needs the average price (Hivemind:
  *   average + dev / 2), so a credit-less account sells its surplus to the buy orders;
- * - forced buys (stock below 5k) pay at most FORCED_BUY_MAX_RATIO x the average (Hivemind: any price).
+ * - forced buys (stock below 5k) pay at most FORCED_BUY_MAX_RATIO x the average or the best buy order
+ *   (Hivemind: any price; L was bought at 725-770).
  */
 
 export interface PriceData {
@@ -16,7 +17,7 @@ export interface PriceData {
     stdDev: number;
 }
 
-/** Forced buys pay at most this many times the average price */
+/** Forced buys pay at most this many times the average price or the best buy order */
 export const FORCED_BUY_MAX_RATIO = 1.5;
 /** A sell order is only repriced when the new price is at least this share lower */
 const REPRICE_MIN_STEP = 0.002;
@@ -55,7 +56,12 @@ export function prefersInstantSell(bestBuy: number, history: PriceData, cheapest
     return lowCredits || bestBuy >= sellOrderPrice(history, cheapestCompetitor);
 }
 
-/** Whether a forced buy (stock below 5k) may pay this price */
-export function forcedBuyPays(price: number, history: PriceData | null): boolean {
-    return history !== null && price <= history.average * FORCED_BUY_MAX_RATIO;
+/**
+ * Whether a forced buy (stock below 5k) may pay this price: at most FORCED_BUY_MAX_RATIO x the higher of
+ * the history average and the best buy order (what buyers pay now: H's average, 256.7, was dragged down
+ * by big low-price volumes while buyers paid 562)
+ */
+export function forcedBuyPays(price: number, history: PriceData | null, bestBuy: number | undefined): boolean {
+    if (history === null) return false;
+    return price <= Math.max(history.average, bestBuy ?? 0) * FORCED_BUY_MAX_RATIO;
 }

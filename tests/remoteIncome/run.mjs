@@ -94,7 +94,8 @@ check("a bucket full for 1000 ticks allows one more room", budgetRooms({ ...capp
 check("below 75% one more room", budgetRooms({ ...capped, cpuAvg: 14.9 }) === 8);
 check("one more than possible lifts the cap", budgetRooms({ ...capped, maxRooms: 9, fullBucketTicks: 2000 }) === undefined);
 check("above 95% keeps the cap while the bucket holds 9000", budgetRooms({ ...capped, cpuAvg: 19.1, fullBucketTicks: 5000 }) === 7);
-check("above 95% drops a room once the bucket is below 9000", budgetRooms({ ...capped, cpuAvg: 19.1, bucket: 8900 }) === 6);
+check("above 95% keeps the cap on a dip to 8900 (hysteresis)", budgetRooms({ ...capped, cpuAvg: 19.1, bucket: 8900 }) === 7);
+check("above 95% drops a room once the bucket is below 8000", budgetRooms({ ...capped, cpuAvg: 19.1, bucket: 7900 }) === 6);
 check("above the limit drops a room whatever the bucket", budgetRooms({ ...capped, cpuAvg: 20.1, fullBucketTicks: 5000 }) === 6);
 check("a low bucket drops a room", budgetRooms({ ...capped, cpuAvg: 10, bucket: 4000 }) === 6);
 check("uncapped stays uncapped below 95%", budgetRooms({ ...capped, maxRooms: undefined, cpuAvg: 18 }) === undefined);
@@ -111,7 +112,7 @@ check("below 75% a room that fits is added", budgetRooms({ ...capped, limit: 10,
 // Hysteresis after a drop
 check("no room added within 5000 ticks of a drop", budgetRooms({ ...capped, cpuAvg: 12, ticksSinceDrop: 4999 }) === 7);
 check("a room added 5000 ticks after a drop", budgetRooms({ ...capped, cpuAvg: 12, ticksSinceDrop: 5000 }) === 8);
-check("the hold never delays a drop", budgetRooms({ ...capped, cpuAvg: 19.5, bucket: 8000, ticksSinceDrop: 10 }) === 6);
+check("the hold never delays a drop", budgetRooms({ ...capped, cpuAvg: 19.5, bucket: 7500, ticksSinceDrop: 10 }) === 6);
 check("the hold keeps an uncapped budget uncapped", budgetRooms({ ...capped, maxRooms: undefined, cpuAvg: 12, ticksSinceDrop: 10 }) === undefined);
 // Reservations under CPU pressure: energy added per CPU added, against a neutral source's energy per CPU
 const fmt = v => `+${v.energy.toFixed(2)} energy for ${v.cpu.toFixed(3)} CPU = ${v.perCpu.toFixed(1)}/CPU vs ${v.alternative.toFixed(1)}`;

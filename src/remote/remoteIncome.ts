@@ -267,7 +267,7 @@ export function roomEnergyPerCreep(
 
 /**
  * Above this share of the CPU limit the remote budget drops a room, unless the bucket holds
- * BUDGET_FULL_BUCKET (the bucket is the margin: it only falls above the limit); above the limit
+ * BUDGET_DROP_BUCKET (the bucket is the margin: it only falls above the limit); above the limit
  * or below 5000 bucket it always drops one
  */
 export const BUDGET_HIGH = 0.95;
@@ -280,6 +280,11 @@ export const BUDGET_LOW = 0.75;
  */
 export const BUDGET_FULL_BUCKET = 9000;
 export const BUDGET_FULL_TICKS = 1000;
+/**
+ * Above BUDGET_HIGH a room is only dropped below this bucket: a margin under BUDGET_FULL_BUCKET, so one
+ * spike after a room was added at up to BUDGET_FIT_FULL does not drop it again
+ */
+export const BUDGET_DROP_BUCKET = 8000;
 /**
  * One more room only when the average plus that room's CPU stays under this share of the limit:
  * a margin, so the room added is not dropped again (shard0 at ~90% of 20 CPU: 7 -> 8 -> 7 rooms in
@@ -348,7 +353,7 @@ export function budgetRoomCpu(measured: number | undefined): number {
 /** Next cap on remote rooms (undefined: none); the caller limits the changes to one per 1000 ticks */
 export function budgetRooms(state: BudgetState): number | undefined {
     const { cpuAvg, limit, bucket, maxRooms } = state;
-    const high = cpuAvg > limit || (cpuAvg > limit * BUDGET_HIGH && bucket < BUDGET_FULL_BUCKET);
+    const high = cpuAvg > limit || (cpuAvg > limit * BUDGET_HIGH && bucket < BUDGET_DROP_BUCKET);
     if (high || bucket < 5000) return Math.max(0, state.currentRooms - 1);
     if (maxRooms === undefined) return undefined;
     if (state.ticksSinceDrop !== undefined && state.ticksSinceDrop < BUDGET_RAISE_HOLD) return maxRooms;

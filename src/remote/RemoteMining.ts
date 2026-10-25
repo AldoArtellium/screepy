@@ -531,14 +531,14 @@ function maxRemotes(home: Room): number {
  * Not in Hivemind: an empire-wide cap on remote rooms from the CPU actually used. Remotes are the
  * bulk of the creeps (a room at RCL 2 with 5 remotes ran ~55 small creeps, 18 of 20 CPU on
  * shard0); the official CPU includes the 0.2 per intent, so the tick CPU is the right signal.
- * Above 95% of the limit while the bucket is below 9000 (above the limit, or bucket < 5000, whatever
+ * Above 95% of the limit while the bucket is below 8000 (above the limit, or bucket < 5000, whatever
  * the bucket) the worst remote room goes, below 75% (bucket > 9000)
  * one more is allowed, and also above it once the bucket has stayed full for BUDGET_FULL_TICKS
  * (shard0 W27N5: 15/20 CPU with a full bucket stayed capped); at most one change per 1000 ticks so
  * the creeps of a dropped remote can die out. A room is only added when the average plus one
  * room's measured CPU (remote roles' CPU and moves over the mined rooms, at least 0.8) stays under
  * 90% (98% once the bucket stayed above 9000 for 1000 ticks; above 95% a room is then only dropped
- * when the bucket falls below 9000, see remoteIncome.ts budgetRooms), and
+ * when the bucket falls below 8000, see remoteIncome.ts budgetRooms), and
  * not within BUDGET_RAISE_HOLD ticks of a drop (shard0 at ~90% of 20 CPU: 7 -> 8 -> 7 in 5 of 6
  * windows of 1000 ticks, the bucket falling, the spawn energy spent on creeps of a dropped room).
  * (85% / 70% cut W7N3 by 27% in the mockup: it oscillated while the bucket stayed full.)
@@ -582,7 +582,9 @@ function sampleRoomCpu(currentRooms: number): void {
     const total = _.sum(REMOTE_CPU_ROLES, role => (counters[`cpu:${role}`] ?? 0) + INTENT_CPU * (counters[`intents:move:${role}`] ?? 0));
     const last = mem.roleCpu;
     mem.roleCpu = { total, tick: Game.time, moves: true };
-    // Counters reset (mockup state load), or a total written before the moves were counted: start again from here
+    // A total written before the moves were counted: its average left them out, start both again
+    if (last && !last.moves) delete mem.roomCpu;
+    // Counters reset (mockup state load): start again from here
     if (!last?.moves || total < last.total || Game.time <= last.tick || currentRooms === 0) return;
     const ticks = Game.time - last.tick;
     mem.roomCpu = cpuAverage(mem.roomCpu, (total - last.total) / currentRooms, ticks);

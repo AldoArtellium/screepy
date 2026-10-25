@@ -145,9 +145,9 @@ function maxOrderAmount(resourceType: ResourceConstant): number {
     return 1;
 }
 
-/** Best order to deal with: price x 1000 against 0.3 credit per energy of transfer cost */
+/** Best order of other players to deal with: price x 1000 against 0.3 credit per energy of transfer cost */
 function findBestOrder(type: ORDER_BUY | ORDER_SELL, resourceType: ResourceConstant, roomName: string): Order | null {
-    const orders = Game.market.getAllOrders({ type, resourceType }).filter(o => o.amount >= 100);
+    const orders = Game.market.getAllOrders({ type, resourceType }).filter(o => o.amount >= 100 && !Game.market.orders[o.id]);
     const score = (o: Order) => {
         const cost = o.roomName ? Game.market.calcTransactionCost(1000, roomName, o.roomName) : 0;
         return type === ORDER_BUY ? 1000 * o.price - 0.3 * cost : -(1000 * o.price + 0.3 * cost);
@@ -219,7 +219,7 @@ function instaSell(resourceType: ResourceConstant, rooms: string[]): void {
 
 /**
  * Buys from the best sell order if it costs at most average - min(dev / 5, 10%); `force` pays up to
- * FORCED_BUY_MAX_RATIO x the average (Hivemind: any price)
+ * FORCED_BUY_MAX_RATIO x the average or the best buy order (Hivemind: any price)
  */
 function instaBuy(resourceType: ResourceConstant, rooms: string[], force: boolean): void {
     const room = roomLowestOn(resourceType, rooms);
@@ -227,7 +227,11 @@ function instaBuy(resourceType: ResourceConstant, rooms: string[], force: boolea
     const order = findBestOrder(ORDER_SELL, resourceType, room.name);
     const history = priceData(resourceType);
     if (!order || !history) return;
-    if (force ? !forcedBuyPays(order.price, history) : order.price > history.average - Math.min(history.stdDev / 5, history.average * 0.1)) return;
+    if (force && !forcedBuyPays(order.price, history, findBestOrder(ORDER_BUY, resourceType, room.name)?.price)) {
+        log.info("Market", `${room.name}: forced buy of ${resourceType} skipped, ${order.price} above the price cap`);
+        return;
+    }
+    if (!force && order.price > history.average - Math.min(history.stdDev / 5, history.average * 0.1)) return;
     let amount = Math.min(force ? 10000 : maxOrderAmount(resourceType), order.amount);
     const terminal = room.terminal;
     let cost = order.roomName ? Game.market.calcTransactionCost(amount, room.name, order.roomName) : 0;
@@ -368,6 +372,7 @@ function isCommodity(resourceType: ResourceConstant): boolean {
 
 /** Own orders older than 100 000 ticks or done */
 function removeOldOrders(): void {
+    for (const id of repricedAt.keys()) if (!Game.market.orders[id]) repricedAt.delete(id);
     for (const id in Game.market.orders) {
         const order = Game.market.orders[id];
         if (Game.time - order.created > ORDER_MAX_AGE || order.remainingAmount === 0) Game.market.cancelOrder(id);
