@@ -32,6 +32,8 @@ import {
     SquadType
 } from "./sizing";
 import { chooseAutoTarget } from "./targets";
+import { militaryCpuAverage, militaryCpuTooHigh } from "./cpuGuard";
+import { decisionBucket } from "../utils/throttle";
 
 export { militaryMemory } from "./intel";
 
@@ -178,9 +180,20 @@ function isEngaged(target: string): boolean {
     return duoCreeps(`duo.${target}`).length > 0 || quadCreeps(`quad.${target}`).length > 0;
 }
 
-/** Losses or the target changed (not a failure: the room is not left alone for it, targets.ts recentlyFailed) */
+/** Average CPU per tick of this module (heap, military/cpuGuard.ts) */
+let moduleCpu: number | undefined;
+
+/**
+ * Losses, a CPU cost the account can't carry (cpuGuard.ts) or the target changed (not a failure: the room
+ * is not left alone for it, targets.ts recentlyFailed)
+ */
 function endReason(mission: { targetRoom: string; losses: number }): "abandoned" | "retargeted" | null {
     if (mission.losses >= MAX_LOSSES) return "abandoned";
+    if (militaryCpuTooHigh(moduleCpu, Game.cpu.limit, decisionBucket())) {
+        countStat("military:cpuAbandon");
+        log.warn("Military", `Attack on ${mission.targetRoom}: ${moduleCpu!.toFixed(1)} CPU per tick with the bucket at ${decisionBucket()}`);
+        return "abandoned";
+    }
     return mission.targetRoom !== currentTarget() ? "retargeted" : null;
 }
 
@@ -207,6 +220,12 @@ function startMission(target: string): void {
 }
 
 export const militaryModule = (): void => {
+    const start = Game.cpu.getUsed();
+    runMilitary();
+    moduleCpu = militaryCpuAverage(moduleCpu, Game.cpu.getUsed() - start);
+};
+
+function runMilitary(): void {
     updateMilitaryIntel();
     updateLootMissions();
     startRaids();
@@ -248,7 +267,7 @@ export const militaryModule = (): void => {
             runQuad(name, quad);
         }
     }
-};
+}
 
 /** A squad member to spawn; `started`: another member is already alive or spawning */
 interface MissingMember {

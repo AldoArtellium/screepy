@@ -18,7 +18,7 @@ export interface PriceData {
 }
 
 /** Forced buys pay at most this many times the average price or the best buy order */
-export const FORCED_BUY_MAX_RATIO = 1.5;
+export const FORCED_BUY_MAX_RATIO = 1.2;
 /** A sell order is only repriced when the new price is at least this share lower */
 const REPRICE_MIN_STEP = 0.002;
 

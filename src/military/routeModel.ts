@@ -5,7 +5,8 @@
 
 /**
  * Cost of a room entered on the route (Game.map.findRoute): our rooms and remotes, then neutral
- * rooms, then other players' remotes; their rooms (towers) are never crossed, except the target.
+ * rooms, then other players' remotes; their rooms (towers) and source keeper rooms are never crossed,
+ * except the target.
  * With these, an enemy remote is crossed rather than a detour of 3+ neutral rooms.
  */
 export const ROUTE_COST = { ally: 1, neutral: 2, enemyRemote: 5 };
@@ -13,6 +14,20 @@ export const ROUTE_COST = { ally: 1, neutral: 2, enemyRemote: 5 };
 export interface RouteRoomInfo {
     owner?: string;
     reserver?: string;
+}
+
+/**
+ * Source keeper room by its name: the 8 rooms around a sector center (coordinates 4-6 within the sector,
+ * the center 5,5 excepted). cartographer avoids the tiles within 5 of their sources and minerals while the
+ * squads' own PathFinder did not: shard0 2026-10-25, the W27N9 quad routed through W26N5 got ERR_NO_PATH
+ * from cartographer on every step, ~5 CPU per tick, and keepers around.
+ */
+export function isKeeperRoom(roomName: string): boolean {
+    const match = /^[WE](\d+)[NS](\d+)$/.exec(roomName);
+    if (!match) return false;
+    const x = Number(match[1]) % 10;
+    const y = Number(match[2]) % 10;
+    return x >= 4 && x <= 6 && y >= 4 && y <= 6 && !(x === 5 && y === 5);
 }
 
 export function routeRoomCost(
@@ -23,6 +38,7 @@ export function routeRoomCost(
     ourRemote: boolean
 ): number {
     if (roomName === target) return ROUTE_COST.ally;
+    if (isKeeperRoom(roomName)) return Infinity;
     if (info?.owner) return info.owner === me ? ROUTE_COST.ally : Infinity;
     // A reservation by another player wins over our selection: their creeps are around
     if (info?.reserver && info.reserver !== me && info.reserver !== "Invader") return ROUTE_COST.enemyRemote;
