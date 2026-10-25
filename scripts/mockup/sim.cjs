@@ -73,6 +73,39 @@ const ENEMY = opt("enemy", null);
  */
 const BLOCKERS = opt("blockers", null);
 /**
+ * Tower refill of the enemy player (needs --enemy): "RATE[:STOCK]", e.g. --enemy-refill 20:45000. Every
+ * 5 ticks each enemy tower gets up to 5 x RATE energy back, taken from a stock of STOCK energy (default
+ * 45000, shard0 W28N8's storage on 2026-10-25), like a player's hauler serving its towers from the
+ * storage. A tower firing every tick spends 10 energy a tick: from RATE 10 it is never drained. Towers
+ * are refilled up to REFILL_MAX only: enemy-bot.js repairs ramparts from 800 energy, which would burn
+ * the stock 10 a tick with nobody attacking. The report adds `enemy.refill`: energy given, stock left,
+ * the lowest tower energy and the tower-ticks with an empty tower (below 10 energy, can't fire).
+ */
+const REFILL_MAX = 790;
+const ENEMY_REFILL = opt("enemy-refill", null);
+const refillTrack = { given: 0, stock: 0, minTowerEnergy: null, emptyTicks: 0 };
+
+/** Tops the enemy towers up from the refill stock (see ENEMY_REFILL); samples their energy every tick */
+async function refillEnemyTowers(server, enemy, tick) {
+  const { db } = server.common.storage;
+  const towers = await db["rooms.objects"].find({ room: enemy.room, user: enemy.id, type: "tower" });
+  const rate = Number(ENEMY_REFILL.split(":")[0]);
+  for (const tower of towers) {
+    let energy = (tower.store && tower.store.energy) || 0;
+    if (tick % 5 === 0 && refillTrack.stock > 0) {
+      const amount = Math.min(5 * rate, REFILL_MAX - energy, refillTrack.stock);
+      if (amount > 0) {
+        energy += amount;
+        refillTrack.given += amount;
+        refillTrack.stock -= amount;
+        await db["rooms.objects"].update({ _id: tower._id }, { $set: { store: Object.assign({}, tower.store, { energy }) } });
+      }
+    }
+    refillTrack.minTowerEnergy = refillTrack.minTowerEnergy === null ? energy : Math.min(refillTrack.minTowerEnergy, energy);
+    if (energy < 10) refillTrack.emptyTicks++;
+  }
+}
+/**
  * Second owned room from tick 1: "ROOM[:RCL]" (default RCL 1), e.g. --claim W8N3 to test two
  * neighbouring homes sharing remote rooms. Controller and a spawn at the harness spawn spot, like a
  * room the expansion just claimed; raises the GCL to 2.
@@ -479,6 +512,7 @@ async function enemyStatus(server, enemy) {
   const count = (type) => objects.filter((o) => o.type === type).length;
   const towerEnergy = objects.filter((o) => o.type === "tower").reduce((sum, o) => sum + ((o.store && o.store.energy) || 0), 0);
   const status = { spawns: count("spawn"), towers: count("tower"), towerEnergy, ramparts: count("rampart"), creeps: count("creep") };
+  if (ENEMY_REFILL) status.refill = { ...refillTrack };
   if (BLOCKERS) {
     const { db, env } = server.common.storage;
     const blockers = await db["rooms.objects"].find({ type: "creep", user: enemy.id });
@@ -787,6 +821,7 @@ async function main() {
   const { env, pubsub } = server.common.storage;
   // The enemy first: adding a second user resets the first one's Memory
   const enemy = ENEMY ? await setupEnemy(server, fixture, ENEMY) : null;
+  if (ENEMY_REFILL) refillTrack.stock = Number(ENEMY_REFILL.split(":")[1] || 45000);
   if (QUICK_PRESET) await applyQuickPreset(server, fixture, spot, user.id);
   if (CLAIM) await setupClaim(server, fixture, user.id, CLAIM);
   const stronghold = STRONGHOLD ? await setupStronghold(server, fixture, STRONGHOLD) : null;
@@ -895,6 +930,7 @@ async function main() {
         log(`Raid of tick ${raid.tick} over after ${tick - raid.tick} ticks`);
       }
     }
+    if (ENEMY_REFILL && enemy) await refillEnemyTowers(server, enemy, tick);
     await runTick(server);
     if (!FAST) {
       stage("sim: users.findOne");
