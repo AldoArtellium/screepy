@@ -126,6 +126,11 @@ check("best ROI wins", pickTarget([a, b, c], undefined)?.room === "C");
 check("current kept against a slightly better one", pickTarget([a, b], "A")?.room === "A");
 check("current replaced by a clearly better one", pickTarget([a, c], "A")?.room === "C");
 check("current below MIN_ROI dropped", pickTarget([{ room: "A", roi: 0.8 }], "A") === null);
+// Engaged (squad creeps alive or spawning): kept while still a candidate (shard0 W27N5: a forming duo
+// against W29N3 was recycled when W27N9 scored 6.75)
+check("engaged current kept against a clearly better one", pickTarget([a, c], "A", true)?.room === "A");
+check("engaged current kept below MIN_ROI", pickTarget([{ room: "A", roi: 0.8 }, c], "A", true)?.room === "A");
+check("engaged current no longer a candidate: replaced", pickTarget([b, c], "A", true)?.room === "C");
 
 // --- Raids: rooms with loot and no defense, looted without a squad ---
 const { isRaidable, lootersNeeded, raidCost, RAID_MIN_LOOT, RAID_INTEL_AGE } = require(join(OUT, "military", "roi.js"));
