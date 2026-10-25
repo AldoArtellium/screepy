@@ -5,7 +5,8 @@
  */
 
 import { stayInPlace, whenInRange } from "../core/movement";
-import { creepPower, hostileCreeps, isDangerous, militarySituation } from "../defense/RoomDefense";
+import { hostileCreeps, isDangerous, militarySituation } from "../defense/RoomDefense";
+import { threatOf } from "../defense/threat";
 import { roomPlanner } from "../planner/RoomPlanner";
 import { registerRole } from "./registry";
 
@@ -19,8 +20,8 @@ export function runGuardian(creep: Creep): void {
 }
 
 /**
- * Free main rampart closest to a hostile, preferring the ones near the guardian and the hostiles with
- * the most attack / dismantle power (not in Hivemind: shard0 W28N7, 2026-10-24, 1-WORK decoys drew the
+ * Free main rampart closest to a hostile, preferring the ones near the guardian and the most threatening
+ * hostiles (defense/threat.ts; not in Hivemind: shard0 W28N7, 2026-10-24, 1-WORK decoys drew the
  * guardian away while two 8-WORK dismantlers broke a rampart 6 tiles off)
  */
 function bestRampartToCover(creep: Creep): StructureRampart | null {
@@ -40,7 +41,7 @@ function bestRampartToCover(creep: Creep): StructureRampart | null {
     for (const enemy of enemies) {
         const closest = _.min(ramparts, r => r.pos.getRangeTo(enemy));
         if (typeof closest === "number") continue;
-        const threat = Math.max(creepPower(enemy).attack, 1);
+        const threat = Math.max(threatOf(enemy), 1);
         const score = (closest.pos.getRangeTo(creep) / 2 + closest.pos.getRangeTo(enemy) + 1) / threat;
         if (!best || score < best.score) best = { rampart: closest, score };
     }

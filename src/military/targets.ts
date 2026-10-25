@@ -100,7 +100,7 @@ export function rankTargets(): AutoTarget[] {
         const reason = isStronghold(intel, roomName) ? "stronghold" : isPlayerTarget(intel) ? "player" : null;
         if (!reason) continue;
         const energy = near.origin.room.energyCapacityAvailable;
-        const plan = planSquad(roomName, energy, memory.squad, reason === "stronghold");
+        const plan = planSquad(roomName, energy, memory.squad, reason === "stronghold", near.origin.room);
         if (!plan.feasible) continue;
         const cost = squadCost(squadMemberCosts(plan.type, energy));
         const ticksLeft = (intel.collapse ?? Infinity) - Game.time;
