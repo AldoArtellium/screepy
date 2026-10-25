@@ -22,6 +22,8 @@ function park(creep: Creep): void {
 function storeAll(creep: Creep): void {
     for (const key in creep.store) {
         const resourceType = key as ResourceConstant;
+        // creep.store lists emptied resources with 0 (energy first): a transfer of 0 failed every tick
+        if (creep.store[resourceType] <= 0) continue;
         const target = bestStorageTarget(creep.room, creep.store[resourceType], resourceType);
         if (!target) return;
         whenInRange(creep, 1, target, () => creep.transfer(target, resourceType));
