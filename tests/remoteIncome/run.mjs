@@ -93,22 +93,25 @@ check("75% CPU with a fresh full bucket keeps the cap", budgetRooms(capped) === 
 check("a bucket full for 1000 ticks allows one more room", budgetRooms({ ...capped, fullBucketTicks: 1000 }) === 8);
 check("below 75% one more room", budgetRooms({ ...capped, cpuAvg: 14.9 }) === 8);
 check("one more than possible lifts the cap", budgetRooms({ ...capped, maxRooms: 9, fullBucketTicks: 2000 }) === undefined);
-check("above 95% drops a room even with a full bucket", budgetRooms({ ...capped, cpuAvg: 19.1, fullBucketTicks: 5000 }) === 6);
+check("above 95% keeps the cap while the bucket holds 9000", budgetRooms({ ...capped, cpuAvg: 19.1, fullBucketTicks: 5000 }) === 7);
+check("above 95% drops a room once the bucket is below 9000", budgetRooms({ ...capped, cpuAvg: 19.1, bucket: 8900 }) === 6);
+check("above the limit drops a room whatever the bucket", budgetRooms({ ...capped, cpuAvg: 20.1, fullBucketTicks: 5000 }) === 6);
 check("a low bucket drops a room", budgetRooms({ ...capped, cpuAvg: 10, bucket: 4000 }) === 6);
 check("uncapped stays uncapped below 95%", budgetRooms({ ...capped, maxRooms: undefined, cpuAvg: 18 }) === undefined);
 
-// Oscillation (shard0, 20 CPU, ~90% with a full bucket): one more room must fit under 90% of the limit
-const near = { ...capped, cpuAvg: 17.2, fullBucketTicks: 2000 };
-check("a full bucket at 86% adds no room that would not fit", budgetRooms(near) === 7);
-check("a measured room of 0.5 CPU still counts 1.2", budgetRooms({ ...near, roomCpu: 0.5 }) === 7);
-check("a full bucket adds a room that fits", budgetRooms({ ...near, cpuAvg: 16.5 }) === 8);
-check("a measured 2 CPU room does not fit at 16.5", budgetRooms({ ...near, cpuAvg: 16.5, roomCpu: 2 }) === 7);
+// A bucket full for 1000 ticks: one more room must fit under 98% of the limit (shard0 2026-10-25:
+// 18.46/20, a room measured 0.86 with its moves, capped at 7 while the bucket stayed full)
+const near = { ...capped, cpuAvg: 18.46, fullBucketTicks: 2000 };
+check("shard0: a full bucket at 92% adds a measured 0.86 room", budgetRooms({ ...near, roomCpu: 0.86 }) === 8);
+check("a measured 1.5 CPU room does not fit at 18.46", budgetRooms({ ...near, roomCpu: 1.5 }) === 7);
+check("a measured room of 0.5 CPU still counts 0.8", budgetRooms({ ...near, cpuAvg: 18.9, roomCpu: 0.5 }) === 7);
+check("a fresh full bucket at 92% adds nothing", budgetRooms({ ...near, roomCpu: 0.86, fullBucketTicks: 999 }) === 7);
 check("below 75% the room must fit too", budgetRooms({ ...capped, limit: 10, cpuAvg: 7.4, roomCpu: 2 }) === 7);
 check("below 75% a room that fits is added", budgetRooms({ ...capped, limit: 10, cpuAvg: 7.4, roomCpu: 1.5 }) === 8);
 // Hysteresis after a drop
 check("no room added within 5000 ticks of a drop", budgetRooms({ ...capped, cpuAvg: 12, ticksSinceDrop: 4999 }) === 7);
 check("a room added 5000 ticks after a drop", budgetRooms({ ...capped, cpuAvg: 12, ticksSinceDrop: 5000 }) === 8);
-check("the hold never delays a drop", budgetRooms({ ...capped, cpuAvg: 19.5, ticksSinceDrop: 10 }) === 6);
+check("the hold never delays a drop", budgetRooms({ ...capped, cpuAvg: 19.5, bucket: 8000, ticksSinceDrop: 10 }) === 6);
 check("the hold keeps an uncapped budget uncapped", budgetRooms({ ...capped, maxRooms: undefined, cpuAvg: 12, ticksSinceDrop: 10 }) === undefined);
 // Reservations under CPU pressure: energy added per CPU added, against a neutral source's energy per CPU
 const fmt = v => `+${v.energy.toFixed(2)} energy for ${v.cpu.toFixed(3)} CPU = ${v.perCpu.toFixed(1)}/CPU vs ${v.alternative.toFixed(1)}`;
