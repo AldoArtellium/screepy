@@ -6,9 +6,12 @@
  *    remotes: their loot seen in sight and the remote income they block until they collapse (their
  *    room's sources). Level 0 cores in our remotes are already cleared by the remote defense ATTACKER
  *    (remote/remoteDefense.ts).
- * 2. Player rooms, only with `Memory.military.auto = true` (never by default): their loot seen in
- *    sight (storage, terminal, containers) and the energy the player made us lose (infamy); rooms in
- *    safe mode or without spawn are skipped.
+ * 2. Player rooms, unless `Memory.military.auto = false` (on by default since 2026-10-25): their loot seen in
+ *    sight (storage, terminal, containers), the energy the player made us lose (infamy) and the remote
+ *    sources its fall frees next to our rooms (roi.ts freedSources, REMOTE_HORIZON ticks of income);
+ *    rooms in safe mode or without spawn are skipped.
+ * Under CPU pressure (remote budget capped, or CPU above 85%) the squad's CPU is priced in energy
+ * (roi.ts squadCpu x a neutral remote source's energy per CPU): the remote budget gives that CPU up.
  * Rooms that failed in the last FAILURE_MEMORY ticks are left alone, and only targets the chosen squad
  * can fight (sizing.ts feasible) count. Before, Harabi's score (durability x distance / threat) with
  * strongholds always first: the mockup quad lost 8 creeps (~16k energy each way) for 22 units of loot.
@@ -16,12 +19,24 @@
  */
 
 import { intelManager } from "../modules/IntelManager";
+import { cpuPressure, neutralEnergyPerCpu } from "../remote/remoteIncome";
 import { remoteSources } from "../remote/RemoteMining";
 import { HostileRoom, militaryMemory } from "./intel";
-import { pickTarget, remoteValue, squadCost, targetValue } from "./roi";
+import {
+    freedSources,
+    pickTarget,
+    REMOTE_HORIZON,
+    remoteValue,
+    RoomHolding,
+    squadCost,
+    squadCpu,
+    targetValue
+} from "./roi";
 import { planSquad, squadMemberCosts } from "./sizing";
 
 const MAX_DISTANCE = 10;
+/** Distance of the neutral remote source whose energy per CPU prices a squad's CPU (remoteIncome examples) */
+const CPU_PRICE_DISTANCE = 50;
 /** Linear distance of a stronghold from our rooms (remotes: one less) */
 const STRONGHOLD_RANGE = 2;
 /** A failed target is left alone this long */
@@ -32,7 +47,10 @@ export interface AutoTarget {
     reason: "stronghold" | "player";
     roi: number;
     value: number;
+    /** Spawn energy with replacements, plus `cpu` */
     cost: number;
+    /** The squad's CPU priced in energy (0 without CPU pressure) */
+    cpu: number;
 }
 
 interface Origin {
@@ -81,8 +99,27 @@ function isStronghold(intel: HostileRoom, roomName: string): boolean {
     return nearOurTerritory(roomName);
 }
 
+function linearDistance(a: string, b: string): number {
+    return Game.map.getRoomLinearDistance(a, b);
+}
+
+function ownedRooms(): string[] {
+    return _.filter(Game.rooms, r => !!r.controller?.my).map(r => r.name);
+}
+
+/** Owner, reserver and source count of every room in the static intel */
+function holdings(): RoomHolding[] {
+    return Object.entries(intelManager.allIntel()).map(([room, intel]) => ({
+        room,
+        owner: intel.owner,
+        reserver: intel.reserver,
+        sources: intel.sources?.length ?? 0,
+        scouted: intel.lastScouted
+    }));
+}
+
 function isPlayerTarget(intel: HostileRoom): boolean {
-    if (!militaryMemory().auto) return false;
+    if (militaryMemory().auto === false) return false;
     if (!intel.owner || intel.owner === Memory.username || intel.spawns === 0) return false;
     return (intel.safeMode ?? 0) <= Game.time;
 }
@@ -102,14 +139,25 @@ export function rankTargets(): AutoTarget[] {
         const energy = near.origin.room.energyCapacityAvailable;
         const plan = planSquad(roomName, energy, memory.squad, reason === "stronghold", near.origin.room);
         if (!plan.feasible) continue;
-        const cost = squadCost(squadMemberCosts(plan.type, energy));
+        const members = squadMemberCosts(plan.type, energy);
+        const cpu = cpuPressure()
+            ? Math.round(squadCpu(members.length) * neutralEnergyPerCpu(CPU_PRICE_DISTANCE, energy))
+            : 0;
+        const cost = squadCost(members) + cpu;
         const ticksLeft = (intel.collapse ?? Infinity) - Game.time;
+        const remote =
+            reason === "stronghold"
+                ? remoteValue(intelManager.sourceCount(roomName), ticksLeft)
+                : remoteValue(
+                      freedSources(roomName, intel.owner!, holdings(), ownedRooms(), linearDistance, Game.time),
+                      REMOTE_HORIZON
+                  );
         const value = targetValue({
             loot: intel.loot ?? 0,
-            remote: reason === "stronghold" ? remoteValue(intelManager.sourceCount(roomName), ticksLeft) : 0,
+            remote,
             infamy: reason === "player" ? memory.infamy?.[intel.owner!] ?? 0 : 0
         });
-        targets.push({ room: roomName, reason, roi: value / cost, value: Math.round(value), cost });
+        targets.push({ room: roomName, reason, roi: value / cost, value: Math.round(value), cost, cpu });
     }
     return targets;
 }

@@ -42,7 +42,7 @@ declare global {
         military?: {
             /** Room to attack, set by hand (overrides the automatic target) */
             attack?: string;
-            /** Allow automatic attacks on player rooms (default off: strongholds only) */
+            /** Automatic attacks on player rooms (default on since 2026-10-25; false: strongholds only) */
             auto?: boolean;
             /** Allow raids on rooms with loot and no defense (loot.ts; default off) */
             raid?: boolean;

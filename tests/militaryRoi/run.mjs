@@ -66,6 +66,56 @@ check("L1 stronghold blocking 2 sources: ROI >= 1", blocking >= MIN_ROI, blockin
 const collapsing = targetValue({ loot: 100, remote: remoteValue(2, 1000), infamy: 0 }) / quadRcl7;
 check("stronghold collapsing in 1000 ticks: ROI < 1", collapsing < MIN_ROI, collapsing.toFixed(2));
 
+// Squad CPU (mockup W7N3 --preset rcl7 --stronghold W7N4:1: ~1900 official CPU for 12 quad creeps spawned)
+const { squadCpu, SQUAD_CREEP_CPU, freedSources } = require(join(OUT, "military", "roi.js"));
+check("SQUAD_CREEP_CPU is 160", SQUAD_CREEP_CPU === 160);
+check("squad CPU: 4 members with their replacements", squadCpu(4) === 4 * ATTRITION * 160, squadCpu(4));
+// Under CPU pressure the CPU is priced at a neutral remote source's energy per CPU (neutralEnergyPerCpu
+// at 50 tiles: 8.4 at 1300 capacity, 9.8 at 1800, 10.9 at 2300, 11.2 at 5600)
+const quadWithCpu = quadRcl7 + squadCpu(4) * 11.2;
+const blockingCpu = targetValue({ loot: 100, remote: remoteValue(2, 70000), infamy: 0 }) / quadWithCpu;
+check("CPU priced: the quad costs ~45% more at RCL 7", quadWithCpu / quadRcl7 > 1.4 && quadWithCpu / quadRcl7 < 1.5, (quadWithCpu / quadRcl7).toFixed(2));
+check("CPU priced: L1 stronghold blocking 2 sources still pays", blockingCpu >= MIN_ROI, blockingCpu.toFixed(2));
+// A small player target worth its loot alone no longer pays once the CPU is priced
+const smallLoot = targetValue({ loot: 30000, remote: 0, infamy: 4000 });
+check("player loot 34k: pays on energy alone", smallLoot / quadRcl7 >= MIN_ROI, (smallLoot / quadRcl7).toFixed(2));
+check("player loot 34k: doesn't pay with the CPU priced", smallLoot / quadWithCpu < MIN_ROI, (smallLoot / quadWithCpu).toFixed(2));
+
+// Sources a player's room frees when it falls: its own and the rooms it reserves (closest room of that
+// player, strictly), within reach of our rooms. shard0 2026-10-25 around W28N7 (doorknobnob)
+const coords = name => {
+    const m = /^([WE])(\d+)([NS])(\d+)$/.exec(name);
+    return [m[1] === "W" ? -1 - +m[2] : +m[2], m[3] === "N" ? -1 - +m[4] : +m[4]];
+};
+const dist = (a, b) => {
+    const [ax, ay] = coords(a);
+    const [bx, by] = coords(b);
+    return Math.max(Math.abs(ax - bx), Math.abs(ay - by));
+};
+const T0 = 78559200;
+const shard0 = [
+    { room: "W28N8", owner: "doorknobnob", sources: 2, scouted: T0 - 7000 },
+    { room: "W27N9", owner: "doorknobnob", sources: 2, scouted: T0 - 7000 },
+    { room: "W27N7", reserver: "doorknobnob", sources: 2, scouted: T0 - 100 },
+    { room: "W27N8", reserver: "doorknobnob", sources: 1, scouted: T0 - 100 },
+    { room: "W28N9", reserver: "doorknobnob", sources: 2 },
+    { room: "W25N8", reserver: "asdpof", sources: 2, scouted: T0 - 100 },
+];
+const ours = ["W28N7", "W29N7", "W27N5", "W24N8"];
+// W28N8: its 2 sources and W27N7 (closest to it); W27N8 and W28N9 are as close to W27N9: still reserved
+check("freed by W28N8: its sources and W27N7", freedSources("W28N8", "doorknobnob", shard0, ours, dist, T0) === 4, freedSources("W28N8", "doorknobnob", shard0, ours, dist, T0));
+// W27N9 alone: 2 rooms from W28N7, its sources count; W27N8 and W28N9 tie with W28N8
+check("freed by W27N9: its own sources", freedSources("W27N9", "doorknobnob", shard0, ours, dist, T0) === 2, freedSources("W27N9", "doorknobnob", shard0, ours, dist, T0));
+// Once W28N8 has fallen, W27N9 frees every room it reserves
+const after = shard0.filter(r => r.room !== "W28N8");
+check("freed by W27N9 once alone: everything around", freedSources("W27N9", "doorknobnob", after, ours, dist, T0) === 2 + 2 + 1 + 2, freedSources("W27N9", "doorknobnob", after, ours, dist, T0));
+check("another player's reservations never count", freedSources("W28N8", "asdpof", shard0, ours, dist, T0) === 0);
+check("a room out of our reach frees nothing", freedSources("W28N8", "doorknobnob", shard0, ["W20N1"], dist, T0) === 0);
+// A reservation seen more than 5000 ticks ago may have run out (a reservation lasts at most 5000 ticks)
+const stale = shard0.map(r => (r.room === "W27N7" ? { ...r, scouted: T0 - 5001 } : r));
+check("a stale reservation frees nothing", freedSources("W28N8", "doorknobnob", stale, ours, dist, T0) === 2, freedSources("W28N8", "doorknobnob", stale, ours, dist, T0));
+check("a reservation seen 5000 ticks ago still counts", freedSources("W28N8", "doorknobnob", shard0.map(r => (r.room === "W27N7" ? { ...r, scouted: T0 - 5000 } : r)), ours, dist, T0) === 4);
+
 // Picking: best ROI at least MIN_ROI, the current target kept unless another beats it x CURRENT_BONUS
 check("CURRENT_BONUS is 1.5", CURRENT_BONUS === 1.5);
 const a = { room: "A", roi: 1.5 };

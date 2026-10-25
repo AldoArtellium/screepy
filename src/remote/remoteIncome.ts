@@ -311,6 +311,22 @@ export interface BudgetState {
     ticksSinceDrop?: number;
 }
 
+/** Remote rooms from which an expansion may use the whole CPU limit (Hivemind getCpuStats) */
+export const EXPANSION_REMOTE_ROOMS = 5;
+/** Share of the CPU limit an expansion needs below EXPANSION_REMOTE_ROOMS remote rooms */
+export const EXPANSION_CPU_SHARE = 0.8;
+
+/**
+ * CPU gate of an expansion (Hivemind expand.ts getCpuStats): below 80% of the limit with fewer than 5
+ * remote rooms, below the limit from 5 on, where the remote budget drops remote rooms (BUDGET_HIGH)
+ * to make room for the new one. The 80% used to apply as soon as we owned 2 rooms: shard0 (8 remote
+ * rooms, 17-19 of 20 CPU, the budget filling up to 95%) never expanded.
+ */
+export function expansionCpuFits(cpuAvg: number | undefined, limit: number, remoteRooms: number): boolean {
+    if (cpuAvg === undefined) return false;
+    return cpuAvg < limit * (remoteRooms < EXPANSION_REMOTE_ROOMS ? EXPANSION_CPU_SHARE : 1);
+}
+
 /** CPU counted for one more remote room: the measurement, at least BUDGET_ROOM_CPU_MIN */
 export function budgetRoomCpu(measured: number | undefined): number {
     return Math.max(BUDGET_ROOM_CPU_MIN, measured ?? 0);

@@ -1,6 +1,6 @@
 /**
  * Offense: `Memory.military.attack = "<room>"` (by hand), else an automatic target (targets.ts:
- * strongholds near our rooms; player rooms only with `Memory.military.auto = true`), sends a duo or
+ * strongholds near our rooms; player rooms unless `Memory.military.auto = false`), sends a duo or
  * a quad (sizing.ts, `Memory.military.squad` to force one) from the closest RCL 4+ room with a spawn.
  * The mission ends when the room has no spawn, no tower and no invader core left, or after the
  * squad lost 10 creeps. Our design; see docs/superpowers/roadmap.md (J7).
@@ -125,7 +125,7 @@ export const militaryModule = (): void => {
         const auto = chooseAutoTarget();
         if (auto && auto.room !== memory.target?.room) {
             memory.target = { room: auto.room, reason: auto.reason, since: Game.time, roi: Math.round(auto.roi * 100) / 100 };
-            log.info("Military", `Automatic target: ${auto.room} (${auto.reason}, value ${auto.value} for a squad of ${auto.cost} energy)`);
+            log.info("Military", `Automatic target: ${auto.room} (${auto.reason}, value ${auto.value} for a squad of ${auto.cost} energy, CPU priced ${auto.cpu})`);
         } else if (!auto && memory.target && !hasMission(memory.target.room)) delete memory.target;
     }
     const target = currentTarget();
