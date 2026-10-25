@@ -21,6 +21,7 @@ import {
 } from "../core/roomState";
 import { cacheEmptyTasks, DispatchContext, Dispatcher, TaskProvider } from "./Dispatcher";
 import { bestStorageTarget, resourceAmount, stopTradePreparation, TERMINAL_MIN_ENERGY } from "../core/resources";
+import { isLabUsedForBoosting } from "../labs/boosts";
 
 type EnergyStructure = StructureSpawn | StructureExtension | StructureTower | StructureContainer | StructureStorage | StructureTerminal | StructureLink;
 
@@ -447,6 +448,8 @@ class LabDestination extends StructureDestination {
             const add = (labId: Id<StructureLab>, resourceType: ResourceConstant) => {
                 const lab = Game.getObjectById(labId);
                 if (!lab || (lab.mineralType && lab.mineralType !== resourceType)) return;
+                // A source lab lent to boosts (labs/boosts.ts assignLabs) gets its reagent back once released
+                if (isLabUsedForBoosting(lab.id)) return;
                 if (context.resourceType && context.resourceType !== resourceType) return;
                 const free = lab.store.getFreeCapacity(resourceType) ?? 0;
                 if (free < LAB_MINERAL_CAPACITY * 0.2) return;

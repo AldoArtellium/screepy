@@ -32,7 +32,7 @@ import {
     squadCpu,
     targetValue
 } from "./roi";
-import { planSquad, squadMemberCosts } from "./sizing";
+import { planSquad, SquadPlan, squadMemberCosts } from "./sizing";
 
 const MAX_DISTANCE = 10;
 /** Distance of the neutral remote source whose energy per CPU prices a squad's CPU (remoteIncome examples) */
@@ -71,13 +71,22 @@ function recentlyFailed(roomName: string): boolean {
     );
 }
 
-function closest(origins: Origin[], roomName: string): { origin: Origin; distance: number } | null {
-    let best: { origin: Origin; distance: number } | null = null;
-    for (const origin of origins) {
-        const distance = Game.map.getRoomLinearDistance(origin.room.name, roomName);
-        if (distance <= MAX_DISTANCE && (!best || distance < best.distance)) best = { origin, distance };
+/**
+ * Closest origin whose squad can fight the target (sizing.ts feasible, its boosts in stock counted):
+ * shard0 W28N8 is next to W28N7 (no labs) and one room further from W29N7 (labs, XLHO2 and GHO2)
+ */
+function feasibleOrigin(origins: Origin[], roomName: string): { origin: Origin; plan: SquadPlan } | null {
+    const inReach = origins
+        .map(origin => ({ origin, distance: Game.map.getRoomLinearDistance(origin.room.name, roomName) }))
+        .filter(o => o.distance <= MAX_DISTANCE)
+        .sort((a, b) => a.distance - b.distance);
+    for (const { origin } of inReach) {
+        // Strongholds (the core) and players (haulers) refill their towers: judged at close range
+        const energy = origin.room.energyCapacityAvailable;
+        const plan = planSquad(roomName, energy, militaryMemory().squad, true, origin.room);
+        if (plan.feasible) return { origin, plan };
     }
-    return best;
+    return null;
 }
 
 function nearOurTerritory(roomName: string): boolean {
@@ -132,13 +141,12 @@ export function rankTargets(): AutoTarget[] {
     if (from.length === 0) return targets;
     for (const [roomName, intel] of Object.entries(memory.rooms ?? {})) {
         if (recentlyFailed(roomName)) continue;
-        const near = closest(from, roomName);
-        if (!near) continue;
         const reason = isStronghold(intel, roomName) ? "stronghold" : isPlayerTarget(intel) ? "player" : null;
         if (!reason) continue;
+        const near = feasibleOrigin(from, roomName);
+        if (!near) continue;
+        const { plan } = near;
         const energy = near.origin.room.energyCapacityAvailable;
-        const plan = planSquad(roomName, energy, memory.squad, reason === "stronghold", near.origin.room);
-        if (!plan.feasible) continue;
         const members = squadMemberCosts(plan.type, energy);
         const cpu = cpuPressure()
             ? Math.round(squadCpu(members.length) * neutralEnergyPerCpu(CPU_PRICE_DISTANCE, energy))

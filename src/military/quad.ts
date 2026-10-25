@@ -5,7 +5,9 @@
  *
  * States: forming (gather at home until the four are out) -> travel (loose chain, the leader waits
  * for the others) -> drain (towers left: one member bounces on the border tile while the others heal
- * it, until the towers are seen empty) -> engage (in the target room: pack into the 2x2 block, then
+ * it, until the towers are seen empty; skipped when the quad's boosted healing covers the towers on
+ * its front, canTank: towers a player refills are never seen empty) -> engage (in the target room:
+ * pack into the 2x2 block, then
  * step as one) -> retreat (packed while away from the border, to a rally point in the staging room,
  * below 60% hits or when a member could not walk out under the net damage) -> travel again once
  * everyone is healed to 95%. A quad that lost a healer or two members goes home
@@ -26,7 +28,17 @@ import { trafficManager } from "../modules/TrafficManager";
 import { log } from "../utils/logger";
 import { parseRoomName } from "../utils/rooms";
 import { countStat } from "../utils/stats";
-import { availableHealing, enemyTowers, incomingDamage, towerPower, verdict } from "./combat";
+import {
+    attackPower,
+    availableHealing,
+    canTank,
+    damageMultiplier,
+    enemyTowers,
+    healPower,
+    incomingDamage,
+    towerPower,
+    verdict
+} from "./combat";
 import { isMine, landing, pickTarget, travelMatrix } from "./duo";
 import { hostileRoom } from "./intel";
 
@@ -127,6 +139,19 @@ function hold(creep: Creep): void {
     trafficManager.requestMove(creep, creep.pos, { range: 0, priority: PRIORITY });
 }
 
+/** Damage share the front takes: the attackers' (they lead and stand next to the focus), else 1 */
+function frontMultiplier(group: Creep[]): number {
+    const attackers = group.filter(c => c.memory.role === QUAD_ATTACKER);
+    return attackers.length ? Math.max(...attackers.map(c => damageMultiplier(c.body))) : 1;
+}
+
+/** Boosted enough to out-heal the target's towers on its front: no border drain (combat.ts canTank) */
+function tanksTowers(group: Creep[], quad: QuadMemory): boolean {
+    const room = Game.rooms[quad.targetRoom];
+    const towers = room ? enemyTowers(room).length : (hostileRoom(quad.targetRoom)?.towers ?? 1);
+    return canTank(_.sum(group, c => healPower(c.body)), towers, frontMultiplier(group));
+}
+
 // ---------------------------------------------------------------- damage model
 
 interface DamageSource {
@@ -187,21 +212,22 @@ function healQuad(group: Creep[]): void {
             inRoom.map(c => c.pos),
             Game.rooms[roomName]
         );
-        inRoom.forEach((c, i) => expected.set(c.name, c.hits - damage[i]));
+        inRoom.forEach((c, i) => expected.set(c.name, c.hits - damage[i] * damageMultiplier(c.body)));
     }
     for (const healer of group) {
-        const power = parts(healer, HEAL);
+        // Boosts included: an XLHO2 healer heals 4 times as much
+        const power = healPower(healer.body);
         if (!power) continue;
         const patients = group.filter(c => c.pos.roomName === healer.pos.roomName && c.pos.inRangeTo(healer, 3));
         const patient = _.min(patients, c => expected.get(c.name)! / c.hitsMax);
         if (!patient || typeof patient !== "object" || expected.get(patient.name)! >= patient.hitsMax) continue;
         if (healer.pos.isNearTo(patient)) {
             healer.heal(patient);
-            expected.set(patient.name, expected.get(patient.name)! + power * HEAL_POWER);
+            expected.set(patient.name, expected.get(patient.name)! + power);
         } else {
             healer.rangedHeal(patient);
             rangedUsed.add(healer.name);
-            expected.set(patient.name, expected.get(patient.name)! + power * RANGED_HEAL_POWER);
+            expected.set(patient.name, expected.get(patient.name)! + (power * RANGED_HEAL_POWER) / HEAL_POWER);
         }
     }
 }
@@ -268,11 +294,11 @@ function attackQuad(group: Creep[], focus: Structure | null): void {
 
 // ---------------------------------------------------------------- cost matrices
 
-/** Structure damage per tick of the quad (ticks to break a tile = hits / dps) */
+/** Structure damage per tick of the quad, boosts included (ticks to break a tile = hits / dps) */
 function structureDps(group: Creep[]): number {
     return Math.max(
         1,
-        _.sum(group, c => parts(c, ATTACK) * ATTACK_POWER + parts(c, RANGED_ATTACK) * RANGED_ATTACK_POWER)
+        _.sum(group, c => attackPower(c.body))
     );
 }
 
@@ -552,7 +578,7 @@ function travel(group: Creep[], goalRoom: string): void {
  */
 function drain(quad: QuadMemory, group: Creep[]): void {
     const room = Game.rooms[quad.targetRoom];
-    if (room && enemyTowers(room).length === 0) {
+    if ((room && enemyTowers(room).length === 0) || tanksTowers(group, quad)) {
         quad.drained = true;
         quad.state = "travel";
         delete quad.poker;
@@ -647,7 +673,7 @@ function retreat(quad: QuadMemory, group: Creep[]): void {
  */
 function canEscape(creep: Creep, group: Creep[], pos: RoomPosition = creep.pos): boolean {
     if (verdict(creep, pos, group) === "doomed") return false;
-    const net = incomingDamage(pos) - availableHealing(pos, group);
+    const net = incomingDamage(pos) * damageMultiplier(creep.body) - availableHealing(pos, group);
     if (net <= 0) return true;
     const { x, y } = pos;
     const toExit = Math.min(x, y, 49 - x, 49 - y);
@@ -715,10 +741,11 @@ function engage(name: string, quad: QuadMemory, group: Creep[], room: Room): str
     const towers = enemyTowers(room);
     let draining = false;
     if (next && towers.length) {
-        const heal = _.sum(group, c => parts(c, HEAL)) * HEAL_POWER;
+        const heal = _.sum(group, c => healPower(c.body));
         const here = towerDamage(towers, anchor);
         const ahead = towerDamage(towers, next);
-        if (ahead > heal && ahead >= here) {
+        // The towers hit the closest member: the attackers in front, their boosted TOUGH taking a share
+        if (ahead * frontMultiplier(group) > heal && ahead >= here) {
             draining = true;
             next = null;
             const spot = drainSpot(towers, anchor, block);
@@ -830,7 +857,8 @@ export function runQuad(name: string, quad: QuadMemory): void {
             const towersLeft = target ? enemyTowers(target).length > 0 : !intel || intel.towers > 0;
             const { x, y } = leader.pos;
             const atBorder = leader.room.name === quad.stagingRoom && Math.min(x, y, 49 - x, 49 - y) <= 2;
-            if (!quad.drained && towersLeft && atBorder && quad.stagingRoom !== quad.targetRoom) {
+            const shouldDrain = !quad.drained && towersLeft && atBorder && quad.stagingRoom !== quad.targetRoom;
+            if (shouldDrain && !tanksTowers(group, quad)) {
                 quad.state = "drain";
                 drain(quad, group);
             } else travel(group, quad.targetRoom);

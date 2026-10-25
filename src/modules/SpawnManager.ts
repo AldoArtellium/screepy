@@ -255,7 +255,8 @@ class SpawnManager {
         if (option.requestId) this.external.delete(option.requestId);
         // Boosts at the labs before the creep starts working (Hivemind spawn-manager.ts)
         const boosts = option.spawnRole.boosts?.(room, option, body);
-        if (boosts) markForBoosting(name, body, boosts, option.spawnRole.boostWhileWorking);
+        if (boosts)
+            markForBoosting(name, body, boosts, option.spawnRole.boostWhileWorking, option.spawnRole.boostTimeout);
         // Something was spawned: the room's needs changed
         this.idleRoomUntil.delete(room.name);
         log.info("SpawnManager", `Spawning ${name} in ${room.name} (${body.length} parts, ${cost} energy, priority ${option.priority})`);

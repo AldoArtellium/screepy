@@ -26,17 +26,40 @@ const MAX_LOSSES = 10;
 const MIN_ENERGY = 2000;
 const MAX_ROUTE_ROOMS = 10;
 const AUTO_TARGET_EVERY = 100;
+/**
+ * Ticks a squad creep waits for its boosts once out of the spawn (labs/boosts.ts BOOST_TIMEOUT: 150).
+ * The quad gathers its four members anyway (~3 ticks per part each), and at RCL 6 the three labs
+ * (two of them lent by the reactions) are filled by one helper, compound after compound.
+ */
+const SQUAD_BOOST_TIMEOUT = 500;
 
-/** Closest RCL 4+ room with a spawn, and the room the squad heals up in before the target */
+/**
+ * Towers that refill: a stronghold's (the core) and a player's (haulers from the storage; shard0
+ * W28N8 kept a dedicated tower feeder): judged at close range, they are never drained for good
+ */
+export function towersRefill(roomName: string): boolean {
+    const intel = hostileRoom(roomName);
+    return (intel?.coreLevel ?? 0) > 0 || !!intel?.owner;
+}
+
+/**
+ * RCL 4+ room with a spawn whose squad can fight the target (sizing.ts feasible: its boosts in stock
+ * count), closest first, else the closest one; and the room the squad heals up in before the target.
+ * shard0 W28N8: W28N7 (RCL 5, no labs) is next to it, W29N7 (RCL 6, labs, XLHO2 and GHO2) one more room.
+ */
 function findOrigin(target: string): { spawnRoom: string; stagingRoom: string } | null {
-    let best: { spawnRoom: string; stagingRoom: string; length: number } | null = null;
+    let best: { spawnRoom: string; stagingRoom: string; length: number; feasible: boolean } | null = null;
     const minRcl = militaryMemory().minRcl ?? 4;
+    const refills = towersRefill(target);
     for (const room of _.filter(Game.rooms, r => !!r.controller?.my && r.controller.level >= minRcl)) {
         if (room.find(FIND_MY_SPAWNS).length === 0) continue;
         const route = Game.map.findRoute(room.name, target);
         if (route === ERR_NO_PATH || route.length === 0 || route.length > MAX_ROUTE_ROOMS) continue;
         const stagingRoom = route.length >= 2 ? route[route.length - 2].room : room.name;
-        if (!best || route.length < best.length) best = { spawnRoom: room.name, stagingRoom, length: route.length };
+        const energy = room.energyCapacityAvailable;
+        const feasible = planSquad(target, energy, militaryMemory().squad, refills, room).feasible;
+        if (!best || (feasible && !best.feasible) || (feasible === best.feasible && route.length < best.length))
+            best = { spawnRoom: room.name, stagingRoom, length: route.length, feasible };
     }
     return best;
 }
@@ -83,7 +106,7 @@ function isNeutralized(roomName: string): boolean {
 function shouldUpgrade(duo: DuoMemory): boolean {
     const memory = militaryMemory();
     if (memory.squad || duo.losses < 2 || duo.losses >= MAX_LOSSES || !Game.rooms[duo.spawnRoom]) return false;
-    const refills = (hostileRoom(duo.targetRoom)?.coreLevel ?? 0) > 0;
+    const refills = towersRefill(duo.targetRoom);
     return (
         planSquad(duo.targetRoom, Game.rooms[duo.spawnRoom].energyCapacityAvailable, undefined, refills, Game.rooms[duo.spawnRoom])
             .type === "quad"
@@ -99,7 +122,7 @@ function startMission(target: string): void {
     const memory = militaryMemory();
     const origin = findOrigin(target);
     if (!origin) return;
-    const refills = (hostileRoom(target)?.coreLevel ?? 0) > 0;
+    const refills = towersRefill(target);
     const spawnRoom = Game.rooms[origin.spawnRoom];
     const plan = planSquad(target, spawnRoom.energyCapacityAvailable, memory.squad, refills, spawnRoom);
     if (!plan.feasible && !memory.attack) {
@@ -178,6 +201,7 @@ function quadMissing(roomName: string): { name: string; role: string } | null {
 export const militarySpawnRole: SpawnRole = {
     id: "military",
     emptyTimeout: 10,
+    boostTimeout: SQUAD_BOOST_TIMEOUT,
 
     options(room) {
         if (effectiveEnergy(room) < MIN_ENERGY) return [];
@@ -203,7 +227,7 @@ export const militarySpawnRole: SpawnRole = {
     /**
      * Best available boosts of the combat parts (Hivemind squad getCreepBoosts: attack, heal, and the
      * blinky's ranged attack and TOUGH). MOVE stays unboosted: bodies are sized for plain MOVE parts.
-     * The squad waits at most BOOST_TIMEOUT ticks for them (labs/boosts.ts).
+     * The squad waits at most SQUAD_BOOST_TIMEOUT ticks for them.
      */
     boosts(room, _option, body) {
         return boostsFor(room, body, [

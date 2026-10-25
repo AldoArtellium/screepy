@@ -142,16 +142,22 @@ export function boostsFor(
 }
 
 /** Hivemind markForBoosting: parts per compound, from the boosts per part type */
-export function markForBoosting(creepName: string, body: BodyPartConstant[], plan: BoostPlan, working = false): void {
+export function markForBoosting(
+    creepName: string,
+    body: BodyPartConstant[],
+    plan: BoostPlan,
+    working = false,
+    timeout?: number
+): void {
     const parts: { [compound: string]: number } = {};
     for (const part in plan) {
         const pick = plan[part as BodyPartConstant]!;
         parts[pick.compound] = (parts[pick.compound] ?? 0) + pick.parts;
     }
     if (_.size(parts) === 0) return;
-    // Out of the spawn after 3 ticks per part, then the timeout to get boosted
-    const timeout = working ? WORKING_BOOST_TIMEOUT : BOOST_TIMEOUT;
-    memory().creeps[creepName] = { boosts: parts, until: Game.time + body.length * CREEP_SPAWN_TIME + timeout, working: working || undefined };
+    // Out of the spawn after 3 ticks per part, then the timeout to get boosted (the spawn role's, squads: longer)
+    const wait = timeout ?? (working ? WORKING_BOOST_TIMEOUT : BOOST_TIMEOUT);
+    memory().creeps[creepName] = { boosts: parts, until: Game.time + body.length * CREEP_SPAWN_TIME + wait, working: working || undefined };
     countStat("boost:requested");
 }
 
@@ -159,19 +165,39 @@ export function needsBoosting(creep: Creep): boolean {
     return !!Memory.boost?.creeps[creep.name];
 }
 
-/** Hivemind ensureBoostsHaveLabAssigned: a lab per requested compound, never a source lab */
+/** A creep in the room that waits at the labs (not working meanwhile) asks for this compound */
+function waitedFor(room: Room, compound: string): boolean {
+    const creeps = memory().creeps;
+    for (const name in creeps) {
+        const request = creeps[name];
+        if (!request.working && request.boosts[compound] && Game.creeps[name]?.room.name === room.name) return true;
+    }
+    return false;
+}
+
+/**
+ * Hivemind ensureBoostsHaveLabAssigned: a lab per requested compound, never a source lab. Deviation:
+ * for creeps waiting at the labs (squads, guardians) a source lab is lent once no other lab is free,
+ * and the reaction waits (reactions.ts: a source lab without its reagent): an RCL 6 room has 3 labs,
+ * 2 of them sources, and a quad needs a lab per compound (TOUGH, ATTACK, HEAL).
+ */
 function assignLabs(room: Room): void {
     const labs = operationalLabs(room);
     const mem = memory();
     const layout = room.memory.labs;
     for (const compound in requestedBoosts(room)) {
         if (labs.some(l => mem.labs[l.id] === compound)) continue;
+        const lend = waitedFor(room, compound);
         let best: StructureLab | null = null;
         let bestScore = 0;
         for (const lab of labs) {
-            if (lab.id === layout?.source1 || lab.id === layout?.source2 || mem.labs[lab.id]) continue;
+            if (mem.labs[lab.id]) continue;
+            const source = lab.id === layout?.source1 || lab.id === layout?.source2;
+            if (source && !lend) continue;
             const other = lab.mineralType && lab.mineralType !== compound ? lab.store[lab.mineralType] ?? 0 : 0;
-            const score = 1 - other / LAB_MINERAL_CAPACITY + lab.store.energy / LAB_ENERGY_CAPACITY;
+            // A source lab only when no other lab is free
+            const score =
+                (source ? -10 : 0) + 1 - other / LAB_MINERAL_CAPACITY + lab.store.energy / LAB_ENERGY_CAPACITY;
             if (!best || score > bestScore) {
                 best = lab;
                 bestScore = score;
