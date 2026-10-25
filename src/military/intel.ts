@@ -48,6 +48,11 @@ declare global {
             raid?: boolean;
             /** Force the squad type of new missions ("duo" or "quad"; default: sized from the threat) */
             squad?: "duo" | "quad";
+            /**
+             * Boosts of new squads (boostNeed.ts): "auto" (default) the cheapest set that holds against
+             * the target, "max" the strongest in stock (before 2026-10-25), "none" plain bodies
+             */
+            boosts?: "auto" | "max" | "none";
             /** Automatic target (strongholds near our rooms, players with `auto`) */
             target?: { room: string; reason: "stronghold" | "player"; since: number; roi?: number };
             duos: { [name: string]: import("./duo").DuoMemory };

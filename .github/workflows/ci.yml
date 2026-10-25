@@ -80,6 +80,9 @@ jobs:
       - name: Boosts and reactions check
         run: node tests/boosts/run.mjs
 
+      - name: Squad boosts check
+        run: node tests/squadBoosts/run.mjs
+
       - uses: actions/upload-artifact@v4
         with:
           name: bundle

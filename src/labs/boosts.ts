@@ -111,14 +111,52 @@ export function bestBoost(
     minParts?: number,
     countRequested = true
 ): { compound: ResourceConstant; parts: number } | null {
-    if (parts === 0 || operationalLabs(room).length === 0) return null;
-    if ((room.storage?.store.energy ?? 0) + (room.terminal?.store.energy ?? 0) < MIN_ENERGY) return null;
-    const requested = countRequested ? requestedBoosts(room) : {};
-    const available = (compound: ResourceConstant) => {
-        const inLabs = _.sum(operationalLabs(room), l => (l.mineralType === compound ? l.store[compound] ?? 0 : 0));
-        return Math.floor((stock(room, compound) + inLabs) / LAB_BOOST_MINERAL) - (requested[compound] ?? 0);
-    };
+    if (parts === 0 || !canBoost(room)) return null;
+    const available = (compound: ResourceConstant) => boostableParts(room, compound, countRequested);
     return pickBoost(BOOSTS as unknown as BoostTable, part, effect, parts, available, maxTier, minParts);
+}
+
+/** The room has labs and the energy to boost (Hivemind MIN_ENERGY) */
+export function canBoost(room: Room): boolean {
+    if (operationalLabs(room).length === 0) return false;
+    return (room.storage?.store.energy ?? 0) + (room.terminal?.store.energy ?? 0) >= MIN_ENERGY;
+}
+
+/**
+ * Parts a compound can still boost: storage + terminal + labs, minus what other creeps asked for
+ * (`countRequested = false`: ignored)
+ */
+export function boostableParts(room: Room, compound: ResourceConstant, countRequested = true): number {
+    const requested = countRequested ? requestedBoosts(room)[compound] ?? 0 : 0;
+    const inLabs = _.sum(operationalLabs(room), l => (l.mineralType === compound ? l.store[compound] ?? 0 : 0));
+    return Math.floor((stock(room, compound) + inLabs) / LAB_BOOST_MINERAL) - requested;
+}
+
+/**
+ * Boosts of a body with a compound chosen per part type beforehand (military/boostNeed.ts: the squad's
+ * mission); `null`: that part type stays plain. A compound run out since is replaced by the best one
+ * in stock (a member left plain would break the squad the choice was made for).
+ */
+export function boostsWith(
+    room: Room,
+    body: BodyPartConstant[],
+    planned: [BodyPartConstant, BoostEffect, string | null][]
+): BoostPlan {
+    const result: BoostPlan = {};
+    if (!canBoost(room)) return result;
+    const counts = _.countBy(body);
+    for (const [part, effect, compound] of planned) {
+        const parts = counts[part] ?? 0;
+        if (!compound || parts === 0) continue;
+        if (boostableParts(room, compound as ResourceConstant) >= parts) {
+            result[part] = { compound: compound as ResourceConstant, parts };
+            continue;
+        }
+        const pick = bestBoost(room, part, effect, parts);
+        if (pick) result[part] = pick;
+        countStat("boost:plannedShort");
+    }
+    return result;
 }
 
 /**

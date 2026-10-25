@@ -7,23 +7,29 @@
  */
 
 import { duoCreeps, effectiveEnergy, quadCreeps } from "../core/roomState";
-import { boostsFor, cancelBoost } from "../labs/boosts";
+import { boostsFor, boostsWith, cancelBoost } from "../labs/boosts";
 import { performRecycle } from "../roles/recycle";
 import { registerRole } from "../roles/registry";
 import type { SpawnOption, SpawnRole } from "../spawning/spawnRoles";
 import { log } from "../utils/logger";
+import { countStat } from "../utils/stats";
+import { BOOST_MARGIN, BoostedEffect } from "./boostNeed";
 import { DUO_ATTACKER, DUO_HEALER, DuoMemory, runDuo } from "./duo";
 import { hostileRoom, militaryMemory, updateMilitaryIntel } from "./intel";
 import { lootRamparts, startLooting, startRaids, updateLootMissions } from "./loot";
-import { QUAD_ATTACKER, QUAD_HEALER, QUAD_ROSTER, runQuad } from "./quad";
+import { QUAD_ATTACKER, QUAD_HEALER, QUAD_ROSTER, QuadMemory, runQuad } from "./quad";
 import { squadRoute } from "./route";
 import {
+    describeBoosts,
     duoAttackerBody,
     duoHealerBody,
     planSquad,
     quadAttackerBody,
     quadHealerBody,
-    squadMemberCosts
+    SQUAD_BOOST_PARTS,
+    squadMemberCosts,
+    SquadPlan,
+    SquadType
 } from "./sizing";
 import { chooseAutoTarget } from "./targets";
 
@@ -31,6 +37,10 @@ export { militaryMemory } from "./intel";
 
 /** Draining towers costs creeps: give up after this many */
 const MAX_LOSSES = 10;
+/** Creeps lost before the boosts of the next members are chosen again with a bigger margin */
+const ESCALATION_LOSSES = 2;
+/** Margin added per escalation, as a share of BOOST_MARGIN */
+const ESCALATION_STEP = 0.25;
 const MIN_ENERGY = 2000;
 /** Priority of a squad's first member (economy roles at 4 go first) */
 const START_PRIORITY = 3;
@@ -122,15 +132,40 @@ function isNeutralized(roomName: string): boolean {
     return left.length === 0 && lootRamparts(room).length === 0;
 }
 
-/** A duo that lost a pair against a room now sized for a quad (unless the squad type is forced) */
-function shouldUpgrade(duo: DuoMemory): boolean {
-    const memory = militaryMemory();
-    if (memory.squad || duo.losses < 2 || duo.losses >= MAX_LOSSES || !Game.rooms[duo.spawnRoom]) return false;
-    const refills = towersRefill(duo.targetRoom);
-    return (
-        planSquad(duo.targetRoom, Game.rooms[duo.spawnRoom].energyCapacityAvailable, undefined, refills, Game.rooms[duo.spawnRoom])
-            .type === "quad"
-    );
+/**
+ * Squad and boosts against the mission's target with the margin raised by ESCALATION_STEP per
+ * ESCALATION_LOSSES creeps lost, never weaker boosts than the mission's (the intel the choice was made
+ * on was stale, or the model too optimistic)
+ */
+function escalatedPlan(mission: DuoMemory | QuadMemory, type?: SquadType): SquadPlan | null {
+    const spawnRoom = Game.rooms[mission.spawnRoom];
+    if (!spawnRoom) return null;
+    const steps = Math.floor(mission.losses / ESCALATION_LOSSES);
+    const refills = towersRefill(mission.targetRoom);
+    return planSquad(mission.targetRoom, spawnRoom.energyCapacityAvailable, type, refills, spawnRoom, {
+        floor: mission.boosts,
+        margin: BOOST_MARGIN * (1 + ESCALATION_STEP * steps)
+    });
+}
+
+/** A duo that lost a pair against a room now sized for a quad (unless the squad type is forced): the quad's plan */
+function upgradePlan(duo: DuoMemory): SquadPlan | null {
+    if (militaryMemory().squad || duo.losses < 2 || duo.losses >= MAX_LOSSES) return null;
+    const plan = escalatedPlan(duo);
+    return plan?.type === "quad" ? plan : null;
+}
+
+/** Stronger boosts for the next members once the squad lost ESCALATION_LOSSES more creeps */
+function escalateBoosts(kind: "duo" | "quad", name: string, mission: DuoMemory | QuadMemory): void {
+    // Missions started before the boost choice keep the strongest boosts in stock
+    if (!mission.boosts || mission.losses < (mission.boostLosses ?? 0) + ESCALATION_LOSSES) return;
+    const plan = escalatedPlan(mission, kind);
+    if (!plan) return;
+    mission.boostLosses = mission.losses;
+    if (_.isEqual(plan.compounds, mission.boosts)) return;
+    mission.boosts = plan.compounds;
+    countStat("military:boostEscalation");
+    log.info("Military", `${name} lost ${mission.losses} creeps: boosts raised to ${describeBoosts(plan.compounds)}`);
 }
 
 function hasMission(target: string): boolean {
@@ -160,13 +195,14 @@ function startMission(target: string): void {
         delete memory.target;
         return;
     }
-    const base = { ...origin, targetRoom: target, members: [], losses: 0 };
+    const base = { ...origin, targetRoom: target, members: [], losses: 0, boosts: plan.compounds, boostLosses: 0 };
     if (plan.type === "duo") memory.duos[`duo.${target}`] = { ...base, state: "forming" };
     else memory.quads = { ...memory.quads, [`quad.${target}`]: { ...base, state: "forming" } };
     log.info(
         "Military",
         `${plan.type} from ${origin.spawnRoom} to attack ${target} (staging in ${origin.stagingRoom}): edge damage ${plan.threat.edge},`,
-        `duo heal ${plan.duoHeal}, quad heal ${plan.quadHeal}${plan.feasible ? "" : " (not enough healing: drain only)"}`
+        `close damage ${plan.threat.close}, heal ${plan.heal}, boosts ${describeBoosts(plan.compounds)} (${plan.boostCost} energy)`,
+        plan.feasible ? "" : "(not enough healing: drain only)"
     );
 }
 
@@ -187,22 +223,30 @@ export const militaryModule = (): void => {
 
     for (const name in memory.duos) {
         const duo = memory.duos[name];
-        if (shouldUpgrade(duo)) {
+        const upgrade = upgradePlan(duo);
+        if (upgrade) {
             // The duo was sized on stale intel: the threat seen in the fight calls for a quad
             delete memory.duos[name];
-            memory.quads = { ...memory.quads, [`quad.${duo.targetRoom}`]: { ...duo, members: [], state: "forming" } };
-            log.info("Military", `${name} lost ${duo.losses} creeps: a quad takes over`);
+            const quad: QuadMemory = { ...duo, members: [], state: "forming", boosts: upgrade.compounds, boostLosses: duo.losses };
+            memory.quads = { ...memory.quads, [`quad.${duo.targetRoom}`]: quad };
+            log.info("Military", `${name} lost ${duo.losses} creeps: a quad takes over (boosts ${describeBoosts(upgrade.compounds)})`);
             continue;
         }
         const duoEnd = isNeutralized(duo.targetRoom) ? "success" : endReason(duo);
         if (duoEnd) finish("duo", name, duo, duoEnd);
-        else runDuo(name, duo);
+        else {
+            escalateBoosts("duo", name, duo);
+            runDuo(name, duo);
+        }
     }
     for (const name in memory.quads ?? {}) {
         const quad = memory.quads![name];
         const quadEnd = isNeutralized(quad.targetRoom) ? "success" : endReason(quad);
         if (quadEnd) finish("quad", name, quad, quadEnd);
-        else runQuad(name, quad);
+        else {
+            escalateBoosts("quad", name, quad);
+            runQuad(name, quad);
+        }
     }
 };
 
@@ -286,11 +330,19 @@ export const militarySpawnRole: SpawnRole = {
     },
 
     /**
-     * Best available boosts of the combat parts (Hivemind squad getCreepBoosts: attack, heal, and the
-     * blinky's ranged attack and TOUGH). MOVE stays unboosted: bodies are sized for plain MOVE parts.
-     * The squad waits at most SQUAD_BOOST_TIMEOUT ticks for them.
+     * The compounds the mission chose against its target (sizing.ts planSquad, boostNeed.ts: the
+     * cheapest set that holds; RANGED_ATTACK stays plain). Missions started before that choice: the best
+     * available boosts of the combat parts (Hivemind squad getCreepBoosts). MOVE stays unboosted: bodies
+     * are sized for plain MOVE parts. The squad waits at most SQUAD_BOOST_TIMEOUT ticks for them.
      */
-    boosts(room, _option, body) {
+    boosts(room, option, body) {
+        const memory = militaryMemory();
+        const mission = option.memory?.duo ? memory.duos[option.memory.duo] : memory.quads?.[option.memory?.quad ?? ""];
+        if (mission?.boosts) {
+            const chosen = mission.boosts;
+            const effects = Object.keys(SQUAD_BOOST_PARTS) as BoostedEffect[];
+            return boostsWith(room, body, effects.map(e => [...SQUAD_BOOST_PARTS[e], chosen[e] ?? null]));
+        }
         return boostsFor(room, body, [
             [TOUGH, "damage"],
             [ATTACK, "attack"],

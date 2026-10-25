@@ -24,6 +24,7 @@ import { remoteSources, spawnBusyShare } from "../remote/RemoteMining";
 import { roomCountersSince } from "../utils/history";
 import { HostileRoom, militaryMemory } from "./intel";
 import {
+    ATTRITION,
     freedSources,
     pickTarget,
     REMOTE_HORIZON,
@@ -175,7 +176,8 @@ export function rankTargets(): AutoTarget[] {
             income[origin.name] ?? 0,
             spawnBusyShare(origin.name)
         );
-        const cost = squadCost(members) + cpu + spawnTime;
+        // The compounds the squad needs against this target (sizing.ts planSquad) are spent too
+        const cost = squadCost(members, ATTRITION, plan.boostCost) + cpu + spawnTime;
         const ticksLeft = (intel.collapse ?? Infinity) - Game.time;
         const remote =
             reason === "stronghold"

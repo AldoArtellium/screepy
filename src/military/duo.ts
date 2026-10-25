@@ -34,6 +34,10 @@ export interface DuoMemory {
     /** Members seen alive (to count losses) */
     members: string[];
     losses: number;
+    /** Compounds the members get (military.ts startMission; absent: the strongest in stock) */
+    boosts?: import("./boostNeed").SquadCompounds;
+    /** Losses when the boosts were chosen (escalation) */
+    boostLosses?: number;
 }
 
 declare global {
