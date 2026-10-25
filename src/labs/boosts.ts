@@ -12,6 +12,7 @@
 
 import { whenInRange } from "../core/movement";
 import { structuresOfType, tickCache } from "../core/roomState";
+import { trafficManager } from "../modules/TrafficManager";
 import { countStat } from "../utils/stats";
 import { log } from "../utils/logger";
 import { BoostTable, pickBoost } from "./boostChoice";
@@ -325,8 +326,10 @@ export function overrideForBoosting(creep: Creep): boolean {
         const compound = mem.labs[lab.id];
         const parts = request.boosts[compound];
         if (!parts) continue;
-        // A working creep only leaves its job for a lab ready to boost it
-        if (request.working && !isLabReady(lab, compound, parts)) continue;
+        // Only a lab ready to boost it: a working creep keeps its job meanwhile, the others wait away
+        // from the labs (shard0 W27N5: three quad members next to the labs walled the only passage
+        // between the labs and the terminal, the helper took a 70-tile detour and the boosts expired)
+        if (!isLabReady(lab, compound, parts)) continue;
         const score =
             Math.min(lab.store.energy / LAB_BOOST_ENERGY / parts, 1) +
             3 * Math.min((lab.mineralType === compound ? lab.store[compound] ?? 0 : 0) / LAB_BOOST_MINERAL / parts, 1);
@@ -337,8 +340,12 @@ export function overrideForBoosting(creep: Creep): boolean {
     }
     if (!best) {
         if (request.working) return false;
-        // Labs not ready yet: wait out of the way (Hivemind: range 5 of the controller)
-        if (creep.room.controller) whenInRange(creep, 5, creep.room.controller);
+        // Labs not ready yet: wait out of the way, on an idle spot off structures and roads (Hivemind: range
+        // 5 of the controller, kept as a fallback)
+        const spot = trafficManager.findIdlePosition(creep);
+        if (spot) whenInRange(creep, 0, spot);
+        else if (creep.room.controller) whenInRange(creep, 5, creep.room.controller);
+        countStat("boost:waitAway");
         return true;
     }
     const lab = best;
