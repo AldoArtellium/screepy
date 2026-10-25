@@ -65,6 +65,9 @@ jobs:
       - name: Military ROI check
         run: node tests/militaryRoi/run.mjs
 
+      - name: Combat check
+        run: node tests/combat/run.mjs
+
       - name: Room cleanup check
         run: node tests/roomCleanup/run.mjs
 

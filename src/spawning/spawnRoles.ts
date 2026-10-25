@@ -70,6 +70,8 @@ export interface SpawnRole {
     boosts?(room: Room, option: SpawnOption, body: BodyPartConstant[]): BoostPlan;
     /** The creep does its job until a boost lab is ready instead of waiting at the labs (labs/boosts.ts) */
     readonly boostWhileWorking?: boolean;
+    /** Ticks the creep waits for its boosts once out of the spawn (labs/boosts.ts default: 150, working: 400) */
+    readonly boostTimeout?: number;
 }
 
 /**
