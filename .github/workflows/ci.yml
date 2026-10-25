@@ -86,6 +86,9 @@ jobs:
       - name: Market pricing check
         run: node tests/market/run.mjs
 
+      - name: Military CPU guard check
+        run: node tests/militaryCpu/run.mjs
+
       - uses: actions/upload-artifact@v4
         with:
           name: bundle
