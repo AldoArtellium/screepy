@@ -953,23 +953,35 @@ async function main() {
     `Avg CPU ${cpuAvg === null ? "n/a" : cpuAvg.toFixed(2)} (max ${cpuMax.toFixed(1)})` +
       (stats && stats.cpuAvg !== undefined ? ` | Memory.stats.cpuAvg ${stats.cpuAvg.toFixed(2)}` : "")
   );
-  // The official server charges 0.2 CPU per intent, the mockup engine doesn't
+  // The engine charges 0.2 CPU per intent like the official server (@screeps/driver runtime.js
+  // intentCpu, in getUsed and in the published CPU): the average already holds them
   const intentsPerTick = counters.intents !== undefined ? counters.intents / TICKS : null;
-  const officialCpu = cpuAvg !== null && intentsPerTick !== null ? cpuAvg + 0.2 * intentsPerTick : null;
+  const officialCpu = cpuAvg !== null && intentsPerTick !== null ? cpuAvg : null;
   if (officialCpu !== null)
-    console.log(`Intents ${intentsPerTick.toFixed(2)}/tick | official CPU estimate ${officialCpu.toFixed(2)}`);
+    console.log(
+      `Intents ${intentsPerTick.toFixed(2)}/tick (${(0.2 * intentsPerTick).toFixed(2)} CPU, included) | official CPU estimate ${officialCpu.toFixed(2)}`
+    );
   const roleCpu = Object.keys(counters)
     .filter((k) => k.startsWith("cpu:"))
     .map((k) => {
       const role = k.slice(4);
       const creepTicks = counters[`creepTicks:${role}`] || 1;
-      return { role, perTick: counters[k] / TICKS, perCreep: counters[k] / creepTicks };
+      // cpu:<role> holds the role's intents but its moves (TrafficManager): intents per creep, moves apart
+      const moves = counters[`intents:move:${role}`] || 0;
+      const actions = (counters[`intents:role:${role}`] || 0) - moves;
+      return { role, perTick: counters[k] / TICKS, perCreep: counters[k] / creepTicks, actions: actions / creepTicks, moves: moves / creepTicks };
     })
     .sort((a, b) => b.perTick - a.perTick);
   if (roleCpu.length)
     console.log(
       "CPU by role (per tick / per creep): " +
         roleCpu.map((r) => `${r.role} ${r.perTick.toFixed(2)}/${r.perCreep.toFixed(3)}`).join(", ")
+    );
+  const creepRoles = roleCpu.filter((r) => !r.role.startsWith("module:"));
+  if (creepRoles.some((r) => r.actions || r.moves))
+    console.log(
+      "Intents per creep-tick (actions / moves): " +
+        creepRoles.map((r) => `${r.role} ${r.actions.toFixed(2)}/${r.moves.toFixed(2)}`).join(", ")
     );
   if (enemy) console.log(`Enemy ${enemy.room}: ${JSON.stringify(await enemyStatus(server, enemy))}`);
   if (stronghold) console.log(`Stronghold ${stronghold.room}: ${JSON.stringify(await strongholdStatus(server, stronghold))}`);

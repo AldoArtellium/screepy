@@ -345,19 +345,32 @@ function printCpu(entries, memory) {
     ["module", "cpu/tick", "avgCpu now"],
     modules.map(([name, cpu, now]) => [name, cpu.toFixed(3), now !== undefined ? now.toFixed(3) : "-"])
   );
+  // cpu:<role> holds the role's code and its intents but moves (issued by the TrafficManager); with the
+  // per role intent counters, code = cpu - 0.2 x (role intents - moves)
+  const byRole = keys.some(k => k.startsWith("intents:role:"));
   const roles = keys
     .filter(k => k.startsWith("cpu:") && !k.startsWith("cpu:module:"))
     .map(k => {
       const role = k.slice(4);
       const creepTicks = sum(`creepTicks:${role}`);
-      return [role, sum(k) / ticks, creepTicks > 0 ? sum(k) / creepTicks : 0, creepTicks / ticks];
+      const per = value => (creepTicks > 0 ? value / creepTicks : 0);
+      const moves = sum(`intents:move:${role}`);
+      const actions = sum(`intents:role:${role}`) - moves;
+      return [role, sum(k) / ticks, per(sum(k)), creepTicks / ticks, per(sum(k) - 0.2 * actions), per(actions), per(moves)];
     })
     .sort((a, b) => b[1] - a[1]);
   console.log("");
   table(
-    ["role", "cpu/tick", "cpu/creep", "creeps"],
-    roles.map(([role, cpu, perCreep, creeps]) => [role, cpu.toFixed(3), perCreep.toFixed(3), creeps.toFixed(1)])
+    ["role", "cpu/tick", "cpu/creep", "creeps", ...(byRole ? ["code/creep", "actions/creep", "moves/creep"] : [])],
+    roles.map(([role, cpu, perCreep, creeps, code, actions, moves]) => [
+      role,
+      cpu.toFixed(3),
+      perCreep.toFixed(3),
+      creeps.toFixed(1),
+      ...(byRole ? [code.toFixed(3), actions.toFixed(2), moves.toFixed(2)] : [])
+    ])
   );
+  if (byRole) console.log("code = cpu - 0.2 x actions (intents but moves, which the TrafficManager issues)");
 }
 
 // --- Main ------------------------------------------------------------------------------------------

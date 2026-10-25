@@ -1,7 +1,8 @@
 /**
- * Counts successful intents (Memory.stats.counters `intents` and `intents:<method>`). The official
- * server charges 0.2 CPU per intent on top of the code's own CPU; the private server and the mockup
- * don't, so the harnesses add 0.2 x intents to estimate the official CPU.
+ * Counts successful intents (Memory.stats.counters `intents` and `intents:<method>`). Every server
+ * charges 0.2 CPU per intent on top of the code's own CPU, inside `Game.cpu.getUsed()` (the private
+ * server and the mockup too: @screeps/driver runtime.js `intentCpu`). Creep intents are also counted
+ * per role (`intents:role:<role>`, moves in `intents:move:<role>`).
  */
 
 import { countStat } from "./stats";
@@ -56,6 +57,12 @@ export function installIntentCounter(): void {
                 if (result === OK) {
                     countStat("intents");
                     countStat(`intents:${name}`);
+                    // Per role: cpu:<role> holds the role's intents but its moves, which the TrafficManager issues
+                    const role = this instanceof Creep ? this.memory.role : undefined;
+                    if (role) {
+                        countStat(`intents:role:${role}`);
+                        if (name === "move") countStat(`intents:move:${role}`);
+                    }
                 }
                 return result;
             };
