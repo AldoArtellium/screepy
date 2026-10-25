@@ -56,8 +56,14 @@ declare global {
             minRcl?: number;
             /** Highest stronghold level attacked automatically (default 1) */
             maxStrongholdLevel?: number;
-            /** Finished missions */
-            log?: { room: string; result: "success" | "abandoned"; time: number; losses: number; squad?: string }[];
+            /** Finished missions ("retargeted": the target changed, not a failure) */
+            log?: {
+                room: string;
+                result: "success" | "abandoned" | "retargeted";
+                time: number;
+                losses: number;
+                squad?: string;
+            }[];
             /** Hostile rooms seen */
             rooms?: { [room: string]: HostileRoom };
             /** Energy each player made us lose (decays) */

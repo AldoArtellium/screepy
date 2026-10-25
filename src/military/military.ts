@@ -7,7 +7,7 @@
  */
 
 import { duoCreeps, effectiveEnergy, quadCreeps } from "../core/roomState";
-import { boostsFor } from "../labs/boosts";
+import { boostsFor, cancelBoost } from "../labs/boosts";
 import { performRecycle } from "../roles/recycle";
 import { registerRole } from "../roles/registry";
 import type { SpawnOption, SpawnRole } from "../spawning/spawnRoles";
@@ -74,9 +74,11 @@ function finish(
     kind: "duo" | "quad",
     name: string,
     mission: { targetRoom: string; spawnRoom: string; losses: number },
-    result: "success" | "abandoned"
+    result: "success" | "abandoned" | "retargeted"
 ): void {
     if (result === "success") startLooting(mission.targetRoom, mission.spawnRoom);
+    // The members go to be recycled: boosting them first (CreepRunner boosts before the role) wastes the compound
+    for (const creep of kind === "duo" ? duoCreeps(name) : quadCreeps(name)) cancelBoost(creep.name);
     const memory = militaryMemory();
     memory.log = [
         ...(memory.log ?? []).slice(-9),
@@ -118,6 +120,17 @@ function hasMission(target: string): boolean {
     return !!memory.duos[`duo.${target}`] || !!memory.quads?.[`quad.${target}`];
 }
 
+/** The mission against the target has creeps (spawning ones included): retargeting would recycle them */
+function isEngaged(target: string): boolean {
+    return duoCreeps(`duo.${target}`).length > 0 || quadCreeps(`quad.${target}`).length > 0;
+}
+
+/** Losses or the target changed (not a failure: the room is not left alone for it, targets.ts recentlyFailed) */
+function endReason(mission: { targetRoom: string; losses: number }): "abandoned" | "retargeted" | null {
+    if (mission.losses >= MAX_LOSSES) return "abandoned";
+    return mission.targetRoom !== currentTarget() ? "retargeted" : null;
+}
+
 function startMission(target: string): void {
     const memory = militaryMemory();
     const origin = findOrigin(target);
@@ -145,7 +158,7 @@ export const militaryModule = (): void => {
     startRaids();
     const memory = militaryMemory();
     if (!memory.attack && Game.time % AUTO_TARGET_EVERY === 0) {
-        const auto = chooseAutoTarget();
+        const auto = chooseAutoTarget(!!memory.target && isEngaged(memory.target.room));
         if (auto && auto.room !== memory.target?.room) {
             memory.target = { room: auto.room, reason: auto.reason, since: Game.time, roi: Math.round(auto.roi * 100) / 100 };
             log.info("Military", `Automatic target: ${auto.room} (${auto.reason}, value ${auto.value} for a squad of ${auto.cost} energy, CPU priced ${auto.cpu})`);
@@ -163,15 +176,14 @@ export const militaryModule = (): void => {
             log.info("Military", `${name} lost ${duo.losses} creeps: a quad takes over`);
             continue;
         }
-        if (isNeutralized(duo.targetRoom)) finish("duo", name, duo, "success");
-        else if (duo.losses >= MAX_LOSSES || duo.targetRoom !== currentTarget()) finish("duo", name, duo, "abandoned");
+        const duoEnd = isNeutralized(duo.targetRoom) ? "success" : endReason(duo);
+        if (duoEnd) finish("duo", name, duo, duoEnd);
         else runDuo(name, duo);
     }
     for (const name in memory.quads ?? {}) {
         const quad = memory.quads![name];
-        if (isNeutralized(quad.targetRoom)) finish("quad", name, quad, "success");
-        else if (quad.losses >= MAX_LOSSES || quad.targetRoom !== currentTarget())
-            finish("quad", name, quad, "abandoned");
+        const quadEnd = isNeutralized(quad.targetRoom) ? "success" : endReason(quad);
+        if (quadEnd) finish("quad", name, quad, quadEnd);
         else runQuad(name, quad);
     }
 };

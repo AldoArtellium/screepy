@@ -104,8 +104,21 @@ export function targetValue(parts: { loot: number; remote: number; infamy: numbe
     return parts.loot + parts.remote + parts.infamy;
 }
 
-/** Best target by return, at least MIN_ROI; the current one counts CURRENT_BONUS times its return */
-export function pickTarget<T extends { room: string; roi: number }>(candidates: T[], current: string | undefined): T | null {
+/**
+ * Best target by return, at least MIN_ROI; the current one counts CURRENT_BONUS times its return, and is
+ * kept whatever its return while `engaged` (its squad has creeps) and still a candidate
+ */
+export function pickTarget<T extends { room: string; roi: number }>(
+    candidates: T[],
+    current: string | undefined,
+    engaged = false
+): T | null {
+    // A squad already spawned (or spawning) for the current target keeps it while it is still a candidate
+    // (feasible, no safe mode, not failed): switching recycled it (shard0 W27N5, duo against W29N3)
+    if (engaged) {
+        const kept = candidates.find(c => c.room === current);
+        if (kept) return kept;
+    }
     let best: T | null = null;
     let bestScore = 0;
     for (const candidate of candidates) {

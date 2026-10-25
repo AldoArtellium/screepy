@@ -161,6 +161,11 @@ export function markForBoosting(
     countStat("boost:requested");
 }
 
+/** Drops a creep's boost request (a squad member whose mission ended: boosting it before its recycle wastes the compound) */
+export function cancelBoost(creepName: string): void {
+    delete Memory.boost?.creeps[creepName];
+}
+
 export function needsBoosting(creep: Creep): boolean {
     return !!Memory.boost?.creeps[creep.name];
 }

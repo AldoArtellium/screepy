@@ -170,7 +170,7 @@ export function rankTargets(): AutoTarget[] {
     return targets;
 }
 
-/** Best automatic target (null: nothing pays for its squad) */
-export function chooseAutoTarget(): AutoTarget | null {
-    return pickTarget(rankTargets(), militaryMemory().target?.room);
+/** Best automatic target (null: nothing pays for its squad); `engaged`: the current target's squad has creeps */
+export function chooseAutoTarget(engaged = false): AutoTarget | null {
+    return pickTarget(rankTargets(), militaryMemory().target?.room, engaged);
 }
