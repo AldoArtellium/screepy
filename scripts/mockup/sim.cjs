@@ -106,6 +106,16 @@ async function refillEnemyTowers(server, enemy, tick) {
   }
 }
 /**
+ * Siege by the enemy player (needs --enemy at RCL 5+): "ROOM:fromTick", e.g. --siege W7N3:1500. Replays
+ * doorknobnob's attack on shard0 W28N7 (2026-10-24, bodies from the room history): 2 drainers (4 HEAL
+ * 4 MOVE) at the room edge, then 2 dismantlers (8 WORK 8 MOVE) and a medic (4 HEAL 4 MOVE) on the main
+ * rampart closest to their entry, and 2 decoys (WORK MOVE) on the rampart farthest from it, each replaced
+ * when it dies. The enemy gets 20 extensions refilled every 5 ticks (energy is not what limits it, its
+ * single spawn is). The report adds `enemy.siege`: creeps spawned / killed by role, hits dismantled,
+ * the target rampart's hits, our structures lost, the lowest tower energy and our defense counters.
+ */
+const SIEGE = opt("siege", null);
+/**
  * Second owned room from tick 1: "ROOM[:RCL]" (default RCL 1), e.g. --claim W8N3 to test two
  * neighbouring homes sharing remote rooms. Controller and a spawn at the harness spawn spot, like a
  * room the expansion just claimed; raises the GCL to 2.
@@ -228,6 +238,11 @@ async function setupEnemy(server, fixture, spec) {
   const blockers = BLOCKERS && BLOCKERS.split(":");
   const memory = { defenders: Number(defendersText || 0) };
   if (blockers) memory.blockers = { room: blockers[0], count: Number(blockers[1]), from: Number(blockers[2] || 1), spawned: 0 };
+  if (SIEGE) {
+    if (rcl < 5) throw new Error("--siege needs an enemy at RCL 5+ (--enemy ROOM:5)");
+    const [siegeRoom, fromText] = SIEGE.split(":");
+    memory.siege = { room: siegeRoom, from: Number(fromText || 1), spawned: {}, dismantled: 0, decoyDismantled: 0 };
+  }
   await env.set(env.keys.MEMORY + enemy.id, JSON.stringify(memory));
   const time = await server.world.gameTime;
   await db["rooms.objects"].update({ room, type: "controller" }, { $set: { level: rcl, progress: 0, downgradeTime: time + 100000, safeModeAvailable: 0, safeMode: null } });
@@ -254,6 +269,21 @@ async function setupEnemy(server, fixture, spec) {
     }
   }
   for (const p of [spot, ...placed]) await rampart(p.x, p.y, Math.min(ringHits * 3, rampartHits));
+  let extensions = 0;
+  for (let radius = 2; radius <= 4 && SIEGE && extensions < 20; radius++) {
+    for (let dx = -radius; dx <= radius && extensions < 20; dx++) {
+      for (let dy = -radius; dy <= radius && extensions < 20; dy++) {
+        if (Math.max(Math.abs(dx), Math.abs(dy)) !== radius || (dx + dy) % 2 !== 0) continue;
+        const x = spot.x + dx;
+        const y = spot.y + dy;
+        if (wall(x, y) || taken.has(y * 50 + x)) continue;
+        taken.add(y * 50 + x);
+        await insert({ type: "extension", x, y, hits: 1000, hitsMax: 1000, store: { energy: 50 }, storeCapacityResource: { energy: 50 }, off: false });
+        extensions++;
+      }
+    }
+  }
+  if (extensions) log(`Enemy siege energy: ${extensions} extensions, refilled every 5 ticks`);
   let ring = 0;
   for (let dx = -5; dx <= 5; dx++) {
     for (let dy = -5; dy <= 5; dy++) {
@@ -507,12 +537,67 @@ async function applyPlanPreset(server, user, memory) {
 }
 let fixtureTerrain = "";
 
+/** Siege measures sampled during the run (see SIEGE): our side, filled by sampleSiege */
+const siegeTrack = { userId: null, structuresAtStart: null, minTowerEnergy: null, targetHits: null, minTargetHits: null };
+
+/** Our structures (roads and containers left out), our towers' energy and the siege target's hits */
+async function sampleSiege(server, enemy) {
+  const { db, env } = server.common.storage;
+  const room = SIEGE.split(":")[0];
+  const ours = await db["rooms.objects"].find({ room, user: siegeTrack.userId });
+  const structures = ours.filter((o) => o.type !== "creep" && o.type !== "road" && o.type !== "container" && o.type !== "constructionSite" && o.type !== "controller");
+  if (siegeTrack.structuresAtStart === null) siegeTrack.structuresAtStart = new Set(structures.map((o) => o._id));
+  const present = new Set(structures.map((o) => o._id));
+  siegeTrack.lost = [...siegeTrack.structuresAtStart].filter((id) => !present.has(id)).length;
+  const towerEnergy = ours.filter((o) => o.type === "tower").reduce((sum, o) => sum + ((o.store && o.store.energy) || 0), 0);
+  siegeTrack.minTowerEnergy = siegeTrack.minTowerEnergy === null ? towerEnergy : Math.min(siegeTrack.minTowerEnergy, towerEnergy);
+  const memory = JSON.parse((await env.get(env.keys.MEMORY + enemy.id)) || "{}");
+  const target = memory.siege && memory.siege.target && ours.find((o) => o._id === memory.siege.target);
+  if (target) {
+    siegeTrack.targetHits = target.hits;
+    siegeTrack.minTargetHits = siegeTrack.minTargetHits === null ? target.hits : Math.min(siegeTrack.minTargetHits, target.hits);
+  } else if (memory.siege && memory.siege.target) siegeTrack.targetHits = 0;
+}
+
+async function siegeStatus(server, enemy) {
+  const { db, env } = server.common.storage;
+  const memory = JSON.parse((await env.get(env.keys.MEMORY + enemy.id)) || "{}");
+  const siege = memory.siege || {};
+  const creeps = await db["rooms.objects"].find({ type: "creep", user: enemy.id });
+  const alive = {};
+  for (const c of creeps) {
+    const role = c.name.split("_")[0];
+    alive[role] = (alive[role] || 0) + 1;
+  }
+  const killed = {};
+  for (const [role, n] of Object.entries(siege.spawned || {})) killed[role] = n - (alive[role] || 0);
+  const own = JSON.parse((await env.get(env.keys.MEMORY + siegeTrack.userId)) || "{}");
+  const counters = (own.stats && own.stats.counters) || {};
+  const defense = {};
+  for (const [k, v] of Object.entries(counters)) if (/^(tower:|spawned:guardian|safeMode|roleError:guardian)/.test(k)) defense[k] = v;
+  return {
+    spawned: siege.spawned || {},
+    killed,
+    dismantled: siege.dismantled || 0,
+    dismantleErrors: siege.dismantleErrors || {},
+    decoyDismantled: siege.decoyDismantled || 0,
+    target: siege.targetPos || null,
+    targetHits: siegeTrack.targetHits,
+    minTargetHits: siegeTrack.minTargetHits,
+    structuresLost: siegeTrack.lost || 0,
+    minTowerEnergy: siegeTrack.minTowerEnergy,
+    defense,
+    creeps: creeps.filter((c) => !/^(blocker|defender)/.test(c.name)).map((c) => `${c.name.split("_")[0]}@${c.room} ${c.x},${c.y} ${c.hits}`)
+  };
+}
+
 async function enemyStatus(server, enemy) {
   const objects = await server.common.storage.db["rooms.objects"].find({ room: enemy.room, user: enemy.id });
   const count = (type) => objects.filter((o) => o.type === type).length;
   const towerEnergy = objects.filter((o) => o.type === "tower").reduce((sum, o) => sum + ((o.store && o.store.energy) || 0), 0);
   const status = { spawns: count("spawn"), towers: count("tower"), towerEnergy, ramparts: count("rampart"), creeps: count("creep") };
   if (ENEMY_REFILL) status.refill = { ...refillTrack };
+  if (SIEGE) status.siege = await siegeStatus(server, enemy);
   if (BLOCKERS) {
     const { db, env } = server.common.storage;
     const blockers = await db["rooms.objects"].find({ type: "creep", user: enemy.id });
@@ -819,6 +904,7 @@ async function main() {
   const gcl = GCL > 1 ? Math.ceil(1000000 * Math.pow(GCL - 1, 2.4)) + 1 : 1;
   const user = await server.world.addBot({ username: USERNAME, room: ROOM, x: spot.x, y: spot.y, gcl, modules: { main } });
   const { env, pubsub } = server.common.storage;
+  siegeTrack.userId = user.id;
   // The enemy first: adding a second user resets the first one's Memory
   const enemy = ENEMY ? await setupEnemy(server, fixture, ENEMY) : null;
   if (ENEMY_REFILL) refillTrack.stock = Number(ENEMY_REFILL.split(":")[1] || 45000);
@@ -931,7 +1017,25 @@ async function main() {
       }
     }
     if (ENEMY_REFILL && enemy) await refillEnemyTowers(server, enemy, tick);
+    if (SIEGE && !siegeTrack.safeModeCleared && tick >= Number(SIEGE.split(":")[1] || 1) - 10) {
+      siegeTrack.safeModeCleared = true;
+      // A new room's 20000-tick safe mode turns every hostile action into ERR_NO_BODYPART: the siege
+      // starts without it (the bot keeps its safe mode activations)
+      await db["rooms.objects"].update({ room: SIEGE.split(":")[0], type: "controller" }, { $set: { safeMode: null } });
+      log(`Siege: safe mode of ${SIEGE.split(":")[0]} cleared at tick ${tick}`);
+    }
     await runTick(server);
+    if (SIEGE && enemy && tick % 5 === 0) {
+      // Siege energy: the enemy's spawn and extensions full again (its spawn time is the limit)
+      for (const type of ["spawn", "extension"]) {
+        const objects = await db["rooms.objects"].find({ room: enemy.room, user: enemy.id, type });
+        for (const o of objects) {
+          const capacity = (o.storeCapacityResource && o.storeCapacityResource.energy) || 0;
+          if (capacity && (o.store && o.store.energy) !== capacity) await db["rooms.objects"].update({ _id: o._id }, { $set: { store: Object.assign({}, o.store, { energy: capacity }) } });
+        }
+      }
+      if (tick >= Number(SIEGE.split(":")[1] || 1) - 5 && tick % 10 === 0) await sampleSiege(server, enemy);
+    }
     if (!FAST) {
       stage("sim: users.findOne");
       const u = await db.users.findOne({ _id: user.id });

@@ -68,6 +68,12 @@ jobs:
       - name: Room cleanup check
         run: node tests/roomCleanup/run.mjs
 
+      - name: Threat score check
+        run: node tests/threat/run.mjs
+
+      - name: Boosts and reactions check
+        run: node tests/boosts/run.mjs
+
       - uses: actions/upload-artifact@v4
         with:
           name: bundle

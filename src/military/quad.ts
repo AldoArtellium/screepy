@@ -20,6 +20,7 @@
  */
 
 import { quadCreeps } from "../core/roomState";
+import { threatOf } from "../defense/threat";
 import { needsBoosting } from "../labs/boosts";
 import { trafficManager } from "../modules/TrafficManager";
 import { log } from "../utils/logger";
@@ -215,7 +216,7 @@ function isFighter(creep: Creep): boolean {
 }
 
 /**
- * Attackers hit an adjacent fighter, else the focus, else the weakest adjacent hostile structure; healers with ranged parts pick a mass attack
+ * Attackers hit an adjacent fighter (most threat per hit, defense/threat.ts), else the focus, else the weakest adjacent hostile structure; healers with ranged parts pick a mass attack
  * when it deals more than a single shot (several hostiles close by), else shoot a fighter, the focus,
  * or any hostile in range.
  */
@@ -223,9 +224,9 @@ function attackQuad(group: Creep[], focus: Structure | null): void {
     for (const creep of group) {
         const hostiles = creep.room.find(FIND_HOSTILE_CREEPS);
         if (parts(creep, ATTACK)) {
-            const enemy = _.min(
+            const enemy = _.max(
                 hostiles.filter(c => creep.pos.isNearTo(c) && isFighter(c)),
-                c => c.hits
+                c => threatOf(c) / c.hits
             );
             const adjacent = _.min(
                 creep.pos.findInRange(FIND_HOSTILE_STRUCTURES, 1).filter(s => s.structureType !== STRUCTURE_CONTROLLER),
@@ -253,7 +254,7 @@ function attackQuad(group: Creep[], focus: Structure | null): void {
                 ? 0
                 : RANGED_MASS[creep.pos.getRangeTo(s)]
         );
-        const fighter = _.min(inRange.filter(isFighter), c => c.hits);
+        const fighter = _.max(inRange.filter(isFighter), c => threatOf(c) / c.hits);
         const single: Creep | Structure | null =
             typeof fighter === "object"
                 ? fighter

@@ -8,6 +8,7 @@ import { whenInRange } from "../core/movement";
 import { bestStorageSource, bestStorageTarget } from "../core/resources";
 import { boostLabs, labNeeds } from "../labs/boosts";
 import { roomPlanner } from "../planner/RoomPlanner";
+import { performRecycle } from "./recycle";
 import { registerRole } from "./registry";
 
 export const HELPER = "helper";
@@ -107,7 +108,36 @@ function gather(creep: Creep): void {
     park(creep);
 }
 
+/** Heap: first tick each helper found no boost lab */
+const idleSince: Map<string, number> = new Map();
+/** Ticks without boost lab before the helper recycles (the next squad member is on its way) */
+const IDLE_RECYCLE = 100;
+
+/**
+ * Not in Hivemind (the helper parks for the rest of its life): a helper without boost lab for
+ * IDLE_RECYCLE ticks stores its cargo and recycles. Upgraders are boosted once per life (1500 ticks)
+ * and a parked helper cost ~0.8 CPU per tick (mockup) on a 20-CPU account; the next request spawns
+ * a new one.
+ */
+function shouldRecycle(creep: Creep): boolean {
+    if (boostLabs(creep.room).length > 0) {
+        idleSince.delete(creep.name);
+        return false;
+    }
+    const since = idleSince.get(creep.name) ?? Game.time;
+    idleSince.set(creep.name, since);
+    return Game.time - since >= IDLE_RECYCLE;
+}
+
 export function runHelper(creep: Creep): void {
+    if (shouldRecycle(creep)) {
+        if (creep.store.getUsedCapacity() > 0) storeAll(creep);
+        else {
+            idleSince.delete(creep.name);
+            performRecycle(creep);
+        }
+        return;
+    }
     if (creep.memory.delivering && creep.store.getUsedCapacity() === 0) creep.memory.delivering = false;
     else if (!creep.memory.delivering && creep.store.getFreeCapacity() === 0) creep.memory.delivering = true;
 

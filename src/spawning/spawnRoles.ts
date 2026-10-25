@@ -39,7 +39,7 @@ import { dismantlerSpawnRole } from "../remote/dismantle";
 import { ENEMY_STRENGTH_NORMAL, enemyStrength } from "../defense/RoomDefense";
 import { GUARDIAN } from "../roles/guardian";
 import { isFullOn } from "../core/resources";
-import { boostLabs, boostsFor } from "../labs/boosts";
+import { BoostPlan, boostLabs, boostsFor } from "../labs/boosts";
 import { HELPER } from "../roles/helper";
 import { jitter } from "../utils/jitter";
 import { decisionBucket, harvesterSizeFactor } from "../utils/throttle";
@@ -66,8 +66,10 @@ export interface SpawnRole {
     options(room: Room): SpawnOption[];
     body(room: Room, option: SpawnOption): BodyPartConstant[];
     memory(room: Room, option: SpawnOption): Partial<CreepMemory>;
-    /** Compound per body part type to boost the new creep with (Hivemind getCreepBoosts) */
-    boosts?(room: Room, option: SpawnOption, body: BodyPartConstant[]): Partial<Record<BodyPartConstant, ResourceConstant>>;
+    /** Compound and parts per body part type to boost the new creep with (Hivemind getCreepBoosts) */
+    boosts?(room: Room, option: SpawnOption, body: BodyPartConstant[]): BoostPlan;
+    /** The creep does its job until a boost lab is ready instead of waiting at the labs (labs/boosts.ts) */
+    readonly boostWhileWorking?: boolean;
 }
 
 /**
@@ -559,8 +561,26 @@ const upgrader: SpawnRole = {
 
     memory(room) {
         return { role: this.id, room: room.name };
-    }
+    },
+
+    /**
+     * Not in Hivemind (upgraders boosted at RCL 8 only, to save WORK parts): at RCL 6-7 a boosted WORK
+     * upgrades x1.5-2 for the same energy and CPU, the most progress a CPU-bound empire can buy. Partial
+     * boosts (one reactor at RCL 6 makes ~300 GH per creep life, a 20-WORK upgrader wants 600), at least
+     * MIN_UPGRADE_BOOST_PARTS; the upgrader works until a lab is ready. RCL 8 caps upgrading at 15
+     * energy per tick: boosting there needs smaller bodies, not done.
+     */
+    boosts(room, option, body) {
+        const rcl = room.controller?.level ?? 0;
+        if (option.mini || rcl < 6 || rcl > 7) return {};
+        return boostsFor(room, body, [[WORK, "upgradeController"]], undefined, MIN_UPGRADE_BOOST_PARTS);
+    },
+
+    boostWhileWorking: true
 };
+
+/** Fewest boosted parts worth the upgrader's trip to the lab */
+const MIN_UPGRADE_BOOST_PARTS = 5;
 
 // ------------------------------------------------------------------ helper
 
