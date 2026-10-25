@@ -5,7 +5,7 @@
  */
 
 import { stayInPlace, whenInRange } from "../core/movement";
-import { hostileCreeps, isDangerous, militarySituation } from "../defense/RoomDefense";
+import { creepPower, hostileCreeps, isDangerous, militarySituation } from "../defense/RoomDefense";
 import { roomPlanner } from "../planner/RoomPlanner";
 import { registerRole } from "./registry";
 
@@ -18,7 +18,11 @@ export function runGuardian(creep: Creep): void {
     attackTargetsInRange(creep);
 }
 
-/** Free main rampart closest to a hostile, preferring the ones near the guardian */
+/**
+ * Free main rampart closest to a hostile, preferring the ones near the guardian and the hostiles with
+ * the most attack / dismantle power (not in Hivemind: shard0 W28N7, 2026-10-24, 1-WORK decoys drew the
+ * guardian away while two 8-WORK dismantlers broke a rampart 6 tiles off)
+ */
 function bestRampartToCover(creep: Creep): StructureRampart | null {
     const plan = roomPlanner.getPlan(creep.room.name);
     if (!plan) return null;
@@ -32,13 +36,15 @@ function bestRampartToCover(creep: Creep): StructureRampart | null {
         }
     );
     if (ramparts.length === 0) return null;
-    const candidates = new Set<StructureRampart>();
+    let best: { rampart: StructureRampart; score: number } | null = null;
     for (const enemy of enemies) {
         const closest = _.min(ramparts, r => r.pos.getRangeTo(enemy));
-        if (typeof closest !== "number") candidates.add(closest);
+        if (typeof closest === "number") continue;
+        const threat = Math.max(creepPower(enemy).attack, 1);
+        const score = (closest.pos.getRangeTo(creep) / 2 + closest.pos.getRangeTo(enemy) + 1) / threat;
+        if (!best || score < best.score) best = { rampart: closest, score };
     }
-    const best = _.min([...candidates], r => r.pos.getRangeTo(creep) / 2 + _.min(enemies.map(e => r.pos.getRangeTo(e))));
-    return typeof best === "number" ? null : best;
+    return best?.rampart ?? null;
 }
 
 function priorityOf(creep: Creep): number {
