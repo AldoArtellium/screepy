@@ -67,7 +67,7 @@ const BOOSTS = {
 Object.assign(globalThis, RESOURCES, { REACTIONS: reactions, BOOSTS, LAB_REACTION_AMOUNT: 5, LAB_BOOST_MINERAL: 30 });
 
 const { pickBoost } = require(join(OUT, "boostChoice.js"));
-const { findChainReaction, chainDeficits, reactionTargets } = require(join(OUT, "chain.js"));
+const { findChainReaction, chainDeficits, reactionTargets, importableFrom } = require(join(OUT, "chain.js"));
 
 let failures = 0;
 function check(name, actual, expected) {
@@ -112,6 +112,19 @@ check("chain: U and L only in another room -> UL, imported", findChainReaction("
 check("chain: ZK only in another room -> G, imported", findChainReaction("GH", 3000, 1, stock({ H: 9000, UL: 3000 }), stock({ ZK: 2000 })), "G");
 check("chain: nowhere -> nothing (the market buys base minerals)", findChainReaction("GH", 3000, 1, stock({ H: 9000, ZK: 3000 }), none), null);
 check("chain: too little to import -> nothing", findChainReaction("GH", 3000, 1, stock({ H: 9000, ZK: 3000 }), stock({ U: 100, L: 100 })), null);
+
+// ---- importable: what the other rooms hold, except the reagents of their own reaction
+// Two rooms both on G (ZK + UL) wait for each other's reagent, which the terminal transfers never send
+// (a reagent of the reaction under way is "low" in its room): it must not count as importable
+const others = [
+    { amount: stock({ ZK: 3000, Z: 4000, K: 4000 }), reaction: ["ZK", "UL"] },
+    { amount: stock({ U: 2000, L: 1000 }), reaction: undefined },
+];
+const imported = importableFrom(others);
+check("importable: a reagent another room is using is not importable", imported("ZK"), 0);
+check("importable: its other resources are", imported("Z"), 4000);
+check("importable: summed over the rooms", [imported("U"), imported("L")], [2000, 1000]);
+check("chain: G waits for ZK in use elsewhere -> ZK from imported Z and K instead", findChainReaction("GH", 3000, 1, stock({ H: 9000, UL: 3000 }), imported), "ZK");
 
 // ---- deficits: reagents pushed down the chain, stock deducted
 const deficit = chainDeficits([["GH", 3000]], stock({ GH: 1000, G: 500 }));

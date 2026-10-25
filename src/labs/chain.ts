@@ -71,6 +71,21 @@ export function chainDeficits(targets: [ResourceConstant, number][], have: (r: R
 }
 
 /**
+ * What the terminal transfers can bring from the other rooms: their amounts, except the reagents of
+ * their own reaction under way (low there, never sent: two rooms both making G from ZK + UL waited
+ * for each other's reagent for good)
+ */
+export function importableFrom(
+    others: { amount: (r: ResourceConstant) => number; reaction?: [ResourceConstant, ResourceConstant] }[]
+): (r: ResourceConstant) => number {
+    return resourceType => {
+        let total = 0;
+        for (const other of others) if (!other.reaction?.includes(resourceType)) total += other.amount(resourceType);
+        return total;
+    };
+}
+
+/**
  * The International chainFindNextReaction: make the target if both reagents are there (a quarter of
  * the amount, + 5% per reactor), else the first missing reagent that can be made. Not in TI: reagents
  * the other rooms hold (`imported`) count as there, the terminal transfers bring the reagents of the

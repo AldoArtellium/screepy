@@ -11,7 +11,7 @@ import { currentTarget } from "../military/military";
 import { log } from "../utils/logger";
 import { countStat } from "../utils/stats";
 import { isLabUsedForBoosting, operationalLabs } from "./boosts";
-import { chainDeficits, findChainReaction, productOf, reactionTargets, reagentsOf } from "./chain";
+import { chainDeficits, findChainReaction, importableFrom, productOf, reactionTargets, reagentsOf } from "./chain";
 
 export { productOf, reagentsOf };
 
@@ -89,7 +89,12 @@ function updateLayout(room: Room, labs: StructureLab[]): void {
 function importable(room: Room): (resourceType: ResourceConstant) => number {
     if (!room.terminal?.my) return () => 0;
     const others = _.filter(Game.rooms, r => r.name !== room.name && !!r.controller?.my && !!r.terminal?.my);
-    return resourceType => _.sum(others, r => (r.storage?.store[resourceType] ?? 0) + (r.terminal?.store[resourceType] ?? 0));
+    return importableFrom(
+        others.map(r => ({
+            amount: (resourceType: ResourceConstant) => (r.storage?.store[resourceType] ?? 0) + (r.terminal?.store[resourceType] ?? 0),
+            reaction: r.memory.currentReaction
+        }))
+    );
 }
 
 /** Next compound to make: targets in priority order (TI: by deficit) */
