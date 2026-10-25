@@ -16,7 +16,14 @@ import { DUO_ATTACKER, DUO_HEALER, DuoMemory, runDuo } from "./duo";
 import { hostileRoom, militaryMemory, updateMilitaryIntel } from "./intel";
 import { lootRamparts, startLooting, startRaids, updateLootMissions } from "./loot";
 import { QUAD_ATTACKER, QUAD_HEALER, QUAD_ROSTER, runQuad } from "./quad";
-import { duoAttackerBody, duoHealerBody, planSquad, quadAttackerBody, quadHealerBody } from "./sizing";
+import {
+    duoAttackerBody,
+    duoHealerBody,
+    planSquad,
+    quadAttackerBody,
+    quadHealerBody,
+    squadMemberCosts
+} from "./sizing";
 import { chooseAutoTarget } from "./targets";
 
 export { militaryMemory } from "./intel";
@@ -24,6 +31,14 @@ export { militaryMemory } from "./intel";
 /** Draining towers costs creeps: give up after this many */
 const MAX_LOSSES = 10;
 const MIN_ENERGY = 2000;
+/** Priority of a squad's first member (economy roles at 4 go first) */
+const START_PRIORITY = 3;
+/**
+ * Priority of the other members once one is out: back to back, above transporters and builders.
+ * shard0 W29N7 (one spawn, 2026-10-25): the quad's healers waited 200+ ticks of their life for the
+ * attackers, the spawn making transporters (priority 4) in between.
+ */
+const BURST_PRIORITY = 5;
 const MAX_ROUTE_ROOMS = 10;
 const AUTO_TARGET_EVERY = 100;
 /**
@@ -161,7 +176,7 @@ export const militaryModule = (): void => {
         const auto = chooseAutoTarget(!!memory.target && isEngaged(memory.target.room));
         if (auto && auto.room !== memory.target?.room) {
             memory.target = { room: auto.room, reason: auto.reason, since: Game.time, roi: Math.round(auto.roi * 100) / 100 };
-            log.info("Military", `Automatic target: ${auto.room} (${auto.reason}, value ${auto.value} for a squad of ${auto.cost} energy, CPU priced ${auto.cpu})`);
+            log.info("Military", `Automatic target: ${auto.room} (${auto.reason}, value ${auto.value} for a squad of ${auto.cost} energy, CPU priced ${auto.cpu}, spawn time ${auto.spawnTime})`);
         } else if (!auto && memory.target && !hasMission(memory.target.room)) delete memory.target;
     }
     const target = currentTarget();
@@ -188,25 +203,56 @@ export const militaryModule = (): void => {
     }
 };
 
-function duoMissing(roomName: string): { name: string; role: string } | null {
+/** A squad member to spawn; `started`: another member is already alive or spawning */
+interface MissingMember {
+    name: string;
+    role: string;
+    started: boolean;
+}
+
+function duoMissing(roomName: string): MissingMember | null {
     for (const [name, duo] of Object.entries(militaryMemory().duos)) {
         if (duo.spawnRoom !== roomName) continue;
+        const creeps = duoCreeps(name);
         for (const role of [DUO_HEALER, DUO_ATTACKER]) {
-            if (!duoCreeps(name).some(c => c.memory.role === role)) return { name, role };
+            if (!creeps.some(c => c.memory.role === role)) return { name, role, started: creeps.length > 0 };
         }
     }
     return null;
 }
 
 /** Quads are refilled only while forming at home */
-function quadMissing(roomName: string): { name: string; role: string } | null {
+function quadMissing(roomName: string): MissingMember | null {
     for (const [name, quad] of Object.entries(militaryMemory().quads ?? {})) {
         if (quad.spawnRoom !== roomName || quad.state !== "forming") continue;
-        const have = _.countBy(quadCreeps(name), c => c.memory.role);
+        const creeps = quadCreeps(name);
+        const have = _.countBy(creeps, c => c.memory.role);
         const wanted = _.countBy(QUAD_ROSTER);
-        for (const role of QUAD_ROSTER) if ((have[role] ?? 0) < wanted[role]) return { name, role };
+        for (const role of QUAD_ROSTER) {
+            if ((have[role] ?? 0) < wanted[role]) return { name, role, started: creeps.length > 0 };
+        }
     }
     return null;
+}
+
+/**
+ * Spawn option of a missing member: the first one only once the room can pay for the whole squad
+ * (the others then never wait for energy), the next ones back to back at BURST_PRIORITY
+ */
+function memberOption(room: Room, missing: MissingMember, type: "duo" | "quad"): SpawnOption[] {
+    if (!missing.started) {
+        const squad = _.sum(squadMemberCosts(type, room.energyCapacityAvailable));
+        if (effectiveEnergy(room) < MIN_ENERGY + squad) return [];
+    }
+    return [
+        {
+            role: missing.role,
+            priority: missing.started ? BURST_PRIORITY : START_PRIORITY,
+            weight: 1,
+            memory: { [type]: missing.name },
+            reason: `${missing.name} ${missing.started ? "burst" : "start"}`
+        } as SpawnOption
+    ];
 }
 
 /** Spawn role of the duos and quads (healers first: the others wait next to them) */
@@ -218,9 +264,9 @@ export const militarySpawnRole: SpawnRole = {
     options(room) {
         if (effectiveEnergy(room) < MIN_ENERGY) return [];
         const duo = duoMissing(room.name);
-        if (duo) return [{ role: duo.role, priority: 3, weight: 1, memory: { duo: duo.name } } as SpawnOption];
+        if (duo) return memberOption(room, duo, "duo");
         const quad = quadMissing(room.name);
-        if (quad) return [{ role: quad.role, priority: 3, weight: 1, memory: { quad: quad.name } } as SpawnOption];
+        if (quad) return memberOption(room, quad, "quad");
         return [];
     },
 

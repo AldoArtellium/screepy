@@ -20,7 +20,8 @@
 
 import { intelManager } from "../modules/IntelManager";
 import { cpuPressure, neutralEnergyPerCpu } from "../remote/remoteIncome";
-import { remoteSources } from "../remote/RemoteMining";
+import { remoteSources, spawnBusyShare } from "../remote/RemoteMining";
+import { roomCountersSince } from "../utils/history";
 import { HostileRoom, militaryMemory } from "./intel";
 import {
     freedSources,
@@ -28,11 +29,12 @@ import {
     REMOTE_HORIZON,
     remoteValue,
     RoomHolding,
+    spawnTimeCost,
     squadCost,
     squadCpu,
     targetValue
 } from "./roi";
-import { planSquad, SquadPlan, squadMemberCosts } from "./sizing";
+import { planSquad, SquadPlan, squadMemberCosts, squadMemberParts } from "./sizing";
 
 const MAX_DISTANCE = 10;
 /** Distance of the neutral remote source whose energy per CPU prices a squad's CPU (remoteIncome examples) */
@@ -51,6 +53,20 @@ export interface AutoTarget {
     cost: number;
     /** The squad's CPU priced in energy (0 without CPU pressure) */
     cpu: number;
+    /** The income the origin's economy loses while its spawns make the squad (roi.ts spawnTimeCost) */
+    spawnTime: number;
+}
+
+/** Room income (local + remote harvest) per tick is averaged over this */
+const INCOME_WINDOW = 5000;
+
+/** Energy harvested per tick by each owned room's creeps over INCOME_WINDOW (history room counters) */
+function incomePerTick(): { [room: string]: number } {
+    const income: { [room: string]: number } = {};
+    for (const [room, { ticks, counters }] of Object.entries(roomCountersSince(Game.time - INCOME_WINDOW))) {
+        if (ticks > 0) income[room] = ((counters.harvest ?? 0) + (counters.remoteHarvest ?? 0)) / ticks;
+    }
+    return income;
 }
 
 interface Origin {
@@ -139,6 +155,7 @@ export function rankTargets(): AutoTarget[] {
     const from = origins();
     const targets: AutoTarget[] = [];
     if (from.length === 0) return targets;
+    const income = incomePerTick();
     for (const [roomName, intel] of Object.entries(memory.rooms ?? {})) {
         if (recentlyFailed(roomName)) continue;
         const reason = isStronghold(intel, roomName) ? "stronghold" : isPlayerTarget(intel) ? "player" : null;
@@ -151,7 +168,14 @@ export function rankTargets(): AutoTarget[] {
         const cpu = cpuPressure()
             ? Math.round(squadCpu(members.length) * neutralEnergyPerCpu(CPU_PRICE_DISTANCE, energy))
             : 0;
-        const cost = squadCost(members) + cpu;
+        const origin = near.origin.room;
+        const spawnTime = spawnTimeCost(
+            squadMemberParts(plan.type, energy),
+            origin.find(FIND_MY_SPAWNS).length,
+            income[origin.name] ?? 0,
+            spawnBusyShare(origin.name)
+        );
+        const cost = squadCost(members) + cpu + spawnTime;
         const ticksLeft = (intel.collapse ?? Infinity) - Game.time;
         const remote =
             reason === "stronghold"
@@ -165,7 +189,7 @@ export function rankTargets(): AutoTarget[] {
             remote,
             infamy: reason === "player" ? memory.infamy?.[intel.owner!] ?? 0 : 0
         });
-        targets.push({ room: roomName, reason, roi: value / cost, value: Math.round(value), cost, cpu });
+        targets.push({ room: roomName, reason, roi: value / cost, value: Math.round(value), cost, cpu, spawnTime });
     }
     return targets;
 }

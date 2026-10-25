@@ -48,6 +48,14 @@ export function squadMemberCosts(type: SquadType, energy: number): number[] {
     return [attacker, attacker, healer, healer];
 }
 
+/** Body parts of each member of a squad (roi.ts spawnTimeCost) */
+export function squadMemberParts(type: SquadType, energy: number): number[] {
+    if (type === "duo") return [duoAttackerBody(energy).length, duoHealerBody(energy).length];
+    const attacker = quadAttackerBody(energy).length;
+    const healer = quadHealerBody(energy).length;
+    return [attacker, attacker, healer, healer];
+}
+
 function count(body: BodyPartConstant[], type: BodyPartConstant): number {
     return body.filter(p => p === type).length;
 }

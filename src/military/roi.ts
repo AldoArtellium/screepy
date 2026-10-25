@@ -8,7 +8,8 @@
  *   sources its room's fall frees (freedSources, REMOTE_HORIZON ticks).
  * - Cost: the spawn cost of the squad's bodies, ATTRITION times (the creeps lost are replaced: the
  *   mockup quad against a level 1 stronghold spawned 12 creeps for 4 members, earlier runs 4), and
- *   under CPU pressure its CPU (squadCpu) priced in energy by targets.ts.
+ *   under CPU pressure its CPU (squadCpu) priced in energy by targets.ts, plus the income its spawn
+ *   time takes from the origin room's economy (spawnTimeCost).
  * - A target needs a ratio of MIN_ROI; the best one wins, the current one is kept unless another
  *   beats it by CURRENT_BONUS (no switching for a small difference).
  * Our design (Harabi's "ROI-driven target selection" with energy on both sides).
@@ -25,6 +26,29 @@ export const CURRENT_BONUS = 1.5;
 /** Spawn cost of the squad with its replacements */
 export function squadCost(memberCosts: number[], attrition = ATTRITION): number {
     return memberCosts.reduce((sum, cost) => sum + cost, 0) * attrition;
+}
+
+/** Spawn busy share from which a spawn is saturated (RemoteMining's source cap fires above it) */
+export const SPAWN_SATURATED = 0.8;
+/** CREEP_SPAWN_TIME (a constant here: the module stays pure for the offline check) */
+const TICKS_PER_PART = 3;
+
+/**
+ * Energy the economy loses while the spawns make the squad and its replacements: each spawn tick of a
+ * saturated spawn is worth the room's income per tick and spawn, a spawn busy below SPAWN_SATURATED
+ * gives up that share. shard0 W29N7 (one spawn 88% busy, ~50 energy per tick): a quad of 112 parts
+ * took 33.6k, twice its spawn energy, and its first healers waited 200+ ticks for the attackers.
+ */
+export function spawnTimeCost(
+    memberParts: number[],
+    spawns: number,
+    incomePerTick: number,
+    busy: number,
+    attrition = ATTRITION
+): number {
+    if (spawns <= 0 || incomePerTick <= 0) return 0;
+    const ticks = memberParts.reduce((sum, parts) => sum + parts, 0) * TICKS_PER_PART * attrition;
+    return Math.round(((ticks * incomePerTick) / spawns) * Math.min(1, Math.max(0, busy) / SPAWN_SATURATED));
 }
 
 /**
