@@ -37,6 +37,7 @@ import {
 } from "./remoteIncome";
 import { blockerCost } from "./blockers";
 import { isRemoteExcluded } from "./remoteBalance";
+import { Hits, repairsDue } from "./repairs";
 
 export interface RemoteSource {
     /** `${room}:${x}:${y}` */
@@ -944,12 +945,20 @@ function neededWorkAt(pos: RoomPosition | undefined, type: BuildableStructureCon
     return CONSTRUCTION_COST[type] * 100;
 }
 
-/** Container below half its hits, or a road of the path missing or below 2/3 of its hits */
+/** Structure of a type on a tile: undefined out of sight, null when missing */
+function tileHits(pos: RoomPosition | undefined, type: BuildableStructureConstant): Hits | null | undefined {
+    if (!pos || !Game.rooms[pos.roomName]) return undefined;
+    return pos.lookFor(LOOK_STRUCTURES).find(s => s.structureType === type) ?? null;
+}
+
+/** Container or path roads worth a remote builder trip (remote/repairs.ts: roads below a third, or 50k hits missing) */
 export function needsRepairs(source: RemoteSource): boolean {
-    return inHeap(`needsRepairs:${source.key}`, 50, () => {
-        if (neededWorkAt(containerPos(source), STRUCTURE_CONTAINER) > CONTAINER_HITS / 2) return true;
-        return remoteRoadPath(source).some(pos => neededWorkAt(pos, STRUCTURE_ROAD) > ROAD_HITS / 3);
-    });
+    return inHeap(`needsRepairs:${source.key}`, 50, () =>
+        repairsDue(
+            tileHits(containerPos(source), STRUCTURE_CONTAINER),
+            remoteRoadPath(source).map(pos => tileHits(pos, STRUCTURE_ROAD))
+        )
+    );
 }
 
 /** Hits missing on the container and the roads of the path */

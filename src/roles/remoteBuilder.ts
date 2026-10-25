@@ -15,6 +15,7 @@ import {
     containerPos,
     getRemoteSource,
     isRemoteUnderAttack,
+    needsRepairs,
     neededWork,
     remoteContainer,
     remotePath,
@@ -69,7 +70,10 @@ function setReturning(creep: Creep, returning: boolean): void {
     if (!returning) determineTargetSource(creep);
 }
 
-/** Source with the most missing hits, among sources with a harvester and no remote builder yet */
+/**
+ * Source with the most missing hits, among sources with a harvester, no remote builder yet and repairs
+ * worth a trip (needsRepairs; Hivemind: any missing hits, so builders walked the paths for a few hits)
+ */
 function determineTargetSource(creep: Creep): void {
     const homeRoom = creep.memory.room ?? creep.room.name;
     delete creep.memory.source;
@@ -79,6 +83,7 @@ function determineTargetSource(creep: Creep): void {
         if (isRemoteUnderAttack(source)) continue;
         if (creepsByRole(homeRoom, REMOTE_BUILDER).some(c => c !== creep && c.memory.source === source.key)) continue;
         if (!creepsByRole(homeRoom, REMOTE_HARVESTER).some(c => c.memory.source === source.key)) continue;
+        if (!needsRepairs(source)) continue;
         const work = neededWork(source);
         if (work > bestWork) {
             best = source;
