@@ -1,14 +1,19 @@
 /**
  * Lab reactions: which labs are the 2 sources and which react (Hivemind labs.position.ts), which
- * compound to make (The International's reverse-chain targeting, labs.ts chainDecompose /
- * chainFindNextReaction, with our military-first target list) and running the reactions (Hivemind
- * labs.ts). Hivemind (MIT) and The International (MIT). Rules: docs/hivemind/hivemind-labs.md.
+ * compound to make (The International's reverse-chain targeting, chain.ts, with our targets: upgrade
+ * compounds, military ones under threat) and running the reactions (Hivemind labs.ts). Hivemind (MIT)
+ * and The International (MIT). Rules: docs/hivemind/hivemind-labs.md.
  */
 
 import { tickCache } from "../core/roomState";
+import { ENEMY_STRENGTH_NORMAL, enemyStrength, roomThreat } from "../defense/RoomDefense";
+import { currentTarget } from "../military/military";
 import { log } from "../utils/logger";
 import { countStat } from "../utils/stats";
 import { isLabUsedForBoosting, operationalLabs } from "./boosts";
+import { chainDeficits, findChainReaction, importableFrom, productOf, reactionTargets, reagentsOf } from "./chain";
+
+export { productOf, reagentsOf };
 
 declare global {
     interface RoomMemory {
@@ -23,17 +28,15 @@ declare global {
 }
 
 /**
- * What we want in stock, in priority order (military first: TI sorts its targets by deficit). Without
- * catalyst (X) the chain stops at the tier 2 compounds, which boost too.
+ * Targets of a room: upgrade compounds first; military ones after them while a player threatened us
+ * (room threat, infamy), before them during an attack mission or with NORMAL+ enemies at home.
+ * Before (2026-10-25) the military list always came first: shard0 made UH2O, LHO2, GHO2... that
+ * nothing used, 20000 ticks without a single boost.
  */
-export const REACTION_TARGETS: [ResourceConstant, number][] = [
-    [RESOURCE_CATALYZED_LEMERGIUM_ALKALIDE, 3000], // XLHO2, HEAL
-    [RESOURCE_CATALYZED_GHODIUM_ALKALIDE, 3000], // XGHO2, TOUGH
-    [RESOURCE_CATALYZED_UTRIUM_ACID, 3000], // XUH2O, ATTACK
-    [RESOURCE_CATALYZED_KEANIUM_ALKALIDE, 3000], // XKHO2, RANGED_ATTACK
-    [RESOURCE_CATALYZED_ZYNTHIUM_ALKALIDE, 3000], // XZHO2, MOVE
-    [RESOURCE_CATALYZED_LEMERGIUM_ACID, 3000] // XLH2O, WORK repair (emergency builders)
-];
+function targetsOf(room: Room): [ResourceConstant, number][] {
+    const militaryFirst = currentTarget() !== undefined || enemyStrength(room) >= ENEMY_STRENGTH_NORMAL;
+    return reactionTargets(room.controller?.level ?? 0, militaryFirst, roomThreat(room) > 0);
+}
 
 /** At most this much of a product per reaction cycle (TI reactionCycleAmount: 5000) */
 const CYCLE_AMOUNT = 3000;
@@ -43,24 +46,6 @@ const LAYOUT_EVERY = 3000;
 const REPLAN_EVERY = 1500;
 /** A finished reaction is replaced at the next check */
 const CHECK_EVERY = 50;
-
-/** Compound -> its two reagents */
-const REAGENTS: { [compound: string]: [ResourceConstant, ResourceConstant] } = (() => {
-    const result: { [compound: string]: [ResourceConstant, ResourceConstant] } = {};
-    const reactions = REACTIONS as unknown as Record<string, Record<string, string>>;
-    for (const r1 in reactions) {
-        for (const r2 in reactions[r1]) result[reactions[r1][r2]] = [r1 as ResourceConstant, r2 as ResourceConstant];
-    }
-    return result;
-})();
-
-export function reagentsOf(compound: ResourceConstant): [ResourceConstant, ResourceConstant] | undefined {
-    return REAGENTS[compound];
-}
-
-export function productOf(reaction: [ResourceConstant, ResourceConstant]): ResourceConstant {
-    return (REACTIONS as unknown as Record<string, Record<string, ResourceConstant>>)[reaction[0]][reaction[1]];
-}
 
 /**
  * Resources of the room for reactions: storage, terminal, labs and transporters' cargo (Hivemind
@@ -100,46 +85,29 @@ function updateLayout(room: Room, labs: StructureLab[]): void {
     else delete room.memory.labs;
 }
 
-/** The International chainDecompose: deficits of every compound for the targets, reagents included */
-function deficits(room: Room): { [resourceType: string]: number } {
-    const have = labResources(room);
-    const result: { [resourceType: string]: number } = {};
-    const decompose = (compound: ResourceConstant, amount: number) => {
-        result[compound] = (result[compound] ?? -(have[compound] ?? 0)) + amount;
-        const next = Math.max(0, Math.min(amount, result[compound]));
-        const reagents = REAGENTS[compound];
-        if (!reagents || next === 0) return;
-        for (const reagent of reagents) decompose(reagent, next);
-    };
-    for (const [compound, amount] of REACTION_TARGETS) decompose(compound, amount);
-    return result;
-}
-
-/**
- * The International chainFindNextReaction: make the target if both reagents are there (a quarter of
- * the amount, + 5% per reactor), else the first missing reagent that can be made
- */
-function findReaction(room: Room, target: ResourceConstant, amount: number, reactors: number, depth = 0): ResourceConstant | null {
-    const reagents = REAGENTS[target];
-    if (!reagents || depth > 5) return null;
-    const have = labResources(room);
-    const missing = reagents.filter(r => (have[r] ?? 0) < Math.max(LAB_REACTION_AMOUNT, amount * (0.25 + 0.05 * reactors)));
-    if (missing.length === 0) return target;
-    for (const reagent of missing) {
-        if (!REAGENTS[reagent]) continue; // base minerals: bought, not made
-        const found = findReaction(room, reagent, amount, reactors, depth + 1);
-        if (found) return found;
-    }
-    return null;
+/** Storage + terminal amounts of the other owned rooms with a terminal: what the terminal transfers can bring */
+function importable(room: Room): (resourceType: ResourceConstant) => number {
+    if (!room.terminal?.my) return () => 0;
+    const others = _.filter(Game.rooms, r => r.name !== room.name && !!r.controller?.my && !!r.terminal?.my);
+    return importableFrom(
+        others.map(r => ({
+            amount: (resourceType: ResourceConstant) => (r.storage?.store[resourceType] ?? 0) + (r.terminal?.store[resourceType] ?? 0),
+            reaction: r.memory.currentReaction
+        }))
+    );
 }
 
 /** Next compound to make: targets in priority order (TI: by deficit) */
 export function chooseReaction(room: Room, reactors: number): { product: ResourceConstant; amount: number } | null {
-    const deficit = deficits(room);
-    for (const [compound] of REACTION_TARGETS) {
+    const resources = labResources(room);
+    const have = (resourceType: ResourceConstant) => resources[resourceType] ?? 0;
+    const imported = importable(room);
+    const targets = targetsOf(room);
+    const deficit = chainDeficits(targets, have);
+    for (const [compound] of targets) {
         const missing = deficit[compound] ?? 0;
         if (missing <= 0) continue;
-        const product = findReaction(room, compound, missing, reactors);
+        const product = findChainReaction(compound, missing, reactors, have, imported);
         // Not in TI: at least MIN_CYCLE_AMOUNT (a few boosted parts left tiny batches, mostly hauling)
         if (product) return { product, amount: Math.min(CYCLE_AMOUNT, Math.max(MIN_CYCLE_AMOUNT, deficit[product] ?? 0, missing)) };
     }
@@ -168,7 +136,7 @@ function updateReaction(room: Room): void {
         delete memory.reactionTarget;
         return;
     }
-    memory.currentReaction = REAGENTS[next.product];
+    memory.currentReaction = reagentsOf(next.product);
     memory.reactionTarget = (labResources(room)[next.product] ?? 0) + next.amount;
     if (next.product !== previous) log.info("Labs", `${room.name}: now producing ${next.amount} ${next.product}`);
 }

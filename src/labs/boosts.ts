@@ -7,18 +7,23 @@
  * Deviations: a boost request expires BOOST_TIMEOUT ticks after the creep is out of the spawn
  * (Hivemind: once ticksToLive < 70% of the lifetime, ~450 ticks), so a squad never waits long; the
  * best TOUGH boost is the lowest damage multiplier (Hivemind's getBestBoost picks the highest).
+ * Economy creeps (upgraders) get partial boosts and keep working until a lab is ready (`working`).
  */
 
 import { whenInRange } from "../core/movement";
 import { structuresOfType, tickCache } from "../core/roomState";
 import { countStat } from "../utils/stats";
 import { log } from "../utils/logger";
+import { BoostTable, pickBoost } from "./boostChoice";
 
 declare global {
     interface Memory {
-        /** Hivemind Memory.boost: compounds and part counts per creep, compound per boost lab */
+        /**
+         * Hivemind Memory.boost: compounds and part counts per creep, compound per boost lab. `working`:
+         * the creep does its job until a lab holds its compound and energy (economy roles).
+         */
         boost?: {
-            creeps: { [creepName: string]: { boosts: { [compound: string]: number }; until?: number } };
+            creeps: { [creepName: string]: { boosts: { [compound: string]: number }; until?: number; working?: boolean } };
             labs: { [labId: string]: ResourceConstant };
         };
     }
@@ -27,12 +32,18 @@ declare global {
 /** Boost effect name by body part (BOOSTS[part][compound][effect]) */
 export type BoostEffect = "attack" | "heal" | "rangedAttack" | "damage" | "fatigue" | "repair" | "build" | "harvest" | "upgradeController" | "capacity" | "dismantle";
 
+/** Compound and number of parts per body part type to boost */
+export type BoostPlan = Partial<Record<BodyPartConstant, { compound: ResourceConstant; parts: number }>>;
+
 /** Ticks a fresh creep waits for its boosts at most */
 const BOOST_TIMEOUT = 150;
+/**
+ * Ticks a working creep (boosted while working) keeps its request: the helper is only spawned once
+ * a boost lab is assigned, then brings compound and energy (~100-200 ticks)
+ */
+const WORKING_BOOST_TIMEOUT = 400;
 /** Hivemind: no boost while storage + terminal hold less energy */
 const MIN_ENERGY = 2500;
-
-type BoostTable = Record<string, Record<string, Record<string, number>>>;
 
 function memory(): NonNullable<Memory["boost"]> {
     if (!Memory.boost) Memory.boost = { creeps: {}, labs: {} };
@@ -86,8 +97,8 @@ function stock(room: Room, resourceType: ResourceConstant): number {
 
 /**
  * Best compound for `parts` parts of a type with this effect (Hivemind getAvailableBoosts +
- * getBestBoost): enough in storage + terminal (+ labs) for every part beyond what other creeps asked,
- * tier (name length) at most `maxTier` when given, strongest effect (TOUGH: lowest damage multiplier).
+ * getBestBoost, boostChoice.ts): enough in storage + terminal (+ labs) beyond what other creeps asked
+ * for every part (for at least `minParts` with partial boosts), tier (name length) at most `maxTier`.
  * `countRequested = false` ignores what other creeps asked (squad sizing: a squad's own pending requests
  * would otherwise make its target look infeasible again while it is being boosted)
  */
@@ -97,60 +108,50 @@ export function bestBoost(
     effect: BoostEffect,
     parts: number,
     maxTier?: number,
+    minParts?: number,
     countRequested = true
-): ResourceConstant | null {
+): { compound: ResourceConstant; parts: number } | null {
     if (parts === 0 || operationalLabs(room).length === 0) return null;
     if ((room.storage?.store.energy ?? 0) + (room.terminal?.store.energy ?? 0) < MIN_ENERGY) return null;
-    const boosts = (BOOSTS as unknown as BoostTable)[part] ?? {};
     const requested = countRequested ? requestedBoosts(room) : {};
-    let best: ResourceConstant | null = null;
-    let bestEffect = 0;
-    for (const compound in boosts) {
-        const value = boosts[compound][effect];
-        if (value === undefined) continue;
-        if (maxTier && compound.length > maxTier) continue;
-        const inLabs = _.sum(operationalLabs(room), l => (l.mineralType === compound ? l.store[compound as ResourceConstant] ?? 0 : 0));
-        const available = Math.floor((stock(room, compound as ResourceConstant) + inLabs) / LAB_BOOST_MINERAL) - (requested[compound] ?? 0);
-        if (available < parts) continue;
-        const better = effect === "damage" ? value < bestEffect : value > bestEffect;
-        if (!best || better) {
-            best = compound as ResourceConstant;
-            bestEffect = value;
-        }
-    }
-    return best;
+    const available = (compound: ResourceConstant) => {
+        const inLabs = _.sum(operationalLabs(room), l => (l.mineralType === compound ? l.store[compound] ?? 0 : 0));
+        return Math.floor((stock(room, compound) + inLabs) / LAB_BOOST_MINERAL) - (requested[compound] ?? 0);
+    };
+    return pickBoost(BOOSTS as unknown as BoostTable, part, effect, parts, available, maxTier, minParts);
 }
 
-/** Compound per part type for a body (Hivemind generateCreepBoosts), for several part types at once */
+/**
+ * Compound and parts per part type for a body (Hivemind generateCreepBoosts), for several part types
+ * at once; `minParts`: partial boosts (see bestBoost)
+ */
 export function boostsFor(
     room: Room,
     body: BodyPartConstant[],
     wanted: [BodyPartConstant, BoostEffect][],
-    maxTier?: number
-): Partial<Record<BodyPartConstant, ResourceConstant>> {
-    const result: Partial<Record<BodyPartConstant, ResourceConstant>> = {};
+    maxTier?: number,
+    minParts?: number
+): BoostPlan {
+    const result: BoostPlan = {};
     const counts = _.countBy(body);
     for (const [part, effect] of wanted) {
-        const compound = bestBoost(room, part, effect, counts[part] ?? 0, maxTier);
-        if (compound) result[part] = compound;
+        const pick = bestBoost(room, part, effect, counts[part] ?? 0, maxTier, minParts);
+        if (pick) result[part] = pick;
     }
     return result;
 }
 
 /** Hivemind markForBoosting: parts per compound, from the boosts per part type */
-export function markForBoosting(
-    creepName: string,
-    body: BodyPartConstant[],
-    boosts: Partial<Record<BodyPartConstant, ResourceConstant>>
-): void {
+export function markForBoosting(creepName: string, body: BodyPartConstant[], plan: BoostPlan, working = false): void {
     const parts: { [compound: string]: number } = {};
-    for (const part of body) {
-        const compound = boosts[part];
-        if (compound) parts[compound] = (parts[compound] ?? 0) + 1;
+    for (const part in plan) {
+        const pick = plan[part as BodyPartConstant]!;
+        parts[pick.compound] = (parts[pick.compound] ?? 0) + pick.parts;
     }
     if (_.size(parts) === 0) return;
-    // Out of the spawn after 3 ticks per part, then BOOST_TIMEOUT ticks to get boosted
-    memory().creeps[creepName] = { boosts: parts, until: Game.time + body.length * CREEP_SPAWN_TIME + BOOST_TIMEOUT };
+    // Out of the spawn after 3 ticks per part, then the timeout to get boosted
+    const timeout = working ? WORKING_BOOST_TIMEOUT : BOOST_TIMEOUT;
+    memory().creeps[creepName] = { boosts: parts, until: Game.time + body.length * CREEP_SPAWN_TIME + timeout, working: working || undefined };
     countStat("boost:requested");
 }
 
@@ -205,6 +206,12 @@ export function manageBoostLabs(room: Room): void {
     releaseLabs(room);
 }
 
+/** The lab holds the compound and the energy for `parts` parts */
+function isLabReady(lab: StructureLab, compound: ResourceConstant, parts: number): boolean {
+    if (lab.mineralType !== compound || (lab.store[compound] ?? 0) < parts * LAB_BOOST_MINERAL) return false;
+    return lab.store.energy >= parts * LAB_BOOST_ENERGY;
+}
+
 const boostedThisTick: Set<string> = new Set();
 let boostedTick = -1;
 
@@ -242,6 +249,8 @@ export function overrideForBoosting(creep: Creep): boolean {
         const compound = mem.labs[lab.id];
         const parts = request.boosts[compound];
         if (!parts) continue;
+        // A working creep only leaves its job for a lab ready to boost it
+        if (request.working && !isLabReady(lab, compound, parts)) continue;
         const score =
             Math.min(lab.store.energy / LAB_BOOST_ENERGY / parts, 1) +
             3 * Math.min((lab.mineralType === compound ? lab.store[compound] ?? 0 : 0) / LAB_BOOST_MINERAL / parts, 1);
@@ -251,6 +260,7 @@ export function overrideForBoosting(creep: Creep): boolean {
         }
     }
     if (!best) {
+        if (request.working) return false;
         // Labs not ready yet: wait out of the way (Hivemind: range 5 of the controller)
         if (creep.room.controller) whenInRange(creep, 5, creep.room.controller);
         return true;
@@ -259,9 +269,9 @@ export function overrideForBoosting(creep: Creep): boolean {
     const compound = mem.labs[lab.id];
     const parts = request.boosts[compound];
     whenInRange(creep, 1, lab, () => {
-        if (lab.mineralType !== compound || (lab.store[compound] ?? 0) < parts * LAB_BOOST_MINERAL) return;
-        if (lab.store.energy < parts * LAB_BOOST_ENERGY || boostedThisTick.has(lab.id)) return;
-        if (lab.boostCreep(creep) !== OK) return;
+        if (!isLabReady(lab, compound, parts) || boostedThisTick.has(lab.id)) return;
+        // Exactly the requested parts: partial boosts leave the others to later creeps
+        if (lab.boostCreep(creep, parts) !== OK) return;
         boostedThisTick.add(lab.id);
         countStat(`boosted:${compound}`, parts);
         log.info("Boosts", `${creep.name}: ${parts} parts boosted with ${compound}`);

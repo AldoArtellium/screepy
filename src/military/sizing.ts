@@ -126,7 +126,7 @@ export function squadBoosts(room: Room | undefined, bodies: BodyPartConstant[][]
     if (!room) return NO_BOOSTS;
     const all = bodies.flat();
     const effect = (part: BodyPartConstant, name: BoostEffect): number => {
-        const compound = bestBoost(room, part, name, count(all, part), undefined, false);
+        const compound = bestBoost(room, part, name, count(all, part), undefined, undefined, false)?.compound;
         if (!compound) return 1;
         return (BOOSTS as unknown as Record<string, Record<string, Record<string, number>>>)[part]?.[compound]?.[name] ?? 1;
     };
