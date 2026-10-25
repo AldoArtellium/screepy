@@ -4,9 +4,11 @@
  *
  * - Value: the loot seen in the room (each resource at its market price in energy, 1 without prices),
  *   the remote income a stronghold blocks (REMOTE_NET per source and tick until its collapse, at most
- *   REMOTE_HORIZON ticks) and, for a player, the energy they made us lose (infamy).
+ *   REMOTE_HORIZON ticks) and, for a player, the energy they made us lose (infamy) and the remote
+ *   sources its room's fall frees (freedSources, REMOTE_HORIZON ticks).
  * - Cost: the spawn cost of the squad's bodies, ATTRITION times (the creeps lost are replaced: the
- *   mockup quad against a level 1 stronghold spawned 12 creeps for 4 members, earlier runs 4).
+ *   mockup quad against a level 1 stronghold spawned 12 creeps for 4 members, earlier runs 4), and
+ *   under CPU pressure its CPU (squadCpu) priced in energy by targets.ts.
  * - A target needs a ratio of MIN_ROI; the best one wins, the current one is kept unless another
  *   beats it by CURRENT_BONUS (no switching for a small difference).
  * Our design (Harabi's "ROI-driven target selection" with energy on both sides).
@@ -23,6 +25,67 @@ export const CURRENT_BONUS = 1.5;
 /** Spawn cost of the squad with its replacements */
 export function squadCost(memberCosts: number[], attrition = ATTRITION): number {
     return memberCosts.reduce((sum, cost) => sum + cost, 0) * attrition;
+}
+
+/**
+ * Official CPU per squad creep spawned (code, actions and moves over its life): mockup W7N3 `--preset
+ * rcl7 --stronghold W7N4:1`, 4000 ticks, 12 quad creeps over 7036 creep-ticks for ~1900 CPU (Military
+ * module 1646 with the quad's actions, roles 70, 1008 moves 202), ~0.27 per creep and tick.
+ */
+export const SQUAD_CREEP_CPU = 160;
+
+/**
+ * Official CPU of a squad with its replacements. Under CPU pressure targets.ts prices it at a neutral
+ * remote source's energy per CPU (remoteIncome neutralEnergyPerCpu): the remote budget would mine
+ * that energy with the CPU the squad takes (shard0: 17-19 of 20 CPU, remote rooms capped).
+ */
+export function squadCpu(members: number, attrition = ATTRITION): number {
+    return members * attrition * SQUAD_CREEP_CPU;
+}
+
+/** Linear distance from a target's room to remote sources it frees (remote mining reaches 3 rooms, closer ones are mined first) */
+export const FREED_REACH = 2;
+/** A reservation seen longer ago than this may have run out (CONTROLLER_RESERVE_MAX; intel refreshes a controller every 10000 ticks out of sight) */
+export const RESERVATION_FRESH = 5000;
+
+export interface RoomHolding {
+    room: string;
+    owner?: string;
+    reserver?: string;
+    sources: number;
+    /** Tick the owner and reserver were seen */
+    scouted?: number;
+}
+
+/**
+ * Remote sources a player's room frees when it falls (our design, a player target's `remote` value):
+ * its own sources and those of the rooms the player reserves whose closest room of that player is the
+ * target (strictly: on a tie another of its rooms keeps reserving them; a lower bound), each within
+ * FREED_REACH of one of our rooms. Reservations seen more than RESERVATION_FRESH ticks before `now`
+ * don't count. shard0 W28N8 (doorknobnob): its 2 sources and W27N7, next to W28N7, which mined a
+ * single remote source.
+ */
+export function freedSources(
+    target: string,
+    owner: string,
+    rooms: RoomHolding[],
+    ours: string[],
+    distance: (a: string, b: string) => number,
+    now: number
+): number {
+    const playerRooms = rooms.filter(r => r.owner === owner).map(r => r.room);
+    if (!playerRooms.includes(target)) return 0;
+    const inReach = (room: string) => ours.some(o => distance(o, room) <= FREED_REACH);
+    let sources = 0;
+    for (const r of rooms) {
+        if (!inReach(r.room)) continue;
+        if (r.room === target) sources += r.sources;
+        else if (r.reserver === owner && !r.owner && now - (r.scouted ?? now) <= RESERVATION_FRESH) {
+            const toTarget = distance(r.room, target);
+            if (playerRooms.every(p => p === target || distance(r.room, p) > toTarget)) sources += r.sources;
+        }
+    }
+    return sources;
 }
 
 /** Remote income a stronghold blocks until it collapses (ticksLeft) */

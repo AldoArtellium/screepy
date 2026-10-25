@@ -41,7 +41,7 @@ Object.assign(globalThis, {
 
 const {
     sourceCreeps, sourceNet, roomEnergyPerCreep, cpuAverage, budgetRooms,
-    reservationValue, reserverCpu, reserverClaimParts, reserverCost, sourceCpu, cpuPressure,
+    reservationValue, reserverCpu, reserverClaimParts, reserverCost, sourceCpu, cpuPressure, expansionCpuFits,
 } = require(join(OUT, "remote", "remoteIncome.js"));
 
 let failures = 0;
@@ -138,5 +138,14 @@ console.log(`one source at 50 tiles: neutral ${neutral.toFixed(2)}, reserved ${p
 check("no pressure: the reserver costs its energy only", Math.abs(reserverCost(50, false) - 650 / 550) < 1e-9);
 check("under pressure the reserved score of a one-source room drops near its neutral income", reservedScore < plainScore && Math.abs(reservedScore - neutral) < 1.5, `${reservedScore.toFixed(2)} vs ${neutral.toFixed(2)}`);
 check("no Memory: no pressure", cpuPressure() === false);
+
+// Expansion CPU gate (Hivemind getCpuStats): 80% of the limit below 5 remote rooms, the whole limit from 5
+// (the remote budget then drops remote rooms to make room for the new one)
+check("expansion: few remotes, under 80%", expansionCpuFits(15.9, 20, 4));
+check("expansion: few remotes, over 80%", !expansionCpuFits(16.1, 20, 4));
+// shard0 2026-10-25: 8 remote rooms, ~18 of 20 CPU, blocked by the 80% rule taken from the owned room count
+check("expansion: 8 remotes at 18/20 (shard0)", expansionCpuFits(18, 20, 8));
+check("expansion: 5 remotes, over the limit", !expansionCpuFits(20.5, 20, 5));
+check("expansion: no CPU average yet", !expansionCpuFits(undefined, 20, 8));
 
 process.exit(failures ? 1 : 0);

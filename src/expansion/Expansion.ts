@@ -18,6 +18,7 @@
 import { effectiveEnergy } from "../core/roomState";
 import { intelManager } from "../modules/IntelManager";
 import { hasInvaderCore, isRoomUnderAttack } from "../modules/RoomIntel";
+import { expansionCpuFits } from "../remote/remoteIncome";
 import { log } from "../utils/logger";
 import { expansionScore } from "./expansionScore";
 
@@ -98,9 +99,11 @@ function mayExpand(): boolean {
     // Same RCL as findSpawnRoom: from RCL 4 the target search ran every 5 ticks without any origin
     if (!rooms.some(r => r.controller!.level >= 5)) return false;
     if (rooms.length >= Game.gcl.level) return false;
-    const cpu = Memory.stats?.cpuAvg;
-    if (cpu === undefined) return false;
-    return cpu < Game.cpu.limit * (rooms.length === 1 ? 1 : 0.8);
+    // The remote budget's average (every tick, ~400 ticks) rather than the stats' ~50-tick EMA
+    const cpu = Memory.remoteMining?.cpuAvg ?? Memory.stats?.cpuAvg;
+    if (rooms.length === 1) return cpu !== undefined && cpu < Game.cpu.limit;
+    const remoteRooms = new Set(Object.values(Memory.remoteMining?.sources ?? {}).map(s => s.room)).size;
+    return expansionCpuFits(cpu, Game.cpu.limit, remoteRooms);
 }
 
 /** Expansion score lowered near past failures (Hivemind getModifiedExpansionScore) */

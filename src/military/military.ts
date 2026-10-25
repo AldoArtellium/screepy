@@ -125,7 +125,7 @@ export const militaryModule = (): void => {
         const auto = chooseAutoTarget();
         if (auto && auto.room !== memory.target?.room) {
             memory.target = { room: auto.room, reason: auto.reason, since: Game.time, roi: Math.round(auto.roi * 100) / 100 };
-            log.info("Military", `Automatic target: ${auto.room} (${auto.reason}, value ${auto.value} for a squad of ${auto.cost} energy)`);
+            log.info("Military", `Automatic target: ${auto.room} (${auto.reason}, value ${auto.value} for a squad of ${auto.cost} energy, CPU priced ${auto.cpu})`);
         } else if (!auto && memory.target && !hasMission(memory.target.room)) delete memory.target;
     }
     const target = currentTarget();
