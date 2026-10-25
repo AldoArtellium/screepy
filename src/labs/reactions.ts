@@ -123,10 +123,21 @@ function isFinished(room: Room): boolean {
     return (have[productOf(reaction)] ?? 0) >= (room.memory.reactionTarget ?? 0);
 }
 
+/**
+ * Heap: last tick each room checked whether its reaction is finished. Elapsed ticks, not
+ * Game.time % CHECK_EVERY: the Labs module is throttled (shard0 at 16-19 of 20 CPU ran it about every
+ * other tick), so the modulo could miss every multiple and a finished reaction waited REPLAN_EVERY.
+ */
+const checkedAt: Map<string, number> = new Map();
+
 function updateReaction(room: Room): void {
     const memory = room.memory;
     const due = memory.reactionAt === undefined || Game.time - memory.reactionAt >= REPLAN_EVERY;
-    if (!due && (Game.time % CHECK_EVERY !== 0 || !isFinished(room))) return;
+    if (!due) {
+        if (Game.time - (checkedAt.get(room.name) ?? -Infinity) < CHECK_EVERY) return;
+        checkedAt.set(room.name, Game.time);
+        if (!isFinished(room)) return;
+    }
     memory.reactionAt = Game.time;
     const next = chooseReaction(room, memory.labs?.reactor.length ?? 1);
     const previous = memory.currentReaction ? productOf(memory.currentReaction) : null;

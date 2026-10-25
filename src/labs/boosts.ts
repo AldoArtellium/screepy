@@ -198,9 +198,16 @@ function cleanMemory(): void {
     for (const id in mem.labs) if (!Game.getObjectById(id as Id<StructureLab>)) delete mem.labs[id];
 }
 
+/** Heap: last cleanMemory tick */
+let cleanedAt = 0;
+
 /** Every owned room with labs, every tick (Hivemind manageBoostLabs) */
 export function manageBoostLabs(room: Room): void {
-    if (Game.time % 100 === 0) cleanMemory();
+    // Elapsed ticks: the throttled Labs module could miss every multiple of 100
+    if (Game.time - cleanedAt >= 100) {
+        cleanedAt = Game.time;
+        cleanMemory();
+    }
     if (!Memory.boost) return;
     assignLabs(room);
     releaseLabs(room);
