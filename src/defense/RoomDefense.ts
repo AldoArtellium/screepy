@@ -9,6 +9,7 @@ import { structuresOfType, tickCache } from "../core/roomState";
 import { jitter } from "../utils/jitter";
 import { RoomPlan } from "../planner/RoomPlan";
 import { roomPlanner } from "../planner/RoomPlanner";
+import { threatOf } from "./threat";
 
 declare global {
     interface RoomMemory {
@@ -70,11 +71,15 @@ export function isDangerous(creep: Creep): boolean {
     return creep.body.some(p => p.type !== MOVE && p.type !== TOUGH && (mine || (p.type !== WORK && p.type !== CARRY)));
 }
 
-/** Attack (ATTACK, RANGED_ATTACK, CLAIM, WORK as dismantle) and heal power of a creep, boosts included */
-export function creepPower(creep: Creep): { attack: number; heal: number } {
+/**
+ * Attack (ATTACK, RANGED_ATTACK, CLAIM, WORK as dismantle) and heal power of a creep, boosts included;
+ * `activeOnly` leaves out destroyed parts
+ */
+export function creepPower(creep: Creep, activeOnly = false): { attack: number; heal: number } {
     let attack = 0;
     let heal = 0;
     for (const part of creep.body) {
+        if (activeOnly && part.hits === 0) continue;
         let power = PART_STRENGTH[part.type] ?? 0;
         let boost = 1;
         if (part.boost && typeof part.boost === "string") {
@@ -283,11 +288,6 @@ export function isFast(creep: Creep): boolean {
     return activePower(creep, MOVE, "fatigue") >= others;
 }
 
-const PART_VALUE: Partial<Record<BodyPartConstant, number>> = { [ATTACK]: 1, [CLAIM]: 10, [HEAL]: 5, [RANGED_ATTACK]: 2, [WORK]: 1 };
-
-function militaryValue(creep: Creep): number {
-    return _.sum(creep.body, p => (0.1 + (0.9 * p.hits) / 100) * (PART_VALUE[p.type] ?? 0));
-}
 
 /** Active parts of a creep, boosts included */
 export function activePower(creep: Creep, type: BodyPartConstant, attribute: string): number {
@@ -349,7 +349,7 @@ export function militarySituation(room: Room): MilitarySituation {
             const factor = creep.hits === creep.hitsMax ? 1.1 : 1;
             const priority =
                 damage > heal * factor
-                    ? (militaryValue(creep) * (damage - heal) * (creep.hitsMax / creep.hits) * (creep.ticksToLive ?? CREEP_LIFE_TIME)) / CREEP_LIFE_TIME
+                    ? (threatOf(creep) * (damage - heal) * (creep.hitsMax / creep.hits) * (creep.ticksToLive ?? CREEP_LIFE_TIME)) / CREEP_LIFE_TIME
                     : 0;
             return { creep, priority };
         });

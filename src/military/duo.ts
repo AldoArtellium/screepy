@@ -11,6 +11,7 @@
  */
 
 import { duoCreeps } from "../core/roomState";
+import { threatOf } from "../defense/threat";
 import { needsBoosting } from "../labs/boosts";
 import { trafficManager } from "../modules/TrafficManager";
 import { log } from "../utils/logger";
@@ -173,12 +174,16 @@ function heal(healer: Creep, attacker: Creep): void {
     else if (healer.pos.inRangeTo(patient, 3)) healer.rangedHeal(patient);
 }
 
-/** Attack what is adjacent: dangerous creeps first, then the target, then what blocks the way */
+/**
+ * Attack what is adjacent: dangerous creeps first (most threat per hit, defense/threat.ts), then the
+ * target, then what blocks the way
+ */
 function strike(attacker: Creep, step: { pos: RoomPosition; target?: Structure } | null, targetRoom: string): void {
-    const enemy = attacker.pos
+    const fighters = attacker.pos
         .findInRange(FIND_HOSTILE_CREEPS, 1)
-        .find(c => c.body.some(p => p.hits > 0 && (p.type === ATTACK || p.type === RANGED_ATTACK || p.type === HEAL)));
-    if (enemy) {
+        .filter(c => c.body.some(p => p.hits > 0 && (p.type === ATTACK || p.type === RANGED_ATTACK || p.type === HEAL)));
+    const enemy = _.max(fighters, c => threatOf(c) / c.hits);
+    if (typeof enemy === "object") {
         attacker.attack(enemy);
         return;
     }

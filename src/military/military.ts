@@ -85,7 +85,8 @@ function shouldUpgrade(duo: DuoMemory): boolean {
     if (memory.squad || duo.losses < 2 || duo.losses >= MAX_LOSSES || !Game.rooms[duo.spawnRoom]) return false;
     const refills = (hostileRoom(duo.targetRoom)?.coreLevel ?? 0) > 0;
     return (
-        planSquad(duo.targetRoom, Game.rooms[duo.spawnRoom].energyCapacityAvailable, undefined, refills).type === "quad"
+        planSquad(duo.targetRoom, Game.rooms[duo.spawnRoom].energyCapacityAvailable, undefined, refills, Game.rooms[duo.spawnRoom])
+            .type === "quad"
     );
 }
 
@@ -99,7 +100,8 @@ function startMission(target: string): void {
     const origin = findOrigin(target);
     if (!origin) return;
     const refills = (hostileRoom(target)?.coreLevel ?? 0) > 0;
-    const plan = planSquad(target, Game.rooms[origin.spawnRoom].energyCapacityAvailable, memory.squad, refills);
+    const spawnRoom = Game.rooms[origin.spawnRoom];
+    const plan = planSquad(target, spawnRoom.energyCapacityAvailable, memory.squad, refills, spawnRoom);
     if (!plan.feasible && !memory.attack) {
         delete memory.target;
         return;

@@ -87,13 +87,22 @@ function stock(room: Room, resourceType: ResourceConstant): number {
 /**
  * Best compound for `parts` parts of a type with this effect (Hivemind getAvailableBoosts +
  * getBestBoost): enough in storage + terminal (+ labs) for every part beyond what other creeps asked,
- * tier (name length) at most `maxTier` when given, strongest effect (TOUGH: lowest damage multiplier)
+ * tier (name length) at most `maxTier` when given, strongest effect (TOUGH: lowest damage multiplier).
+ * `countRequested = false` ignores what other creeps asked (squad sizing: a squad's own pending requests
+ * would otherwise make its target look infeasible again while it is being boosted)
  */
-export function bestBoost(room: Room, part: BodyPartConstant, effect: BoostEffect, parts: number, maxTier?: number): ResourceConstant | null {
+export function bestBoost(
+    room: Room,
+    part: BodyPartConstant,
+    effect: BoostEffect,
+    parts: number,
+    maxTier?: number,
+    countRequested = true
+): ResourceConstant | null {
     if (parts === 0 || operationalLabs(room).length === 0) return null;
     if ((room.storage?.store.energy ?? 0) + (room.terminal?.store.energy ?? 0) < MIN_ENERGY) return null;
     const boosts = (BOOSTS as unknown as BoostTable)[part] ?? {};
-    const requested = requestedBoosts(room);
+    const requested = countRequested ? requestedBoosts(room) : {};
     let best: ResourceConstant | null = null;
     let bestEffect = 0;
     for (const compound in boosts) {

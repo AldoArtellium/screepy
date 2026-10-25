@@ -9,6 +9,7 @@
  */
 
 import { buildBody, MoveMode } from "../core/bodyBuilder";
+import { bestBoost, BoostEffect } from "../labs/boosts";
 import { hostileRoom } from "./intel";
 
 export type SquadType = "duo" | "quad";
@@ -105,18 +106,58 @@ export interface SquadPlan {
     threat: Threat;
 }
 
-/** Duo when its healer covers the edge damage and its attacker beats the enemy healing, else quad */
-export function planSquad(targetRoom: string, energy: number, forced?: SquadType, refills = false): SquadPlan {
+/** Effect multipliers of the boosts a squad would get (1: none) */
+export interface SquadBoosts {
+    heal: number;
+    attack: number;
+    /** Damage taken by a TOUGH part (1: unboosted, XGHO2: 0.3) */
+    tough: number;
+}
+
+const NO_BOOSTS: SquadBoosts = { heal: 1, attack: 1, tough: 1 };
+
+/**
+ * Boosts the military spawn role would put on a squad's bodies (military.ts boosts: the best compound
+ * in stock for all the parts of a type), as multipliers. Not in TI or Hivemind's sizing; squads were
+ * boosted from the labs already, but sized and judged unboosted. The stock is read without the pending
+ * requests (bestBoost countRequested), so a squad being boosted doesn't make its own target infeasible.
+ */
+export function squadBoosts(room: Room | undefined, bodies: BodyPartConstant[][]): SquadBoosts {
+    if (!room) return NO_BOOSTS;
+    const all = bodies.flat();
+    const effect = (part: BodyPartConstant, name: BoostEffect): number => {
+        const compound = bestBoost(room, part, name, count(all, part), undefined, false);
+        if (!compound) return 1;
+        return (BOOSTS as unknown as Record<string, Record<string, Record<string, number>>>)[part]?.[compound]?.[name] ?? 1;
+    };
+    return { heal: effect(HEAL, "heal"), attack: effect(ATTACK, "attack"), tough: effect(TOUGH, "damage") };
+}
+
+/** Hits of a body once boosted TOUGH parts absorb their share */
+function effectiveBodyHits(body: BodyPartConstant[], tough: number): number {
+    return _.sum(body, p => (p === TOUGH ? 100 / tough : 100));
+}
+
+/**
+ * Duo when its healer covers the edge damage and its attacker beats the enemy healing, else quad.
+ * With `boostRoom`, the boosts in that room's stock count (squadBoosts).
+ */
+export function planSquad(targetRoom: string, energy: number, forced?: SquadType, refills = false, boostRoom?: Room): SquadPlan {
     const threat = threatOf(targetRoom);
-    const duoHeal = count(duoHealerBody(energy), HEAL) * HEAL_POWER;
-    const duoDamage = count(duoAttackerBody(energy), ATTACK) * ATTACK_POWER;
+    const duoBodies = [duoAttackerBody(energy), duoHealerBody(energy)];
     const healer = quadHealerBody(energy);
-    const quadHeal = 2 * count(healer, HEAL) * HEAL_POWER;
+    const quadBodies = [quadAttackerBody(energy), quadAttackerBody(energy), healer, healer];
+    const duoBoosts = squadBoosts(boostRoom, duoBodies);
+    const quadBoosts = squadBoosts(boostRoom, quadBodies);
+    const duoHeal = count(duoBodies[1], HEAL) * HEAL_POWER * duoBoosts.heal;
+    const duoDamage = count(duoBodies[0], ATTACK) * ATTACK_POWER * duoBoosts.attack;
+    const quadHeal = 2 * count(healer, HEAL) * HEAL_POWER * quadBoosts.heal;
     // Towers that refill must be out-healed where the squad fights, not only at the edge
     const damage = refills ? threat.close : threat.edge;
     const type: SquadType = forced ?? (duoHeal >= damage && duoDamage >= threat.minDamage ? "duo" : "quad");
     const heal = type === "duo" ? duoHeal : quadHeal;
-    const frontHits = (type === "duo" ? duoAttackerBody(energy) : quadAttackerBody(energy)).length * 100;
+    const frontHits =
+        type === "duo" ? effectiveBodyHits(duoBodies[0], duoBoosts.tough) : effectiveBodyHits(quadBodies[0], quadBoosts.tough);
     const feasible = refills
         ? heal >= threat.close || frontHits >= (threat.close - heal) * SURVIVE_CLOSE_TICKS
         : heal >= threat.edge || frontHits >= (threat.edge - heal) * SURVIVE_TICKS;
