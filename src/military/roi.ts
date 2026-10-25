@@ -23,9 +23,9 @@ export const REMOTE_HORIZON = 10000;
 export const MIN_ROI = 1;
 export const CURRENT_BONUS = 1.5;
 
-/** Spawn cost of the squad with its replacements */
-export function squadCost(memberCosts: number[], attrition = ATTRITION): number {
-    return memberCosts.reduce((sum, cost) => sum + cost, 0) * attrition;
+/** Spawn cost of the squad with its replacements, and their boosts (`boostCost`: one squad's, sizing.ts planSquad) */
+export function squadCost(memberCosts: number[], attrition = ATTRITION, boostCost = 0): number {
+    return (memberCosts.reduce((sum, cost) => sum + cost, 0) + boostCost) * attrition;
 }
 
 /** Spawn busy share from which a spawn is saturated (RemoteMining's source cap fires above it) */

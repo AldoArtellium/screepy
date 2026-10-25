@@ -58,6 +58,10 @@ export interface QuadMemory {
     /** Members seen alive (to count losses) */
     members: string[];
     losses: number;
+    /** Compounds the members get (military.ts startMission; absent: the strongest in stock) */
+    boosts?: import("./boostNeed").SquadCompounds;
+    /** Losses when the boosts were chosen (escalation) */
+    boostLosses?: number;
     /** Top-left tile of the formation, and since when the quad tries to pack there */
     anchor?: { x: number; y: number; room: string; since: number };
     /** Where the quad heals up: a few tiles inside the staging room, next to the exit it took */

@@ -42,6 +42,8 @@ const check = (name, ok, detail) => {
 // Squad cost: every member's body, ATTRITION times (replacements of the creeps lost)
 check("ATTRITION is 2", ATTRITION === 2);
 check("squad cost: 4 members of 1000", squadCost([1000, 1000, 1000, 1000]) === 8000, squadCost([1000, 1000, 1000, 1000]));
+// Boosts: the replacements are boosted too (12 HEAL parts of XLHO2 at ~50 energy each)
+check("squad cost: boosts with the replacements", squadCost([1000, 1000, 1000, 1000], ATTRITION, 600) === 9200, squadCost([1000, 1000, 1000, 1000], ATTRITION, 600));
 
 // Spawn time: the income a saturated spawn would have made in the ticks the squad takes (shard0 W29N7,
 // 2026-10-25: one spawn 88% busy, ~50 energy per tick, quad of 40 + 40 + 16 + 16 parts)
