@@ -42,6 +42,21 @@ const check = (name, ok, detail) => {
 // Squad cost: every member's body, ATTRITION times (replacements of the creeps lost)
 check("ATTRITION is 2", ATTRITION === 2);
 check("squad cost: 4 members of 1000", squadCost([1000, 1000, 1000, 1000]) === 8000, squadCost([1000, 1000, 1000, 1000]));
+
+// Spawn time: the income a saturated spawn would have made in the ticks the squad takes (shard0 W29N7,
+// 2026-10-25: one spawn 88% busy, ~50 energy per tick, quad of 40 + 40 + 16 + 16 parts)
+const { spawnTimeCost, SPAWN_SATURATED } = require(join(OUT, "military", "roi.js"));
+const quadParts = [40, 40, 16, 16];
+const w29n7 = spawnTimeCost(quadParts, 1, 50, 0.88);
+check("SPAWN_SATURATED is 0.8", SPAWN_SATURATED === 0.8);
+check("W29N7 quad: 112 parts x 3 ticks x 2 x 50 energy", w29n7 === 33600, w29n7);
+check("two spawns halve it", spawnTimeCost(quadParts, 2, 50, 0.88) === 16800, spawnTimeCost(quadParts, 2, 50, 0.88));
+check("a spawn 40% busy pays half", spawnTimeCost(quadParts, 1, 50, 0.4) === 16800, spawnTimeCost(quadParts, 1, 50, 0.4));
+check("no income: free", spawnTimeCost(quadParts, 1, 0, 0.9) === 0);
+check("no spawn: free", spawnTimeCost(quadParts, 0, 50, 0.9) === 0);
+// W27N9 (132k loot, roi 6.75 on spawn energy alone) still pays with W29N7's spawn time
+const w27n9 = 132442 / (squadCost([2250, 2250, 2200, 2200]) + w29n7);
+check("W27N9 still pays from W29N7", w27n9 > MIN_ROI && w27n9 < 3, w27n9.toFixed(2));
 // RCL 7 quad (mockup W7N3 --preset rcl7, 5600 capacity): ~4000 per member
 const quadRcl7 = squadCost([4000, 4000, 4000, 4000]);
 

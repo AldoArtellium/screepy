@@ -460,6 +460,11 @@ function sampleSpawns(): void {
 }
 
 /** Slow average of the busy share of a home's spawns, updated from the samples since the last call */
+/** Last measured busy share of a home's spawns (~400-tick average, 0 before the first selection) */
+export function spawnBusyShare(home: string): number {
+    return Memory.remoteMining?.spawnBusy?.[home] ?? 0;
+}
+
 function spawnBusy(home: string): number {
     const busy = (memory().spawnBusy ??= {});
     const sample = spawnSamples.get(home);
