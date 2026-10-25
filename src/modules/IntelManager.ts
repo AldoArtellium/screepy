@@ -5,8 +5,10 @@
  * (`Memory.rooms[r].enemies`, refreshed every tick), never here.
  */
 
+import { cpuPressure } from "../remote/remoteIncome";
 import { log } from "../utils/logger";
 import { roomsInRange } from "../utils/rooms";
+import { ownershipRescoutAge } from "../utils/scouting";
 import { segmentStore } from "../utils/segments";
 
 /** How long intel remains valid (ticks) */
@@ -133,14 +135,16 @@ class IntelManager {
 
     /**
      * Rooms within range that need a scout: never seen, without a source list (old entries), older
-     * than STRUCTURE, or with a controller whose owner/reservation is older than OWNERSHIP
+     * than STRUCTURE, or with a controller whose owner/reservation is older than OWNERSHIP (x3 under
+     * CPU pressure, utils/scouting.ts)
      */
     getRoomsNeedingScouting(baseRoomName: string, maxDistance: number): string[] {
+        const ownershipAge = ownershipRescoutAge(INTEL_EXPIRY.OWNERSHIP, cpuPressure());
         return roomsInRange(baseRoomName, maxDistance).filter(roomName => {
             const intel = this.getIntel(roomName);
             if (!intel?.sources) return true;
             const age = Game.time - intel.lastScouted;
-            return age >= INTEL_EXPIRY.STRUCTURE || (!!intel.controllerPos && age >= INTEL_EXPIRY.OWNERSHIP);
+            return age >= INTEL_EXPIRY.STRUCTURE || (!!intel.controllerPos && age >= ownershipAge);
         });
     }
 }
