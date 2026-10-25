@@ -1,6 +1,6 @@
 /**
  * Offense: `Memory.military.attack = "<room>"` (by hand), else an automatic target (targets.ts:
- * strongholds near our rooms; player rooms only with `Memory.military.auto = true`), sends a duo or
+ * strongholds near our rooms; player rooms unless `Memory.military.auto = false`), sends a duo or
  * a quad (sizing.ts, `Memory.military.squad` to force one) from the closest RCL 4+ room with a spawn.
  * The mission ends when the room has no spawn, no tower and no invader core left, or after the
  * squad lost 10 creeps. Our design; see docs/superpowers/roadmap.md (J7).

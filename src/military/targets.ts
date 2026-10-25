@@ -6,7 +6,7 @@
  *    remotes: their loot seen in sight and the remote income they block until they collapse (their
  *    room's sources). Level 0 cores in our remotes are already cleared by the remote defense ATTACKER
  *    (remote/remoteDefense.ts).
- * 2. Player rooms, only with `Memory.military.auto = true` (never by default): their loot seen in
+ * 2. Player rooms, unless `Memory.military.auto = false` (on by default since 2026-10-25): their loot seen in
  *    sight (storage, terminal, containers), the energy the player made us lose (infamy) and the remote
  *    sources its fall frees next to our rooms (roi.ts freedSources, REMOTE_HORIZON ticks of income);
  *    rooms in safe mode or without spawn are skipped.
@@ -119,7 +119,7 @@ function holdings(): RoomHolding[] {
 }
 
 function isPlayerTarget(intel: HostileRoom): boolean {
-    if (!militaryMemory().auto) return false;
+    if (militaryMemory().auto === false) return false;
     if (!intel.owner || intel.owner === Memory.username || intel.spawns === 0) return false;
     return (intel.safeMode ?? 0) <= Game.time;
 }
