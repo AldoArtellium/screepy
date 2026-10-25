@@ -83,6 +83,9 @@ jobs:
       - name: Squad boosts check
         run: node tests/squadBoosts/run.mjs
 
+      - name: Market pricing check
+        run: node tests/market/run.mjs
+
       - uses: actions/upload-artifact@v4
         with:
           name: bundle
