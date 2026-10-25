@@ -19,6 +19,7 @@
 
 import { getBestOption } from "../core/options";
 import { isFullOn, myRoomsWithTerminal, prepareForTrading, resourceAmount, totalResources } from "../core/resources";
+import { forcedBuyPays, instantSellPays, PriceData, prefersInstantSell, repricedSellPrice, sellOrderPrice } from "../market/pricing";
 import { log } from "../utils/logger";
 
 /** Lowest buy price (Hivemind minTradeValue) */
@@ -31,12 +32,8 @@ const ORDER_MAX_AGE = 100000;
 const PRICE_CACHE_TICKS = 5000;
 /** Game.market.deal limit per tick */
 const MAX_DEALS = 10;
-
-interface PriceData {
-    total: number;
-    average: number;
-    stdDev: number;
-}
+/** An own sell order is repriced at most once per this many ticks */
+const REPRICE_INTERVAL = 1000;
 
 interface ResourceStates {
     rooms: string[];
@@ -56,6 +53,8 @@ let availableCredits = 0;
 let dealsThisTick = 0;
 let dealTick = -1;
 const usedTerminals: Set<string> = new Set();
+/** Own order id -> last tick its price changed (heap) */
+const repricedAt: Map<string, number> = new Map();
 
 /** 0 energy, 10 power, else the length of the name (+3 with G): 1 = base minerals (Hivemind getResourceTier) */
 function resourceTier(resourceType: ResourceConstant): number {
@@ -146,9 +145,9 @@ function maxOrderAmount(resourceType: ResourceConstant): number {
     return 1;
 }
 
-/** Best order to deal with: price x 1000 against 0.3 credit per energy of transfer cost */
+/** Best order of other players to deal with: price x 1000 against 0.3 credit per energy of transfer cost */
 function findBestOrder(type: ORDER_BUY | ORDER_SELL, resourceType: ResourceConstant, roomName: string): Order | null {
-    const orders = Game.market.getAllOrders({ type, resourceType }).filter(o => o.amount >= 100);
+    const orders = Game.market.getAllOrders({ type, resourceType }).filter(o => o.amount >= 100 && !Game.market.orders[o.id]);
     const score = (o: Order) => {
         const cost = o.roomName ? Game.market.calcTransactionCost(1000, roomName, o.roomName) : 0;
         return type === ORDER_BUY ? 1000 * o.price - 0.3 * cost : -(1000 * o.price + 0.3 * cost);
@@ -188,16 +187,21 @@ function deal(order: Order, amount: number, room: Room): void {
     if (result === OK && order.type === ORDER_SELL) availableCredits -= amount * order.price;
 }
 
+/** Credits below the reserve: instant sells accept the average price (market/pricing.ts) */
+function lowCredits(): boolean {
+    return Game.market.credits < CREDIT_RESERVE;
+}
+
 /**
- * Sells to the best buy order if it pays at least average + deviation / 2. Waits until the terminal
- * holds the amount and the transfer energy.
+ * Sells to the best buy order if it pays at least average + deviation / 2 (the average while credits are
+ * low). Waits until the terminal holds the amount and the transfer energy.
  */
 function instaSell(resourceType: ResourceConstant, rooms: string[]): void {
     const room = roomHighestOn(resourceType, rooms);
     if (!room?.terminal) return;
     const order = findBestOrder(ORDER_BUY, resourceType, room.name);
     const history = priceData(resourceType);
-    if (!order || !history || order.price < history.average + history.stdDev / 2) return;
+    if (!order || !history || !instantSellPays(order.price, history, lowCredits())) return;
     const amount = Math.min(maxOrderAmount(resourceType), order.amount, resourceAmount(room, resourceType));
     if (amount <= 0) return;
     const terminal = room.terminal;
@@ -213,13 +217,20 @@ function instaSell(resourceType: ResourceConstant, rooms: string[]): void {
     if (canDeal(terminal)) deal(order, amount, room);
 }
 
-/** Buys from the best sell order if it costs at most average - min(dev / 5, 10%); `force` ignores the price */
+/**
+ * Buys from the best sell order if it costs at most average - min(dev / 5, 10%); `force` pays up to
+ * FORCED_BUY_MAX_RATIO x the average or the best buy order (Hivemind: any price)
+ */
 function instaBuy(resourceType: ResourceConstant, rooms: string[], force: boolean): void {
     const room = roomLowestOn(resourceType, rooms);
     if (!room?.terminal) return;
     const order = findBestOrder(ORDER_SELL, resourceType, room.name);
     const history = priceData(resourceType);
     if (!order || !history) return;
+    if (force && !forcedBuyPays(order.price, history, findBestOrder(ORDER_BUY, resourceType, room.name)?.price)) {
+        log.info("Market", `${room.name}: forced buy of ${resourceType} skipped, ${order.price} above the price cap`);
+        return;
+    }
     if (!force && order.price > history.average - Math.min(history.stdDev / 5, history.average * 0.1)) return;
     let amount = Math.min(force ? 10000 : maxOrderAmount(resourceType), order.amount);
     const terminal = room.terminal;
@@ -257,18 +268,40 @@ function tryBuy(resourceType: ResourceConstant, rooms: string[]): void {
     log.info("Market", `${room.name}: buy order ${amount} ${resourceType} at ${offer.toFixed(3)}: ${result}`);
 }
 
-/** Sell order a bit below the best competitor, at least average + dev / 2, at most 1.5 x average + 2 x dev */
+/** Lowers our sell orders a competitor undercuts (market/pricing.ts), each at most once per REPRICE_INTERVAL */
+function repriceSellOrders(orders: Order[], history: PriceData, cheapestCompetitor: number | undefined): void {
+    for (const order of orders) {
+        if (Game.time - (repricedAt.get(order.id) ?? order.created) < REPRICE_INTERVAL) continue;
+        const price = repricedSellPrice(order.price, history, cheapestCompetitor);
+        if (price === null) continue;
+        const result = Game.market.changeOrderPrice(order.id, price);
+        repricedAt.set(order.id, Game.time);
+        log.info("Market", `${order.roomName}: sell order ${order.resourceType} ${order.price} -> ${price.toFixed(3)}: ${result}`);
+    }
+}
+
+/**
+ * Sell order a bit below the best competitor, at least average + dev / 2, at most 1.5 x average + 2 x dev.
+ * Sells to the best buy order instead when it pays as much, or while credits are low; lowers our order
+ * when a competitor undercuts it (not in Hivemind, see market/pricing.ts).
+ */
 function trySell(resourceType: ResourceConstant, rooms: string[]): void {
-    if (ownOrders(ORDER_SELL, resourceType).length > 0) return;
     const room = roomHighestOn(resourceType, rooms);
     const history = priceData(resourceType);
     if (!room || !history) return;
-    const minPrice = history.average + history.stdDev / 2;
-    const greedy = history.average * 1.5 + history.stdDev * 2;
-    const competitor = Game.market.getAllOrders({ type: ORDER_SELL, resourceType }).filter(o => o.amount >= 100);
-    let offer = greedy;
-    if (competitor.length > 0) offer = Math.min(Math.max(minPrice, _.min(competitor, o => o.price).price * 0.99), greedy);
-    if (offer < minPrice) return;
+    const competitors = Game.market.getAllOrders({ type: ORDER_SELL, resourceType }).filter(o => o.amount >= 100 && !Game.market.orders[o.id]);
+    const cheapest = competitors.length > 0 ? _.min(competitors, o => o.price).price : undefined;
+    const bestBuy = findBestOrder(ORDER_BUY, resourceType, room.name);
+    if (bestBuy && prefersInstantSell(bestBuy.price, history, cheapest, lowCredits())) {
+        instaSell(resourceType, rooms);
+        return;
+    }
+    const own = ownOrders(ORDER_SELL, resourceType);
+    if (own.length > 0) {
+        repriceSellOrders(own, history, cheapest);
+        return;
+    }
+    const offer = sellOrderPrice(history, cheapest);
     const amount = maxOrderAmount(resourceType);
     if (amount <= 0) return;
     // Listing fee: 5% of the order value
@@ -339,6 +372,7 @@ function isCommodity(resourceType: ResourceConstant): boolean {
 
 /** Own orders older than 100 000 ticks or done */
 function removeOldOrders(): void {
+    for (const id of repricedAt.keys()) if (!Game.market.orders[id]) repricedAt.delete(id);
     for (const id in Game.market.orders) {
         const order = Game.market.orders[id];
         if (Game.time - order.created > ORDER_MAX_AGE || order.remainingAmount === 0) Game.market.cancelOrder(id);

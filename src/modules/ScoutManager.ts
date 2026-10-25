@@ -13,6 +13,7 @@ import { log } from "../utils/logger";
 import { trafficManager } from "./TrafficManager";
 import { spawnManager } from "./SpawnManager";
 import { registerRole } from "../roles/registry";
+import { ScoutHome, scoutHomeOf } from "../utils/scouting";
 
 const SCOUT_ROLE = "scout";
 
@@ -40,14 +41,33 @@ const UNREACHABLE_TTL = 5000;
 class ScoutManager {
     /** Heap only: rooms whose path failed, until when they are skipped */
     private unreachable: Map<string, number> = new Map();
+    private homesCache: ScoutHome[] = [];
+    private homesTick = -1;
 
+    private scoutRange(roomName: string): number {
+        const level = Game.rooms[roomName]?.controller?.level ?? 0;
+        return level >= SCOUT_CONFIG.EXPANSION_RCL ? SCOUT_CONFIG.EXPANSION_SCOUT_RANGE : SCOUT_CONFIG.SCOUT_RANGE;
+    }
+
+    /** Owned rooms that scout, with their range (heap, once per tick) */
+    private homes(): ScoutHome[] {
+        if (this.homesTick !== Game.time) {
+            this.homesTick = Game.time;
+            this.homesCache = Object.values(Game.rooms)
+                .filter(r => r.controller?.my && r.controller.level >= SCOUT_CONFIG.MIN_RCL)
+                .map(r => ({ name: r.name, range: this.scoutRange(r.name) }));
+        }
+        return this.homesCache;
+    }
+
+    /** Rooms this home scouts: those it is the closest scouting home of (utils/scouting.ts), one scout per room */
     private roomsToScout(homeRoom: string): string[] {
-        const level = Game.rooms[homeRoom]?.controller?.level ?? 0;
-        const range =
-            level >= SCOUT_CONFIG.EXPANSION_RCL ? SCOUT_CONFIG.EXPANSION_SCOUT_RANGE : SCOUT_CONFIG.SCOUT_RANGE;
+        const homes = this.homes();
+        const distance = (a: string, b: string) => Game.map.getRoomLinearDistance(a, b);
         return intelManager
-            .getRoomsNeedingScouting(homeRoom, range)
-            .filter(r => (this.unreachable.get(r) ?? 0) < Game.time);
+            .getRoomsNeedingScouting(homeRoom, this.scoutRange(homeRoom))
+            .filter(r => (this.unreachable.get(r) ?? 0) < Game.time)
+            .filter(r => homes.length <= 1 || scoutHomeOf(r, homes, distance) === homeRoom);
     }
 
     /**
@@ -103,8 +123,8 @@ class ScoutManager {
             const roomsToScout = this.roomsToScout(homeRoom);
 
             if (roomsToScout.length === 0) {
-                // No rooms to scout - idle near spawn
-                this.idleScout(scout);
+                // Nothing left to scout: a 50-energy scout idling for the rest of its life cost ~0.24 CPU per tick
+                scout.suicide();
                 return;
             }
 
@@ -138,26 +158,6 @@ class ScoutManager {
             log.warn("ScoutManager", `Scout ${scout.name} cannot path to ${targetRoom}`);
             this.unreachable.set(targetRoom, Game.time + UNREACHABLE_TTL);
             delete scout.memory.scoutTarget;
-        }
-    }
-
-    /**
-     * Idle behavior for scouts with no target
-     */
-    private idleScout(scout: Creep): void {
-        const homeRoom = scout.memory.room;
-        if (!homeRoom) return;
-
-        // Return to home room if not there
-        if (scout.room.name !== homeRoom) {
-            trafficManager.moveToRoom(scout, homeRoom, { priority: 80 });
-            return;
-        }
-
-        // In home room - move near spawn
-        const spawn = scout.room.find(FIND_MY_SPAWNS)[0];
-        if (spawn) {
-            trafficManager.requestMove(scout, spawn, { range: 5, priority: 100 });
         }
     }
 }
