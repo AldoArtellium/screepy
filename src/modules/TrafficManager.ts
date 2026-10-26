@@ -79,6 +79,10 @@ class TrafficManager {
     private obstacleTiles: Map<string, Set<number>> = new Map();
     private obstacleTilesTick = 0;
 
+    /** Obstacle cost matrix per room (this tick only), see structureMatrix */
+    private structureMatrices: Map<string, CostMatrix> = new Map();
+    private structureMatricesTick = 0;
+
     /**
      * Call once at the start of each tick
      */
@@ -129,6 +133,9 @@ class TrafficManager {
             priority: 101 - Math.min(100, Math.max(0, priority)),
             reusePath: options.reusePath,
             avoidCreeps: (options.combat ?? false) || bouncing,
+            // Obstacles from a matrix built once per room and tick instead of every path search
+            roomCallback: this.structureMatrix,
+            avoidObstacleStructures: false,
             visualizePathStyle: options.visualize ? { stroke: options.combat ? "#ff0000" : "#ffffff", lineStyle: "dashed" as const } : undefined
         };
         // Stuck creeps: cartographer repaths with avoidCreeps, which marks every creep tile impassable,
@@ -257,6 +264,36 @@ class TrafficManager {
         }
         move(creep, targets, priority);
     }
+
+    /**
+     * Cartographer's avoidObstacleStructures rules as a cost matrix (255 on obstacle structures, ramparts
+     * neither ours nor public and our obstacle construction sites), built once per room and tick.
+     * Cartographer clones the roomCallback result, then rebuilt this for every path search and every
+     * stay intent (a find(FIND_STRUCTURES) and an OBSTACLE_OBJECT_TYPES lookup per structure); it still
+     * costs the roads itself (their cost depends on the creep's body). Empty out of sight, as before.
+     */
+    private readonly structureMatrix = (roomName: string): CostMatrix => {
+        if (this.structureMatricesTick !== Game.time) {
+            this.structureMatricesTick = Game.time;
+            this.structureMatrices.clear();
+        }
+        const cached = this.structureMatrices.get(roomName);
+        if (cached) return cached;
+        const matrix = new PathFinder.CostMatrix();
+        this.structureMatrices.set(roomName, matrix);
+        const room = Game.rooms[roomName];
+        if (!room) return matrix;
+        const obstacleTypes = OBSTACLE_OBJECT_TYPES as string[];
+        for (const s of room.find(FIND_STRUCTURES)) {
+            const rampart = s as StructureRampart;
+            const closedRampart = s.structureType === STRUCTURE_RAMPART && !rampart.my && !rampart.isPublic;
+            if (closedRampart || obstacleTypes.includes(s.structureType)) matrix.set(s.pos.x, s.pos.y, 255);
+        }
+        for (const site of room.find(FIND_MY_CONSTRUCTION_SITES)) {
+            if (obstacleTypes.includes(site.structureType)) matrix.set(site.pos.x, site.pos.y, 255);
+        }
+        return matrix;
+    };
 
     /** Obstacle structures, ramparts not ours and our obstacle construction sites (cartographer's rules) */
     private roomObstacles(room: Room): Set<number> {

@@ -15,8 +15,8 @@ export interface DispatchContext {
 
 export interface TaskProvider {
     readonly type: string;
-    /** Upper bound of the priorities this provider can return (prunes the search) */
-    highestPriority(context: DispatchContext): number;
+    /** Upper bound of the priorities this provider can return (prunes the search); a constant */
+    highestPriority(): number;
     tasks(context: DispatchContext): Order[];
     isValid(task: Order, context: DispatchContext): boolean;
     execute(task: Order, context: DispatchContext): void;
@@ -36,17 +36,19 @@ export function cacheEmptyTasks(key: string, compute: () => Order[]): Order[] {
 
 export class Dispatcher {
     private readonly providers: Map<string, TaskProvider> = new Map();
+    /** Highest priority first, ties in registration order */
+    private readonly sorted: TaskProvider[];
 
     constructor(providers: TaskProvider[]) {
         for (const provider of providers) this.providers.set(provider.type, provider);
+        this.sorted = _.sortBy([...this.providers.values()], p => -p.highestPriority());
     }
 
     getTask(context: DispatchContext, validator?: (task: Order) => boolean): Order | null {
         const options: Order[] = [];
         let highest = -10;
-        const sorted = _.sortBy([...this.providers.values()], p => -p.highestPriority(context));
-        for (const provider of sorted) {
-            if (provider.highestPriority(context) < highest) break;
+        for (const provider of this.sorted) {
+            if (provider.highestPriority() < highest) break;
             for (const task of provider.tasks(context)) {
                 if (task.priority < highest) continue;
                 if (!provider.isValid(task, context)) continue;

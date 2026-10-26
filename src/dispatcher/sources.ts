@@ -44,7 +44,7 @@ type Withdrawable = StructureContainer | StructureStorage | StructureTerminal | 
 /** Base withdraw source */
 abstract class StoreSource implements TaskProvider {
     abstract readonly type: string;
-    abstract highestPriority(context: DispatchContext): number;
+    abstract highestPriority(): number;
     abstract tasks(context: DispatchContext): Order[];
 
     isValid(task: Order, context: DispatchContext): boolean {

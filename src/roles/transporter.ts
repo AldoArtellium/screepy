@@ -11,6 +11,7 @@ import { destinationDispatcher } from "../dispatcher/destinations";
 import { sourceDispatcher } from "../dispatcher/sources";
 import { countCreep } from "../utils/history";
 import { countStat } from "../utils/stats";
+import { roomPlanner } from "../planner/RoomPlanner";
 import { registerRole } from "./registry";
 
 declare global {
@@ -64,6 +65,8 @@ export function runTransporter(creep: Creep): void {
 
 /** Leave a bay center we are not filling when it has a single way out (we would block it) */
 function unblockBay(creep: Creep): boolean {
+    // Bays are the plan's bay centers (roomBays): an O(1) test spares the bay list on every other tile
+    if (!roomPlanner.getPlan(creep.room.name)?.has(creep.pos, "bay_center")) return false;
     const order = creep.memory.order;
     for (const bay of roomBays(creep.room)) {
         if (!bay.pos.isEqualTo(creep.pos)) continue;

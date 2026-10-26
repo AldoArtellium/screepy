@@ -32,7 +32,7 @@ function carriesEnergy(context: DispatchContext): boolean {
 /** Base structure destination: valid while it has room; one transfer ends the order */
 abstract class StructureDestination implements TaskProvider {
     abstract readonly type: string;
-    abstract highestPriority(context: DispatchContext): number;
+    abstract highestPriority(): number;
     abstract tasks(context: DispatchContext): Order[];
 
     isValid(task: Order, context: DispatchContext): boolean {
