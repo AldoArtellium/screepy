@@ -26,7 +26,9 @@ import { roomPlanner } from "../planner/RoomPlanner";
 import {
     DefenseOption,
     REMOTE_DEFENDER,
+    REMOTE_DEFENDER_BOOST_TIMEOUT,
     remoteDefenderBody,
+    remoteDefenderBoosts,
     remoteDefenderMemory,
     remoteDefenseOptions
 } from "../remote/remoteDefense";
@@ -627,7 +629,14 @@ const remoteDefense: SpawnRole = {
 
     memory(room, option) {
         return remoteDefenderMemory(room, option as DefenseOption);
-    }
+    },
+
+    /** Only for a defender that wins boosted (remote/defenseModel.ts boostedResponse) */
+    boosts(room, option, body) {
+        return remoteDefenderBoosts(room, option as DefenseOption, body);
+    },
+
+    boostTimeout: REMOTE_DEFENDER_BOOST_TIMEOUT
 };
 
 /** Guardians: melee, one ranged for every 4 guardians */

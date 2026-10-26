@@ -7,6 +7,13 @@
 import { energyPrice } from "../modules/MarketManager";
 import { remoteSources } from "../remote/RemoteMining";
 import { lootRamparts } from "./loot";
+import {
+    aggressionFromEvents,
+    AGGRESSION_DECAY,
+    AGGRESSION_DECAY_EVERY,
+    AttackEventItem,
+    decayAggression
+} from "./playerThreat";
 import { lootValue, RAID_MIN_LOOT } from "./roi";
 
 export interface HostileRoom {
@@ -73,6 +80,10 @@ declare global {
             rooms?: { [room: string]: HostileRoom };
             /** Energy each player made us lose (decays) */
             infamy?: { [player: string]: number };
+            /** Damage each player's creeps dealt to ours in our rooms and remotes (decays; playerThreat.ts) */
+            aggression?: { [player: string]: number };
+            /** Tick of the last aggression decay */
+            aggressionDecayed?: number;
             /** Rooms looted after a successful attack (loot.ts) */
             loot?: { [room: string]: import("./loot").LootMission };
         };
@@ -130,7 +141,8 @@ function roomLoot(room: Room, ours: Set<string>): number {
     for (const ruin of room.find(FIND_RUINS)) add(ruin.store);
     for (const s of room.find(FIND_STRUCTURES)) {
         if (s.structureType === STRUCTURE_CONTAINER && !mined) add(s.store);
-        else if ((s.structureType === STRUCTURE_STORAGE || s.structureType === STRUCTURE_TERMINAL) && !s.my) add(s.store);
+        else if ((s.structureType === STRUCTURE_STORAGE || s.structureType === STRUCTURE_TERMINAL) && !s.my)
+            add(s.store);
     }
     return Math.round(lootValue(store, r => energyPrice(r as ResourceConstant)));
 }
@@ -181,9 +193,8 @@ function bodyCost(creep: Creep): number {
 }
 
 /** Infamy: energy value of the player creeps that came into our rooms or remotes */
-function recordInfamy(): void {
+function recordInfamy(ours: Set<string>): void {
     const memory = militaryMemory();
-    const ours = ourRooms();
     for (const roomName of ours) {
         const room = Game.rooms[roomName];
         if (!room) continue;
@@ -205,11 +216,79 @@ function recordInfamy(): void {
     }
 }
 
-/** Every RECORD_EVERY ticks: hostile rooms in sight; every tick: infamy */
+/** Player creeps able to hurt us (ATTACK, RANGED_ATTACK, WORK to dismantle) seen in a room on a tick */
+interface ArmedSnapshot {
+    tick: number;
+    /** Armed hostile creep id -> owner (the attacker may be dead when its event is read) */
+    hostiles: Map<string, string>;
+    /** Our creeps in the room (a target killed by the attack is gone too) */
+    ours: Set<string>;
+}
+
+/** Rooms of ours with armed player creeps last tick (heap) */
+const armedRooms: { [room: string]: ArmedSnapshot } = {};
+
+function isArmed(creep: Creep): boolean {
+    return creep.body.some(p => p.hits > 0 && (p.type === ATTACK || p.type === RANGED_ATTACK || p.type === WORK));
+}
+
+/** A target of ours: our creep (alive or seen last tick), our structure, or an unowned one (road, container) in our room or remote */
+function isOursIn(snapshot: ArmedSnapshot): (id: string) => boolean {
+    return id => {
+        if (snapshot.ours.has(id)) return true;
+        const object = Game.getObjectById(id as Id<Creep | Structure>);
+        if (!object) return false;
+        if (object instanceof Creep) return object.my;
+        const owned = object as OwnedStructure;
+        return owned.owner ? owned.my : true;
+    };
+}
+
+/**
+ * Aggression: damage dealt to us by player creeps in our rooms and remotes, from the event log of the
+ * rooms where armed player creeps stood last tick (only there: getEventLog parses the room's log)
+ */
+function recordAggression(ours: Set<string>): void {
+    const memory = militaryMemory();
+    for (const roomName of ours) {
+        const room = Game.rooms[roomName];
+        const previous = armedRooms[roomName];
+        delete armedRooms[roomName];
+        if (!room) continue;
+        if (previous?.tick === Game.time - 1) {
+            const damage = aggressionFromEvents(
+                room.getEventLog() as unknown as AttackEventItem[],
+                id => previous.hostiles.get(id),
+                isOursIn(previous)
+            );
+            for (const player in damage) {
+                memory.aggression = memory.aggression ?? {};
+                memory.aggression[player] = (memory.aggression[player] ?? 0) + damage[player];
+            }
+        }
+        const armed = room.find(FIND_HOSTILE_CREEPS, { filter: c => !NPC.includes(c.owner.username) && isArmed(c) });
+        if (armed.length === 0) continue;
+        armedRooms[roomName] = {
+            tick: Game.time,
+            hostiles: new Map(armed.map(c => [c.id as string, c.owner.username])),
+            ours: new Set(room.find(FIND_MY_CREEPS).map(c => c.id as string))
+        };
+    }
+    // Elapsed ticks, not Game.time %: a skipped tick would miss the decay
+    const decayed = memory.aggressionDecayed ?? Game.time;
+    const periods = Math.floor((Game.time - decayed) / AGGRESSION_DECAY_EVERY);
+    if (periods > 0 && memory.aggression) decayAggression(memory.aggression, Math.pow(AGGRESSION_DECAY, periods));
+    if (periods > 0 || memory.aggressionDecayed === undefined)
+        memory.aggressionDecayed = decayed + periods * AGGRESSION_DECAY_EVERY;
+    if (memory.aggression && Object.keys(memory.aggression).length === 0) delete memory.aggression;
+}
+
+/** Every RECORD_EVERY ticks: hostile rooms in sight; every tick: infamy and aggression */
 export function updateMilitaryIntel(): void {
-    recordInfamy();
-    if (Game.time % RECORD_EVERY !== 0) return;
     const ours = ourRooms();
+    recordInfamy(ours);
+    recordAggression(ours);
+    if (Game.time % RECORD_EVERY !== 0) return;
     for (const name in Game.rooms) recordRoom(Game.rooms[name], ours);
     const rooms = militaryMemory().rooms ?? {};
     for (const name in rooms) if (Game.time - rooms[name].t > FORGET_AFTER) delete rooms[name];

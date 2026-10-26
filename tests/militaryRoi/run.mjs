@@ -2,6 +2,7 @@
  * Offline check of military/roi: a target is only attacked automatically when what it brings (loot in
  * energy, remote income a stronghold blocks, a player's infamy) pays for the squad and its
  * replacements; the best return wins, the current target is kept unless another does clearly better.
+ * Players that look stronger (playerThreat.ts) are left alone unless their creeps hurt us.
  *
  *   node tests/militaryRoi/run.mjs
  */
@@ -24,6 +25,7 @@ try {
             "--outDir", OUT, "--rootDir", join(ROOT, "src"), "--module", "commonjs", "--target", "es2019", "--skipLibCheck",
             "--types", "screeps,lodash",
             join(ROOT, "src", "military", "roi.ts"),
+            join(ROOT, "src", "military", "playerThreat.ts"),
         ],
         { stdio: "pipe" }
     );
@@ -173,6 +175,60 @@ check("looters: nothing left", lootersNeeded(0, 1, 1250) === 0);
 // Cost: looters + a dismantler when ramparts cover the loot
 check("raid cost with ramparts", raidCost(50000, 1, 2500, 1250, 3750, true) === 3 * 2500 + 3750, raidCost(50000, 1, 2500, 1250, 3750, true));
 check("raid cost without ramparts", raidCost(50000, 1, 2500, 1250, 3750, false) === 3 * 2500);
+
+// Players we may attack automatically (playerThreat.ts): not one with more rooms seen than we own,
+// unless their creeps hurt us. shard0 2026-10-26: Blindfold (GCL ~9) with 6 rooms seen, we own 4.
+const {
+    playerRoomCounts, looksStronger, mayTargetPlayer, aggressionFromEvents, decayAggression,
+    AGGRESSION_HOSTILE, ROOMS_SEEN_AGE
+} = require(join(OUT, "military", "playerThreat.js"));
+const T = 78581400;
+const blindfold = ["W28N3", "W26N3", "W24N3", "W23N4", "W27N2", "W25N7"].map(room => ({ room, owner: "Blindfold", seen: T - 2000 }));
+const seenRooms = [
+    ...blindfold,
+    // The static intel lists the same room: counted once
+    { room: "W25N7", owner: "Blindfold", seen: T - 100 },
+    { room: "W28N8", owner: "doorknobnob", seen: T - 500 },
+    { room: "W27N9", owner: "doorknobnob", seen: T - 500 },
+    // Seen too long ago
+    { room: "W20N1", owner: "doorknobnob", seen: T - ROOMS_SEEN_AGE - 1 },
+    // Lost since: the freshest record wins
+    { room: "W29N3", owner: "doorknobnob", seen: T - 9000 },
+    { room: "W29N3", owner: undefined, seen: T - 100 },
+];
+const counts = playerRoomCounts(seenRooms, T);
+check("Blindfold: 6 distinct rooms", counts.Blindfold === 6, JSON.stringify(counts));
+check("doorknobnob: 2 rooms (stale and lost ones left out)", counts.doorknobnob === 2, JSON.stringify(counts));
+check("6 rooms against our 4: stronger", looksStronger(6, 4));
+check("equal rooms: not stronger (mockup enemy bot, 1 against 1)", !looksStronger(1, 1));
+check("Blindfold left alone without aggression", !mayTargetPlayer(counts.Blindfold, 4, 0));
+check("Blindfold left alone below the hostile threshold", !mayTargetPlayer(counts.Blindfold, 4, AGGRESSION_HOSTILE - 1));
+check("Blindfold attacked after hurting us", mayTargetPlayer(counts.Blindfold, 4, AGGRESSION_HOSTILE));
+check("doorknobnob (2 rooms) attackable", mayTargetPlayer(counts.doorknobnob, 4, 0));
+check("unknown player (0 rooms seen) attackable", mayTargetPlayer(0, 1, 0));
+
+// Aggression from the event log: their creeps' damage on ours, hits back and unknown attackers left out
+const owners = { a1: "Blindfold", a2: "doorknobnob" };
+const ourIds = new Set(["c1", "s1"]);
+const events = [
+    { event: 1, objectId: "a1", data: { targetId: "c1", damage: 120, attackType: 1 } },
+    { event: 1, objectId: "a1", data: { targetId: "s1", damage: 50, attackType: 4 } },
+    // Our melee creep hit theirs and took the hit back: our aggression
+    { event: 1, objectId: "a2", data: { targetId: "c1", damage: 60, attackType: 5 } },
+    // Their creep on someone else's creep
+    { event: 1, objectId: "a2", data: { targetId: "x1", damage: 90, attackType: 2 } },
+    // Our creep attacking theirs (we are not in the owner table)
+    { event: 1, objectId: "c1", data: { targetId: "a1", damage: 300, attackType: 1 } },
+    // Not an attack (harvest)
+    { event: 5, objectId: "a2", data: { targetId: "c1", amount: 10 } },
+];
+const damage = aggressionFromEvents(events, id => owners[id], id => ourIds.has(id));
+check("aggression: melee + dismantle on ours", damage.Blindfold === 170, JSON.stringify(damage));
+check("aggression: hit back and other targets ignored", damage.doorknobnob === undefined, JSON.stringify(damage));
+const aggression = { Blindfold: 400, doorknobnob: 1.02 };
+decayAggression(aggression);
+check("decay x0.95", Math.abs(aggression.Blindfold - 380) < 1e-9, aggression.Blindfold);
+check("decay drops players below 1", aggression.doorknobnob === undefined, JSON.stringify(aggression));
 
 console.log(failures === 0 ? "\nall checks passed" : `\n${failures} check(s) failed`);
 process.exit(failures === 0 ? 0 : 1);

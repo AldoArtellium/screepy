@@ -13,7 +13,7 @@
 import { creepsByRole } from "../core/roomState";
 import { claimingSquadsOf } from "../expansion/Expansion";
 import { intelManager } from "../modules/IntelManager";
-import { hasInvaderCore, isRoomUnderAttack } from "../modules/RoomIntel";
+import { hasInvaderCore, isRoomContested, isRoomUnderAttack } from "../modules/RoomIntel";
 import { roomPlanner } from "../planner/RoomPlanner";
 import { log } from "../utils/logger";
 import { spawnManager } from "../modules/SpawnManager";
@@ -38,7 +38,7 @@ import {
 import { blockerCost } from "./blockers";
 import { isRemoteExcluded } from "./remoteBalance";
 import { isRemoteBlocked } from "./remoteRooms";
-import { Hits, repairsDue } from "./repairs";
+import { Hits, PathNeed, pathNeed, repairsDue, Tile, upkeepWork } from "./repairs";
 
 export interface RemoteSource {
     /** `${room}:${x}:${y}` */
@@ -183,9 +183,12 @@ function pathRooms(source: RemoteSource): string[] {
     return rooms.includes(source.room) ? rooms : rooms.concat(source.room);
 }
 
-/** Another player's room or remote, or a source keeper room: never crossed on the way to a remote (remoteRooms.ts) */
+/**
+ * Another player's room or remote (reserved, or mined / reserved by them within ~20000 ticks), or a
+ * source keeper room: never mined nor crossed on the way to a remote (remoteRooms.ts)
+ */
 function isBlockedRoom(roomName: string): boolean {
-    return isRemoteBlocked(roomName, intelManager.getIntel(roomName), Memory.username);
+    return isRemoteBlocked(roomName, intelManager.getIntel(roomName), Memory.username, isRoomContested(roomName));
 }
 
 /** Positions of a packed path; the array is shared, don't modify it */
@@ -402,12 +405,15 @@ function worldTile(roomName: string, x: number, y: number): { x: number; y: numb
     return { x: world.wx * 50 + x, y: world.wy * 50 + y };
 }
 
-/** Remote room candidates of a home room: known, not owned, not source keeper, within 3 rooms */
+/**
+ * Remote room candidates of a home room: known, not owned, not source keeper, not another player's
+ * remote (their reservation, or contested: see remoteRooms.ts), within 3 rooms
+ */
 function candidateRooms(home: Room): string[] {
     return roomsInRange(home.name, MAX_ROOM_DISTANCE).filter(roomName => {
         const intel = intelManager.getIntel(roomName);
         if (!intel?.sources?.length) return false;
-        if (intel.owner || intel.hasSourceKeepers) return false;
+        if (intel.owner || isBlockedRoom(roomName)) return false;
         const route = Game.map.findRoute(home.name, roomName);
         return route !== ERR_NO_PATH && route.length <= MAX_ROOM_DISTANCE;
     });
@@ -703,7 +709,7 @@ function selectRemotes(): void {
                     distance: path.length,
                     roads,
                     // maintenanceWork() for a path not selected yet
-                    maintenanceWork: roads ? Math.ceil(0.7 + 0.03 * path.filter(p => !isOwnedRoom(p.roomName)).length) : 0
+                    maintenanceWork: roads ? upkeepWork(path.filter(p => !isOwnedRoom(p.roomName)).length, path.length) : 0
                 };
                 const sourceIncome = sourceNet(economy);
                 // A source that barely pays for its creeps is left out
@@ -814,6 +820,23 @@ export function remoteSources(homeRoom: string): RemoteSource[] {
         _.filter(memory().sources, s => s.homeRoom === homeRoom),
         s => s.travelTime
     );
+}
+
+/** "home>room" of every selected source, rebuilt once per tick (heap) */
+const minedRooms: Set<string> = new Set();
+let minedRoomsTick = -1;
+
+/** A home mines a source in the room (cheap: reservers check it every tick) */
+export function isRemoteRoomMined(homeRoom: string, roomName: string): boolean {
+    if (minedRoomsTick !== Game.time) {
+        minedRoomsTick = Game.time;
+        minedRooms.clear();
+        for (const key in memory().sources) {
+            const source = memory().sources[key];
+            minedRooms.add(`${source.homeRoom}>${source.room}`);
+        }
+    }
+    return minedRooms.has(`${homeRoom}>${roomName}`);
 }
 
 export function getRemoteSource(key: string | undefined): RemoteSource | undefined {
@@ -928,9 +951,58 @@ export function remoteRoadPath(source: RemoteSource): RoomPosition[] {
     return remotePath(source).filter(p => !isOwnedRoom(p.roomName));
 }
 
-/** WORK parts to keep a source's container and roads up: ceil(0.7 + 0.03 per tile outside our rooms) */
+/**
+ * Steady remote builder WORK a source's roads cost, for the selection's estimate (repairs.ts upkeepWork;
+ * was ceil(0.7 + 0.03 per tile outside our rooms), also the spawn demand: see repairs.ts builderWork)
+ */
 export function maintenanceWork(source: RemoteSource): number {
-    return inHeap(`maintWork:${source.key}`, 500, () => Math.ceil(0.7 + 0.03 * remoteRoadPath(source).length));
+    return inHeap(`maintWork:${source.key}`, 500, () => upkeepWork(remoteRoadPath(source).length, source.travelTime));
+}
+
+/** Last need seen per source and room of its path (heap), used while the room is out of sight */
+const knownNeeds = new Map<string, PathNeed & { time: number }>();
+/** Age past which an out-of-sight room's last need is forgotten (counts as nothing) */
+const KNOWN_NEED_TTL = 5000;
+
+/** A path tile seen: its structure, else its construction site, else missing (null; a swamp road costs 5x) */
+function tileState(pos: RoomPosition, type: BuildableStructureConstant): Tile {
+    const structure = pos.lookFor(LOOK_STRUCTURES).find(s => s.structureType === type);
+    if (structure) return structure;
+    const site = pos.lookFor(LOOK_CONSTRUCTION_SITES).find(s => s.structureType === type);
+    if (site) return { buildLeft: site.progressTotal - site.progress };
+    if (type === STRUCTURE_ROAD && Game.map.getRoomTerrain(pos.roomName).get(pos.x, pos.y) === TERRAIN_MASK_SWAMP) {
+        return { buildLeft: CONSTRUCTION_COST[STRUCTURE_ROAD] * CONSTRUCTION_COST_ROAD_SWAMP_RATIO };
+    }
+    return null;
+}
+
+/**
+ * Repair hits and build energy left on a source's container and remote roads (repairs.ts pathNeed). A
+ * room out of sight counts what was last seen there within KNOWN_NEED_TTL, else nothing.
+ */
+export function repairNeed(source: RemoteSource): PathNeed {
+    return inHeap(`repairNeed:${source.key}`, 50, () => {
+        const byRoom = _.groupBy(remoteRoadPath(source), p => p.roomName);
+        const container = containerPos(source);
+        if (container && !byRoom[container.roomName]) byRoom[container.roomName] = [];
+        const total: PathNeed = { repairHits: 0, buildEnergy: 0 };
+        for (const roomName in byRoom) {
+            const key = `${source.key}|${roomName}`;
+            let need: PathNeed | undefined;
+            if (Game.rooms[roomName]) {
+                const containerTile = container?.roomName === roomName ? tileState(container, STRUCTURE_CONTAINER) : undefined;
+                need = pathNeed(containerTile, byRoom[roomName].map(pos => tileState(pos, STRUCTURE_ROAD)));
+                knownNeeds.set(key, { ...need, time: Game.time });
+            } else {
+                const known = knownNeeds.get(key);
+                if (known && Game.time - known.time <= KNOWN_NEED_TTL) need = known;
+            }
+            if (!need) continue;
+            total.repairHits += need.repairHits;
+            total.buildEnergy += need.buildEnergy;
+        }
+        return total;
+    });
 }
 
 /** Hits missing on a tile (out of sight: nothing); missing structure: its build cost x 100 */

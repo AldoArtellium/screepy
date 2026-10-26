@@ -92,6 +92,18 @@ jobs:
       - name: Remote blocked rooms check
         run: node tests/remoteRooms/run.mjs
 
+      - name: Remote defense check
+        run: node tests/remoteDefense/run.mjs
+
+      - name: Remote repairs check
+        run: node tests/remoteRepairs/run.mjs
+
+      - name: Remote income and CPU budget check
+        run: node tests/remoteIncome/run.mjs
+
+      - name: Scouting check
+        run: node tests/scouting/run.mjs
+
       - uses: actions/upload-artifact@v4
         with:
           name: bundle

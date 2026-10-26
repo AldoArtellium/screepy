@@ -9,7 +9,8 @@
  * 2. Player rooms, unless `Memory.military.auto = false` (on by default since 2026-10-25): their loot seen in
  *    sight (storage, terminal, containers), the energy the player made us lose (infamy) and the remote
  *    sources its fall frees next to our rooms (roi.ts freedSources, REMOTE_HORIZON ticks of income);
- *    rooms in safe mode or without spawn are skipped.
+ *    rooms in safe mode or without spawn are skipped, and so are the rooms of a player who looks
+ *    stronger (more rooms seen than we own) unless their creeps hurt us recently (playerThreat.ts).
  * Under CPU pressure (remote budget capped, or CPU above 85%) the squad's CPU is priced in energy
  * (roi.ts squadCpu x a neutral remote source's energy per CPU): the remote budget gives that CPU up.
  * Rooms that failed in the last FAILURE_MEMORY ticks are left alone, and only targets the chosen squad
@@ -22,7 +23,9 @@ import { intelManager } from "../modules/IntelManager";
 import { cpuPressure, neutralEnergyPerCpu } from "../remote/remoteIncome";
 import { remoteSources, spawnBusyShare } from "../remote/RemoteMining";
 import { roomCountersSince } from "../utils/history";
+import { log } from "../utils/logger";
 import { HostileRoom, militaryMemory } from "./intel";
+import { mayTargetPlayer, OwnedRoomSeen, playerRoomCounts } from "./playerThreat";
 import {
     ATTRITION,
     freedSources,
@@ -144,10 +147,36 @@ function holdings(): RoomHolding[] {
     }));
 }
 
-function isPlayerTarget(intel: HostileRoom): boolean {
+/** Rooms seen owned by each player (military intel and static intel, playerThreat.ts playerRoomCounts) */
+function playerRooms(): { [player: string]: number } {
+    const seen: OwnedRoomSeen[] = Object.entries(militaryMemory().rooms ?? {}).map(([room, r]) => ({
+        room,
+        owner: r.owner,
+        seen: r.t
+    }));
+    for (const [room, intel] of Object.entries(intelManager.allIntel()))
+        seen.push({ room, owner: intel.owner, seen: intel.lastScouted });
+    return playerRoomCounts(seen, Game.time);
+}
+
+/** Players skipped because they look stronger (logged once per player and heap) */
+const skippedLogged: Set<string> = new Set();
+
+function isPlayerTarget(intel: HostileRoom, counts: { [player: string]: number }, ours: number): boolean {
     if (militaryMemory().auto === false) return false;
     if (!intel.owner || intel.owner === Memory.username || intel.spawns === 0) return false;
-    return (intel.safeMode ?? 0) <= Game.time;
+    if ((intel.safeMode ?? 0) > Game.time) return false;
+    const aggression = militaryMemory().aggression?.[intel.owner] ?? 0;
+    if (mayTargetPlayer(counts[intel.owner] ?? 0, ours, aggression)) return true;
+    if (!skippedLogged.has(intel.owner)) {
+        skippedLogged.add(intel.owner);
+        log.info(
+            "Military",
+            `${intel.owner} left alone: ${counts[intel.owner]} rooms seen for our ${ours},`,
+            `aggression ${Math.round(aggression)}`
+        );
+    }
+    return false;
 }
 
 /** Every feasible target with its return (value / cost in energy) */
@@ -157,9 +186,15 @@ export function rankTargets(): AutoTarget[] {
     const targets: AutoTarget[] = [];
     if (from.length === 0) return targets;
     const income = incomePerTick();
+    const counts = playerRooms();
+    const ours = ownedRooms().length;
     for (const [roomName, intel] of Object.entries(memory.rooms ?? {})) {
         if (recentlyFailed(roomName)) continue;
-        const reason = isStronghold(intel, roomName) ? "stronghold" : isPlayerTarget(intel) ? "player" : null;
+        const reason = isStronghold(intel, roomName)
+            ? "stronghold"
+            : isPlayerTarget(intel, counts, ours)
+              ? "player"
+              : null;
         if (!reason) continue;
         const near = feasibleOrigin(from, roomName);
         if (!near) continue;
@@ -189,7 +224,7 @@ export function rankTargets(): AutoTarget[] {
         const value = targetValue({
             loot: intel.loot ?? 0,
             remote,
-            infamy: reason === "player" ? memory.infamy?.[intel.owner!] ?? 0 : 0
+            infamy: reason === "player" ? (memory.infamy?.[intel.owner!] ?? 0) : 0
         });
         targets.push({ room: roomName, reason, roi: value / cost, value: Math.round(value), cost, cpu, spawnTime });
     }
