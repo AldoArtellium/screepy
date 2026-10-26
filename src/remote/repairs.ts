@@ -19,6 +19,18 @@ export interface Hits {
 export const REPAIR_BATCH_HITS = 50000;
 
 /**
+ * Room edge tile: the engine refuses construction sites there, so no road ever stands on the exit tiles a
+ * remote path crosses. Counted as missing roads, they kept every remote source due forever: shard0
+ * 2026-10-26 (tick 78586600), all 13 selected paths had 1-6 edge tiles without road in the remote rooms,
+ * every other tile a road, none below a third, at most 28.5k hits missing per path and every container
+ * above half, yet each home with remotes kept one remote builder (sized up to the 4-WORK build floor by
+ * the 300 energy of each "missing" edge road) walking the paths for ~1 energy per tick of repairs.
+ */
+export function onRoomEdge(pos: { x: number; y: number }): boolean {
+    return pos.x <= 0 || pos.y <= 0 || pos.x >= 49 || pos.y >= 49;
+}
+
+/**
  * Container and road tiles of a path: an object when seen, null when missing (to build), undefined when
  * out of sight (nothing known)
  */

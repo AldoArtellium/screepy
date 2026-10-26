@@ -38,7 +38,8 @@ const {
     energyPerWorkLife,
     upkeepWork,
     MIN_REPAIR_WORK,
-    MIN_BUILD_WORK
+    MIN_BUILD_WORK,
+    onRoomEdge
 } = require(join(OUT, "remote", "repairs.js"));
 
 let failures = 0;
@@ -100,6 +101,25 @@ const fresh = builderWork([need(container, Array.from({ length: 100 }, () => nul
 check("new path of 100 roads: above the body cap", fresh >= 50, `${fresh} WORK`);
 check("one small site: the build floor", builderWork([need(container, [{ buildLeft: 100 }], 100)]) === MIN_BUILD_WORK);
 check("everything out of sight: no WORK", builderWork([need(undefined, [undefined, undefined], 100)]) === 0);
+
+// ------------------------------------------------------------------ room edge tiles
+console.log("\nroom edge tiles (no road can stand there)");
+check("edge tiles", onRoomEdge({ x: 0, y: 20 }) && onRoomEdge({ x: 49, y: 20 }) && onRoomEdge({ x: 20, y: 0 }) && onRoomEdge({ x: 20, y: 49 }));
+check("inner tiles", !onRoomEdge({ x: 1, y: 1 }) && !onRoomEdge({ x: 48, y: 48 }) && !onRoomEdge({ x: 25, y: 25 }));
+// shard0 2026-10-26, W29N6:5:36 from W29N7: 40 path tiles in W29N6, the entry tile (49, 30) without road
+// (roads are never built on edges), the 39 others roads missing ~28k hits in all (28510 live), none below a third
+const entry = { x: 49, y: 30, road: null };
+const inner = Array.from({ length: 39 }, (_, i) => ({ x: 48 - (i % 40), y: 30, road: road(i < 38 ? 4270 : 4770) }));
+const tiles = [entry, ...inner];
+const missingHits = inner.reduce((s, t) => s + t.road.hitsMax - t.road.hits, 0);
+const cont = { hits: 249400, hitsMax: 250000 };
+check("shard0 W29N6:5:36 with its edge tile: due (the old bug)", repairsDue(cont, tiles.map(t => t.road)), `${missingHits} hits missing`);
+const kept = tiles.filter(t => !onRoomEdge(t)).map(t => t.road);
+check("shard0 W29N6:5:36 without edge tiles: not due", !repairsDue(cont, kept));
+const edgeWork = builderWork([need(cont, tiles.map(t => t.road), 65)]);
+check("edge tile counted as a road to build: the 4-WORK build floor (the old bug)", edgeWork === MIN_BUILD_WORK, `${edgeWork} WORK`);
+const keptWork = builderWork([need(cont, kept, 65)]);
+check("without edge tiles: repairs only (2-WORK floor), and only spawned once due", keptWork === MIN_REPAIR_WORK, `${keptWork} WORK`);
 
 // Selection estimate: steady upkeep of the roads, a fraction of the home's one builder
 const up = upkeepWork(100, 100);
