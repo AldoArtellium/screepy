@@ -26,46 +26,46 @@ const EVENT_ATTACK_ID = 1;
 const ATTACK_TYPE_HIT_BACK = 5;
 
 export interface OwnedRoomSeen {
-  room: string;
-  owner?: string;
-  /** Tick the owner was seen */
-  seen: number;
+    room: string;
+    owner?: string;
+    /** Tick the owner was seen */
+    seen: number;
 }
 
 /** Distinct rooms of each player seen within ROOMS_SEEN_AGE (a room listed twice counts once, the freshest owner wins) */
 export function playerRoomCounts(
-  seen: OwnedRoomSeen[],
-  now: number,
-  maxAge = ROOMS_SEEN_AGE
+    seen: OwnedRoomSeen[],
+    now: number,
+    maxAge = ROOMS_SEEN_AGE
 ): { [player: string]: number } {
-  const latest: { [room: string]: OwnedRoomSeen } = {};
-  for (const entry of seen) {
-    if (now - entry.seen > maxAge) continue;
-    const previous = latest[entry.room];
-    if (!previous || entry.seen > previous.seen) latest[entry.room] = entry;
-  }
-  const counts: { [player: string]: number } = {};
-  for (const { owner } of Object.values(latest)) if (owner) counts[owner] = (counts[owner] ?? 0) + 1;
-  return counts;
+    const latest: { [room: string]: OwnedRoomSeen } = {};
+    for (const entry of seen) {
+        if (now - entry.seen > maxAge) continue;
+        const previous = latest[entry.room];
+        if (!previous || entry.seen > previous.seen) latest[entry.room] = entry;
+    }
+    const counts: { [player: string]: number } = {};
+    for (const { owner } of Object.values(latest)) if (owner) counts[owner] = (counts[owner] ?? 0) + 1;
+    return counts;
 }
 
 export function looksStronger(theirRooms: number, ourRooms: number): boolean {
-  return theirRooms > ourRooms;
+    return theirRooms > ourRooms;
 }
 
 export function isAggressive(aggression: number): boolean {
-  return aggression >= AGGRESSION_HOSTILE;
+    return aggression >= AGGRESSION_HOSTILE;
 }
 
 /** A player's room is an automatic target unless the player looks stronger and has not attacked us */
 export function mayTargetPlayer(theirRooms: number, ourRooms: number, aggression: number): boolean {
-  return !looksStronger(theirRooms, ourRooms) || isAggressive(aggression);
+    return !looksStronger(theirRooms, ourRooms) || isAggressive(aggression);
 }
 
 export interface AttackEventItem {
-  event: number;
-  objectId: string;
-  data?: { targetId?: string; damage?: number; attackType?: number };
+    event: number;
+    objectId: string;
+    data?: { targetId?: string; damage?: number; attackType?: number };
 }
 
 /**
@@ -73,25 +73,25 @@ export interface AttackEventItem {
  * on an object `isOurs` accepts. Hits back (our melee creep's attack answered) are ours, not theirs.
  */
 export function aggressionFromEvents(
-  events: AttackEventItem[],
-  ownerOf: (id: string) => string | undefined,
-  isOurs: (id: string) => boolean
+    events: AttackEventItem[],
+    ownerOf: (id: string) => string | undefined,
+    isOurs: (id: string) => boolean
 ): { [player: string]: number } {
-  const damage: { [player: string]: number } = {};
-  for (const { event, objectId, data } of events) {
-    if (event !== EVENT_ATTACK_ID || !data?.targetId || !data.damage) continue;
-    if (data.attackType === ATTACK_TYPE_HIT_BACK) continue;
-    const owner = ownerOf(objectId);
-    if (!owner || !isOurs(data.targetId)) continue;
-    damage[owner] = (damage[owner] ?? 0) + data.damage;
-  }
-  return damage;
+    const damage: { [player: string]: number } = {};
+    for (const { event, objectId, data } of events) {
+        if (event !== EVENT_ATTACK_ID || !data?.targetId || !data.damage) continue;
+        if (data.attackType === ATTACK_TYPE_HIT_BACK) continue;
+        const owner = ownerOf(objectId);
+        if (!owner || !isOurs(data.targetId)) continue;
+        damage[owner] = (damage[owner] ?? 0) + data.damage;
+    }
+    return damage;
 }
 
 /** Decay every AGGRESSION_DECAY_EVERY ticks (in place), players below 1 dropped */
 export function decayAggression(aggression: { [player: string]: number }, factor = AGGRESSION_DECAY): void {
-  for (const player in aggression) {
-    aggression[player] *= factor;
-    if (aggression[player] < 1) delete aggression[player];
-  }
+    for (const player in aggression) {
+        aggression[player] *= factor;
+        if (aggression[player] < 1) delete aggression[player];
+    }
 }
