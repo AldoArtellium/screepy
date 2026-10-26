@@ -26,6 +26,7 @@ try {
             "--types", "screeps,lodash",
             join(ROOT, "src", "military", "roi.ts"),
             join(ROOT, "src", "military", "playerThreat.ts"),
+            join(ROOT, "src", "military", "strategy.ts"),
         ],
         { stdio: "pipe" }
     );
@@ -176,11 +177,10 @@ check("looters: nothing left", lootersNeeded(0, 1, 1250) === 0);
 check("raid cost with ramparts", raidCost(50000, 1, 2500, 1250, 3750, true) === 3 * 2500 + 3750, raidCost(50000, 1, 2500, 1250, 3750, true));
 check("raid cost without ramparts", raidCost(50000, 1, 2500, 1250, 3750, false) === 3 * 2500);
 
-// Players we may attack automatically (playerThreat.ts): not one with more rooms seen than we own,
-// unless their creeps hurt us. shard0 2026-10-26: Blindfold (GCL ~9) with 6 rooms seen, we own 4.
+// Player size (playerThreat.ts): rooms seen owned. shard0 2026-10-26: Blindfold (GCL ~9) with 6 rooms
+// seen, we own 4.
 const {
-    playerRoomCounts, looksStronger, mayTargetPlayer, aggressionFromEvents, decayAggression,
-    AGGRESSION_HOSTILE, ROOMS_SEEN_AGE
+    playerRoomCounts, looksStronger, aggressionFromEvents, decayAggression, AGGRESSION_HOSTILE, ROOMS_SEEN_AGE
 } = require(join(OUT, "military", "playerThreat.js"));
 const T = 78581400;
 const blindfold = ["W28N3", "W26N3", "W24N3", "W23N4", "W27N2", "W25N7"].map(room => ({ room, owner: "Blindfold", seen: T - 2000 }));
@@ -201,11 +201,6 @@ check("Blindfold: 6 distinct rooms", counts.Blindfold === 6, JSON.stringify(coun
 check("doorknobnob: 2 rooms (stale and lost ones left out)", counts.doorknobnob === 2, JSON.stringify(counts));
 check("6 rooms against our 4: stronger", looksStronger(6, 4));
 check("equal rooms: not stronger (mockup enemy bot, 1 against 1)", !looksStronger(1, 1));
-check("Blindfold left alone without aggression", !mayTargetPlayer(counts.Blindfold, 4, 0));
-check("Blindfold left alone below the hostile threshold", !mayTargetPlayer(counts.Blindfold, 4, AGGRESSION_HOSTILE - 1));
-check("Blindfold attacked after hurting us", mayTargetPlayer(counts.Blindfold, 4, AGGRESSION_HOSTILE));
-check("doorknobnob (2 rooms) attackable", mayTargetPlayer(counts.doorknobnob, 4, 0));
-check("unknown player (0 rooms seen) attackable", mayTargetPlayer(0, 1, 0));
 
 // Aggression from the event log: their creeps' damage on ours, hits back and unknown attackers left out
 const owners = { a1: "Blindfold", a2: "doorknobnob" };
@@ -229,6 +224,53 @@ const aggression = { Blindfold: 400, doorknobnob: 1.02 };
 decayAggression(aggression);
 check("decay x0.95", Math.abs(aggression.Blindfold - 380) < 1e-9, aggression.Blindfold);
 check("decay drops players below 1", aggression.doorknobnob === undefined, JSON.stringify(aggression));
+
+// --- Strategic interest (strategy.ts): a player's room is only attacked for a reason that serves our
+// growth. shard0 2026-10-26 (tick 78586437): 5 missions in ~25000 ticks, 17 creeps lost, no player had
+// hurt us (aggression empty) and the remote budget was full (6 of 6 rooms), so no freed source was usable.
+const {
+    spareRemoteRooms, usableSources, isAggressor, blocksExpansion, playerReason, AGGRESSION_RETALIATE, SOURCES_PER_ROOM
+} = require(join(OUT, "military", "strategy.js"));
+check("AGGRESSION_RETALIATE is 3000", AGGRESSION_RETALIATE === 3000);
+check("SOURCES_PER_ROOM is 2", SOURCES_PER_ROOM === 2);
+
+// Remote budget room left for freed sources
+check("budget uncapped: no limit", spareRemoteRooms(undefined, 7) === Infinity);
+check("shard0 budget full (6 of 6): no room", spareRemoteRooms(6, 6) === 0);
+check("budget dropped below the rooms mined: no room", spareRemoteRooms(5, 6) === 0);
+check("one free room", spareRemoteRooms(7, 6) === 1);
+check("usable: budget full", usableSources(4, 0) === 0);
+check("usable: one free room takes at most 2 sources", usableSources(4, 1) === 2);
+check("usable: uncapped", usableSources(4, Infinity) === 4);
+check("usable: nothing freed", usableSources(0, Infinity) === 0);
+
+// Aggressors: AGGRESSION_HOSTILE for a player no stronger than us, AGGRESSION_RETALIATE for a stronger one
+check("weaker player: aggressor from AGGRESSION_HOSTILE", isAggressor(AGGRESSION_HOSTILE, false));
+check("weaker player: not below", !isAggressor(AGGRESSION_HOSTILE - 1, false));
+check("stronger player: not at AGGRESSION_HOSTILE", !isAggressor(AGGRESSION_HOSTILE, true));
+check("stronger player: not just below AGGRESSION_RETALIATE", !isAggressor(AGGRESSION_RETALIATE - 1, true));
+check("stronger player: from AGGRESSION_RETALIATE", isAggressor(AGGRESSION_RETALIATE, true));
+
+// Expansion: the player reserves our expansion target from its closest room (strictly), or claimed it
+check("W28N8 reserves the expansion target W27N7", blocksExpansion("W28N8", "doorknobnob", "W27N7", shard0, dist, T0));
+check("W27N9 is farther from W27N7 than W28N8", !blocksExpansion("W27N9", "doorknobnob", "W27N7", shard0, dist, T0));
+check("no expansion target", !blocksExpansion("W28N8", "doorknobnob", undefined, shard0, dist, T0));
+check("another player's reservation", !blocksExpansion("W28N8", "doorknobnob", "W25N8", shard0, dist, T0));
+check("stale reservation", !blocksExpansion("W28N8", "doorknobnob", "W27N7", stale, dist, T0));
+const claimed = [...shard0, { room: "W26N6", owner: "doorknobnob", sources: 2, scouted: T0 - 100 }];
+check("the player claimed our expansion target", blocksExpansion("W26N6", "doorknobnob", "W26N6", claimed, dist, T0));
+check("W28N8 tied with W27N9 for W28N9: not alone to blame", !blocksExpansion("W28N8", "doorknobnob", "W28N9", shard0.map(r => (r.room === "W28N9" ? { ...r, scouted: T0 } : r)), dist, T0));
+
+// Reasons
+const facts = { aggression: 0, stronger: false, usableSources: 0, blocksExpansion: false };
+check("W29N3 (DoctorCat92) with the budget full: no reason", playerReason(facts) === null);
+check("free budget room for its sources: territory", playerReason({ ...facts, usableSources: 2 }) === "territory");
+check("reserving our expansion target: expansion", playerReason({ ...facts, blocksExpansion: true }) === "expansion");
+check("hurt us: aggressor first", playerReason({ ...facts, aggression: AGGRESSION_HOSTILE, usableSources: 2 }) === "aggressor");
+check("Blindfold W25N7 (stronger), sources usable: no reason", playerReason({ ...facts, stronger: true, usableSources: 2 }) === null);
+check("Blindfold blocking our expansion: no reason", playerReason({ ...facts, stronger: true, blocksExpansion: true }) === null);
+check("Blindfold after 300 hits: no reason", playerReason({ ...facts, stronger: true, aggression: AGGRESSION_HOSTILE }) === null);
+check("Blindfold after 3000 hits: aggressor", playerReason({ ...facts, stronger: true, aggression: AGGRESSION_RETALIATE }) === "aggressor");
 
 console.log(failures === 0 ? "\nall checks passed" : `\n${failures} check(s) failed`);
 process.exit(failures === 0 ? 0 : 1);

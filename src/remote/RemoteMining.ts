@@ -822,6 +822,11 @@ export function remoteSources(homeRoom: string): RemoteSource[] {
     );
 }
 
+/** Remote rooms mined by every home (the CPU budget's `maxRooms` counts them) */
+export function minedRemoteRooms(): number {
+    return new Set(Object.values(memory().sources).map(s => s.room)).size;
+}
+
 /** "home>room" of every selected source, rebuilt once per tick (heap) */
 const minedRooms: Set<string> = new Set();
 let minedRoomsTick = -1;

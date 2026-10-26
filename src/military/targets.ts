@@ -1,16 +1,21 @@
 /**
- * Automatic targets (when Memory.military.attack is unset), by return on investment in energy (roi.ts):
- * what a target brings against what its squad costs, the best return of at least 1 wins.
+ * Automatic targets (when Memory.military.attack is unset): only rooms with a strategic reason
+ * (strategy.ts), then by return on investment in energy (roi.ts): what a target brings against what its
+ * squad costs, the best return of at least 1 wins.
  *
  * 1. Strongholds (invader cores of level 1 to maxStrongholdLevel, default 1) near our rooms or
- *    remotes: their loot seen in sight and the remote income they block until they collapse (their
- *    room's sources). Level 0 cores in our remotes are already cleared by the remote defense ATTACKER
+ *    remotes, while the remote budget has room for the sources they block: their loot seen in sight
+ *    and the remote income they block until they collapse (their room's sources, as many as the budget
+ *    can take). Level 0 cores in our remotes are already cleared by the remote defense ATTACKER
  *    (remote/remoteDefense.ts).
- * 2. Player rooms, unless `Memory.military.auto = false` (on by default since 2026-10-25): their loot seen in
- *    sight (storage, terminal, containers), the energy the player made us lose (infamy) and the remote
- *    sources its fall frees next to our rooms (roi.ts freedSources, REMOTE_HORIZON ticks of income);
- *    rooms in safe mode or without spawn are skipped, and so are the rooms of a player who looks
- *    stronger (more rooms seen than we own) unless their creeps hurt us recently (playerThreat.ts).
+ * 2. Player rooms, unless `Memory.military.auto = false` (on by default since 2026-10-25), with a reason
+ *    (strategy.ts playerReason): the player hurt us (aggressor; a stronger player, more rooms seen than
+ *    we own, only from AGGRESSION_RETALIATE), it reserves or claimed our expansion target, or its fall
+ *    frees remote sources the remote budget can take (territory). Value: loot seen in sight (storage,
+ *    terminal, containers), those usable sources (roi.ts freedSources, REMOTE_HORIZON ticks of income)
+ *    and, for an aggressor only, the energy its creeps made us lose (infamy). Rooms in safe mode or
+ *    without spawn are skipped. Rooms left alone for want of a reason are listed in
+ *    `Memory.military.skipped` (room: why) and logged once per change.
  * Under CPU pressure (remote budget capped, or CPU above 85%) the squad's CPU is priced in energy
  * (roi.ts squadCpu x a neutral remote source's energy per CPU): the remote budget gives that CPU up.
  * Rooms that failed in the last FAILURE_MEMORY ticks are left alone, and only targets the chosen squad
@@ -21,11 +26,11 @@
 
 import { intelManager } from "../modules/IntelManager";
 import { cpuPressure, neutralEnergyPerCpu } from "../remote/remoteIncome";
-import { remoteSources, spawnBusyShare } from "../remote/RemoteMining";
+import { minedRemoteRooms, remoteSources, spawnBusyShare } from "../remote/RemoteMining";
 import { roomCountersSince } from "../utils/history";
 import { log } from "../utils/logger";
 import { HostileRoom, militaryMemory } from "./intel";
-import { mayTargetPlayer, OwnedRoomSeen, playerRoomCounts } from "./playerThreat";
+import { looksStronger, OwnedRoomSeen, playerRoomCounts } from "./playerThreat";
 import {
     ATTRITION,
     freedSources,
@@ -39,6 +44,7 @@ import {
     targetValue
 } from "./roi";
 import { planSquad, SquadPlan, squadMemberCosts, squadMemberParts } from "./sizing";
+import { blocksExpansion, playerReason, spareRemoteRooms, StrategicReason, usableSources } from "./strategy";
 
 const MAX_DISTANCE = 10;
 /** Distance of the neutral remote source whose energy per CPU prices a squad's CPU (remoteIncome examples) */
@@ -50,7 +56,7 @@ const FAILURE_MEMORY = 20000;
 
 export interface AutoTarget {
     room: string;
-    reason: "stronghold" | "player";
+    reason: StrategicReason;
     roi: number;
     value: number;
     /** Spawn energy with replacements, plus `cpu` */
@@ -119,7 +125,7 @@ function nearOurTerritory(roomName: string): boolean {
     return false;
 }
 
-function isStronghold(intel: HostileRoom, roomName: string): boolean {
+function isStrongholdNear(intel: HostileRoom, roomName: string): boolean {
     const maxLevel = militaryMemory().maxStrongholdLevel ?? 1;
     if (!intel.coreLevel || intel.coreLevel > maxLevel) return false;
     // Not deployed yet (nothing to fight for a while), or collapsing soon on its own
@@ -159,43 +165,104 @@ function playerRooms(): { [player: string]: number } {
     return playerRoomCounts(seen, Game.time);
 }
 
-/** Players skipped because they look stronger (logged once per player and heap) */
-const skippedLogged: Set<string> = new Set();
+/** Why each room was last left alone (heap: logged on a change only) */
+const skippedLogged: Map<string, string> = new Map();
 
-function isPlayerTarget(intel: HostileRoom, counts: { [player: string]: number }, ours: number): boolean {
-    if (militaryMemory().auto === false) return false;
-    if (!intel.owner || intel.owner === Memory.username || intel.spawns === 0) return false;
-    if ((intel.safeMode ?? 0) > Game.time) return false;
-    const aggression = militaryMemory().aggression?.[intel.owner] ?? 0;
-    if (mayTargetPlayer(counts[intel.owner] ?? 0, ours, aggression)) return true;
-    if (!skippedLogged.has(intel.owner)) {
-        skippedLogged.add(intel.owner);
-        log.info(
-            "Military",
-            `${intel.owner} left alone: ${counts[intel.owner]} rooms seen for our ${ours},`,
-            `aggression ${Math.round(aggression)}`
-        );
-    }
-    return false;
+function skip(skipped: { [room: string]: string }, roomName: string, why: string): void {
+    skipped[roomName] = why;
+    if (skippedLogged.get(roomName) === why) return;
+    skippedLogged.set(roomName, why);
+    log.info("Military", `${roomName} left alone: ${why}`);
 }
 
-/** Every feasible target with its return (value / cost in energy) */
-export function rankTargets(): AutoTarget[] {
+function unskip(skipped: { [room: string]: string }, roomName: string): void {
+    delete skipped[roomName];
+    skippedLogged.delete(roomName);
+}
+
+interface Candidate {
+    reason: StrategicReason;
+    /** Remote sources counted in the value: the stronghold's or the freed ones, within the budget */
+    sources: number;
+}
+
+/**
+ * A player's room with a strategic reason (strategy.ts), else null and the room in `skipped`. `kept`: the
+ * reason of the current target while its squad has creeps, kept when the reason fades (the remote budget
+ * filling up, aggression decaying, the expansion ending) so a squad is not recycled half way.
+ */
+function playerCandidate(
+    roomName: string,
+    intel: HostileRoom,
+    context: { counts: { [player: string]: number }; ours: string[]; spare: number; holdings: RoomHolding[] },
+    skipped: { [room: string]: string },
+    kept?: StrategicReason
+): Candidate | null {
+    if (militaryMemory().auto === false) return null;
+    const owner = intel.owner;
+    if (!owner || owner === Memory.username || intel.spawns === 0) return null;
+    if ((intel.safeMode ?? 0) > Game.time) return null;
+    const aggression = Math.round(militaryMemory().aggression?.[owner] ?? 0);
+    const theirRooms = context.counts[owner] ?? 0;
+    const stronger = looksStronger(theirRooms, context.ours.length);
+    const freed = freedSources(roomName, owner, context.holdings, context.ours, linearDistance, Game.time);
+    const usable = usableSources(freed, context.spare);
+    const expansion = Memory.expand?.current?.roomName;
+    const blocking = blocksExpansion(roomName, owner, expansion, context.holdings, linearDistance, Game.time);
+    const reason = playerReason({ aggression, stronger, usableSources: usable, blocksExpansion: blocking });
+    // Blocking our expansion costs at least the target room's sources, whatever the remote budget
+    if (reason === "expansion") return { reason, sources: Math.max(usable, intelManager.sourceCount(expansion!)) };
+    if (reason) return { reason, sources: usable };
+    if (kept) return { reason: kept, sources: usable };
+    const why = stronger
+        ? `${owner} stronger (${theirRooms} rooms seen for our ${context.ours.length}), aggression ${aggression}`
+        : `${owner}: no strategic reason (aggression ${aggression}, freed sources ${freed}, usable ${usable})`;
+    skip(skipped, roomName, why);
+    return null;
+}
+
+/** A stronghold near our territory while the remote budget can mine what it blocks */
+function strongholdCandidate(
+    roomName: string,
+    intel: HostileRoom,
+    spare: number,
+    skipped: { [room: string]: string },
+    kept?: StrategicReason
+): Candidate | null {
+    if (!isStrongholdNear(intel, roomName)) return null;
+    const sources = intelManager.sourceCount(roomName);
+    const usable = usableSources(sources, spare);
+    if (usable > 0 || kept) return { reason: "stronghold", sources: usable };
+    skip(skipped, roomName, `stronghold level ${intel.coreLevel}: ${sources > 0 ? "remote budget full" : "no source"}`);
+    return null;
+}
+
+/** Every feasible target with its return (value / cost in energy); `engaged`: the current target's squad has creeps */
+export function rankTargets(engaged = false): AutoTarget[] {
     const memory = militaryMemory();
     const from = origins();
     const targets: AutoTarget[] = [];
-    if (from.length === 0) return targets;
+    if (from.length === 0) {
+        delete memory.skipped;
+        return targets;
+    }
     const income = incomePerTick();
-    const counts = playerRooms();
-    const ours = ownedRooms().length;
+    const context = {
+        counts: playerRooms(),
+        ours: ownedRooms(),
+        spare: spareRemoteRooms(Memory.remoteMining?.maxRooms, minedRemoteRooms()),
+        holdings: holdings()
+    };
+    const skipped: { [room: string]: string } = {};
     for (const [roomName, intel] of Object.entries(memory.rooms ?? {})) {
         if (recentlyFailed(roomName)) continue;
-        const reason = isStronghold(intel, roomName)
-            ? "stronghold"
-            : isPlayerTarget(intel, counts, ours)
-              ? "player"
-              : null;
-        if (!reason) continue;
+        const kept = engaged && memory.target?.room === roomName ? memory.target.reason : undefined;
+        const candidate =
+            strongholdCandidate(roomName, intel, context.spare, skipped, kept) ??
+            playerCandidate(roomName, intel, context, skipped, kept);
+        if (!candidate) continue;
+        unskip(skipped, roomName);
+        const { reason } = candidate;
         const near = feasibleOrigin(from, roomName);
         if (!near) continue;
         const { plan } = near;
@@ -214,24 +281,20 @@ export function rankTargets(): AutoTarget[] {
         // The compounds the squad needs against this target (sizing.ts planSquad) are spent too
         const cost = squadCost(members, ATTRITION, plan.boostCost) + cpu + spawnTime;
         const ticksLeft = (intel.collapse ?? Infinity) - Game.time;
-        const remote =
-            reason === "stronghold"
-                ? remoteValue(intelManager.sourceCount(roomName), ticksLeft)
-                : remoteValue(
-                      freedSources(roomName, intel.owner!, holdings(), ownedRooms(), linearDistance, Game.time),
-                      REMOTE_HORIZON
-                  );
+        const remote = remoteValue(candidate.sources, reason === "stronghold" ? ticksLeft : REMOTE_HORIZON);
         const value = targetValue({
             loot: intel.loot ?? 0,
             remote,
-            infamy: reason === "player" ? (memory.infamy?.[intel.owner!] ?? 0) : 0
+            // The energy a player's creeps made us lose only counts once they fought us
+            infamy: reason === "aggressor" ? (memory.infamy?.[intel.owner!] ?? 0) : 0
         });
         targets.push({ room: roomName, reason, roi: value / cost, value: Math.round(value), cost, cpu, spawnTime });
     }
+    memory.skipped = skipped;
     return targets;
 }
 
 /** Best automatic target (null: nothing pays for its squad); `engaged`: the current target's squad has creeps */
 export function chooseAutoTarget(engaged = false): AutoTarget | null {
-    return pickTarget(rankTargets(), militaryMemory().target?.room, engaged);
+    return pickTarget(rankTargets(engaged), militaryMemory().target?.room, engaged);
 }
