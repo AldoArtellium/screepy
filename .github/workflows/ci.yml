@@ -71,6 +71,9 @@ jobs:
       - name: Squad route check
         run: node tests/squadRoute/run.mjs
 
+      - name: Duo path cache check
+        run: node tests/duoPath/run.mjs
+
       - name: Room cleanup check
         run: node tests/roomCleanup/run.mjs
 

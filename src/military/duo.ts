@@ -14,9 +14,11 @@ import { duoCreeps } from "../core/roomState";
 import { threatOf } from "../defense/threat";
 import { needsBoosting } from "../labs/boosts";
 import { trafficManager } from "../modules/TrafficManager";
+import { jitter } from "../utils/jitter";
 import { log } from "../utils/logger";
 import { countStat } from "../utils/stats";
 import { incomingDamage, verdict } from "./combat";
+import { DuoPath, STILL_TICKS, StillState, cachedStep, newPath, noteStep, stillFor } from "./duoPath";
 import { lootRamparts } from "./loot";
 import { cachedObstacles, routeRooms } from "./route";
 
@@ -78,7 +80,7 @@ export function pickTarget(room: Room, from: RoomPosition): Structure | null {
 }
 
 /** Ramparts and walls cost by their hits (the path goes through the weakest), other obstacles block */
-function breachMatrix(room: Room, target: Structure): CostMatrix {
+function computeBreachMatrix(room: Room, target: Structure): CostMatrix {
     const matrix = new PathFinder.CostMatrix();
     for (const s of room.find(FIND_STRUCTURES)) {
         if (s.id === target.id) continue;
@@ -95,6 +97,33 @@ function breachMatrix(room: Room, target: Structure): CostMatrix {
         }
     }
     return matrix;
+}
+
+/** Breach matrix of a room: rebuilt when the target or the structure count changes, else every ~20 ticks (hits) */
+const BREACH_TTL = 20;
+const breachMatrices: Map<string, { target: string; count: number; until: number; matrix: CostMatrix; version: number }> = new Map();
+let breachVersion = 0;
+
+function breachMatrix(room: Room, target: Structure): { matrix: CostMatrix; version: number } {
+    const count = room.find(FIND_STRUCTURES).length;
+    const entry = breachMatrices.get(room.name);
+    if (entry && entry.target === target.id && entry.count === count && entry.until > Game.time) return entry;
+    if (breachMatrices.size > 20) breachMatrices.clear();
+    const fresh = { target: target.id, count, until: Game.time + jitter(BREACH_TTL), matrix: computeBreachMatrix(room, target), version: ++breachVersion };
+    breachMatrices.set(room.name, fresh);
+    return fresh;
+}
+
+/** Path of each duo's attacker (heap, duoPath.ts): searched again only when it no longer applies */
+const PATH_TTL = 50;
+const paths: Map<string, DuoPath<RoomPosition>> = new Map();
+/** Still attacker of each duo (heap): an advancing duo stuck outside the target room */
+const still: Map<string, StillState> = new Map();
+
+function prune(): void {
+    if (paths.size <= 10 && still.size <= 10) return;
+    for (const [name, state] of still) if (state.seen < Game.time - 100) still.delete(name);
+    for (const [name, cache] of paths) if (cache.until < Game.time - 100) paths.delete(name);
 }
 
 export function isMine(s: Structure): boolean {
@@ -159,32 +188,64 @@ function obstacleMatrix(room: Room): CostMatrix {
     return matrix;
 }
 
+/**
+ * Next tile of the attacker towards another room (`range` of its center), on the duo's cached path
+ * when it still applies, else from a new search held to the room route
+ */
+function travelStep(attacker: Creep, name: string, goalRoom: string, range: number, maxOps: number, healerPos?: RoomPosition): RoomPosition | null {
+    const room = attacker.room.name;
+    const allowed = routeRooms(room, goalRoom, healerPos ? [healerPos] : []);
+    if (!allowed) {
+        countStat("military:noRoute");
+        return null;
+    }
+    const key = `travel:${goalRoom}`;
+    const cached = cachedStep(paths.get(name), key, attacker.pos, Game.time, healerPos, allowed);
+    if (cached) return cached;
+    const roomCallback = travelCallback(room, goalRoom, healerPos ? [healerPos] : [], healerPos);
+    if (!roomCallback) return null;
+    countStat("military:duoSearch");
+    const result = PathFinder.search(attacker.pos, { pos: new RoomPosition(25, 25, goalRoom), range }, {
+        plainCost: 2,
+        swampCost: 10,
+        maxOps,
+        roomCallback
+    });
+    if (!result.path[0]) {
+        paths.delete(name);
+        return null;
+    }
+    paths.set(name, newPath(key, attacker.pos, result.path, Game.time, jitter(PATH_TTL)));
+    return result.path[0];
+}
+
 /** Next tile of the attacker towards its goal (null: there, or no path) */
-function nextStep(attacker: Creep, duo: DuoMemory, healerPos?: RoomPosition): { pos: RoomPosition; target?: Structure } | null {
+function nextStep(attacker: Creep, name: string, duo: DuoMemory, healerPos?: RoomPosition): { pos: RoomPosition; target?: Structure } | null {
     const room = attacker.room;
     if (room.name === duo.targetRoom) {
         const target = pickTarget(room, attacker.pos);
         if (!target) return null;
         if (attacker.pos.isNearTo(target)) return { pos: attacker.pos, target };
-        const matrix = breachMatrix(room, target);
+        const { matrix, version } = breachMatrix(room, target);
+        const key = `breach:${target.id}:${version}`;
+        const cached = cachedStep(paths.get(name), key, attacker.pos, Game.time, healerPos);
+        if (cached) return { pos: cached, target };
+        countStat("military:duoSearch");
         const result = PathFinder.search(attacker.pos, { pos: target.pos, range: 1 }, {
             maxRooms: 1,
             plainCost: 2,
             swampCost: 10,
-            roomCallback: name => (name === room.name ? avoiding(matrix, name, healerPos) : false)
+            roomCallback: roomName => (roomName === room.name ? avoiding(matrix, roomName, healerPos) : false)
         });
-        return result.path[0] ? { pos: result.path[0], target } : null;
+        if (!result.path[0]) {
+            paths.delete(name);
+            return null;
+        }
+        paths.set(name, newPath(key, attacker.pos, result.path, Game.time, jitter(PATH_TTL)));
+        return { pos: result.path[0], target };
     }
-    const goal = new RoomPosition(25, 25, duo.targetRoom);
-    const roomCallback = travelCallback(room.name, duo.targetRoom, healerPos ? [healerPos] : [], healerPos);
-    if (!roomCallback) return null;
-    const result = PathFinder.search(attacker.pos, { pos: goal, range: 22 }, {
-        plainCost: 2,
-        swampCost: 10,
-        maxOps: 4000,
-        roomCallback
-    });
-    return result.path[0] ? { pos: result.path[0] } : null;
+    const pos = travelStep(attacker, name, duo.targetRoom, 22, 4000, healerPos);
+    return pos ? { pos } : null;
 }
 
 /** Last action results of each duo, for the trace */
@@ -289,6 +350,7 @@ function movePair(attacker: Creep, healer: Creep, to: RoomPosition | null, solo 
         // The healer can't follow there: the attacker goes alone, the healer holds (`to` is the next
         // tile of a PathFinder path: no second search, see quad.ts travel)
         trafficManager.requestStep(attacker, to, ATTACKER_PRIORITY);
+        noteStep(paths.get(attacker.memory.duo ?? ""), attacker.pos, Game.time);
         trafficManager.requestMove(healer, healer.pos, { range: 0, priority: HEALER_PRIORITY });
         return;
     }
@@ -298,6 +360,7 @@ function movePair(attacker: Creep, healer: Creep, to: RoomPosition | null, solo 
         return;
     }
     trafficManager.requestStep(attacker, to, ATTACKER_PRIORITY);
+    noteStep(paths.get(attacker.memory.duo ?? ""), attacker.pos, Game.time);
     // The healer keeps adjacent: it takes the attacker's tile unless it is already next to the new one
     if (healer.pos.isNearTo(to) && to.roomName === healer.pos.roomName) hold(healer, HEALER_PRIORITY, targetRoom);
     else moveHealer(healer, attacker.pos, 0);
@@ -361,22 +424,25 @@ export function runDuo(name: string, duo: DuoMemory): void {
         if (weakest >= READY_HITS) duo.state = "advance";
         else {
             const out = attacker.room.name === duo.targetRoom || attacker.pos.x === 0 || attacker.pos.y === 0 || attacker.pos.x === 49 || attacker.pos.y === 49;
-            const roomCallback = out
-                ? travelCallback(attacker.room.name, duo.stagingRoom, [healer.pos], healer.pos)
-                : null;
-            const result = roomCallback
-                ? PathFinder.search(attacker.pos, { pos: new RoomPosition(25, 25, duo.stagingRoom), range: 20 }, {
-                      plainCost: 2,
-                      swampCost: 10,
-                      roomCallback
-                  })
-                : null;
-            movePair(attacker, healer, result?.path[0] ?? null, false, duo.targetRoom);
+            // PathFinder's default maxOps (2000), as before the cache
+            const to = out ? travelStep(attacker, name, duo.stagingRoom, 20, 2000, healer.pos) : null;
+            movePair(attacker, healer, to, false, duo.targetRoom);
             return;
         }
     }
 
-    const step = nextStep(attacker, duo, healer.pos);
+    // An advancing attacker standing still outside the target room (shard0 W29N3: 5-47 moves per 1000
+    // ticks while its healer moved ~900): its path is dropped and searched again
+    if (attacker.room.name !== duo.targetRoom) {
+        const state = still.get(name) ?? { pos: "", since: Game.time, seen: Game.time };
+        still.set(name, state);
+        if (stillFor(state, attacker.pos, Game.time, STILL_TICKS)) {
+            countStat("military:duoStuck");
+            paths.delete(name);
+        }
+    }
+    prune();
+    const step = nextStep(attacker, name, duo, healer.pos);
     strike(attacker, step, duo.targetRoom);
     if (weakest < RETREAT_HITS) {
         duo.state = "retreat";
