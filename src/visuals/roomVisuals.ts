@@ -1,16 +1,16 @@
 /**
  * RoomVisuals - draws on every owned room: the unbuilt part of the plan (refreshed every
  * PLAN_INTERVAL ticks or when the plan changes), the economy / room info panel (every
- * PANEL_INTERVAL ticks) and the spawn overlay (every tick); on the world map the remote mining and
+ * panelInterval() ticks) and the spawn overlay (every tick); on the world map the remote mining and
  * strategy layers (every mapInterval() ticks). Cached layers are kept in the heap as exports and
  * imported on the other ticks, so a tick costs one import per layer. `Memory.visuals = false` turns
  * it off, `Memory.visuals = { mapRemotes: false, ... }` single layers (`settings.ts`). The map texts go
  * to a panel over the center of the first owned room's sector (`mapPanel.ts`; `mapPanel: false` puts
  * them back on the rooms), the rest through the shared label placer (`mapLabels.ts`).
  * Runs every tick (visuals last one tick): only the redraws wait while the bucket is low, the cached
- * layers are still imported; below STOP_BUCKET nothing is drawn. While the remote CPU budget is capped, the plan
- * and map creeps are off and the map is redrawn less often, and at once when a watched room gains or
- * loses hostiles (`settings.ts`). The module logs its CPU per layer (map redraws and cached map imports
+ * layers are still imported; below STOP_BUCKET nothing is drawn. Under CPU pressure (remote budget capped or
+ * CPU average above 85% of the limit) the plan and map creeps are off and the map and panel are redrawn
+ * less often, the map at once when a watched room gains or loses hostiles (`settings.ts`). The module logs its CPU per layer (map redraws and cached map imports
  * apart) every LOG_INTERVAL ticks.
  */
 
@@ -26,11 +26,10 @@ import { drawMapStrategy } from "./mapStrategy";
 import { drawMapThreats, threatSignature } from "./mapThreats";
 import { drawPanel, sampleIncome } from "./panel";
 import { drawPlan } from "./planVisual";
-import { layerEnabled, mapInterval, visualsEnabled } from "./settings";
+import { layerEnabled, mapInterval, panelInterval, visualsEnabled } from "./settings";
 import { drawSpawns } from "./spawnVisual";
 
 const PLAN_INTERVAL = 100;
-const PANEL_INTERVAL = 5;
 const LOG_INTERVAL = 1000;
 /** Below this bucket the layers are no longer redrawn (kept as they are) */
 const REDRAW_BUCKET = 5000;
@@ -120,7 +119,7 @@ function drawPlanLayer(room: Room, state: RoomCache, redraw: boolean): void {
 function drawPanelLayer(room: Room, state: RoomCache, redraw: boolean): void {
     if (!layerEnabled("panel")) {
         state.panel = undefined;
-    } else if (!state.panel || (redraw && Game.time - state.panel.tick >= PANEL_INTERVAL)) {
+    } else if (!state.panel || (redraw && Game.time - state.panel.tick >= panelInterval())) {
         state.panel = { tick: Game.time, data: capture(room.name, visual => drawPanel(visual, room)) };
     } else {
         room.visual.import(state.panel.data);
