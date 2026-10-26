@@ -822,6 +822,23 @@ export function remoteSources(homeRoom: string): RemoteSource[] {
     );
 }
 
+/** "home>room" of every selected source, rebuilt once per tick (heap) */
+const minedRooms: Set<string> = new Set();
+let minedRoomsTick = -1;
+
+/** A home mines a source in the room (cheap: reservers check it every tick) */
+export function isRemoteRoomMined(homeRoom: string, roomName: string): boolean {
+    if (minedRoomsTick !== Game.time) {
+        minedRoomsTick = Game.time;
+        minedRooms.clear();
+        for (const key in memory().sources) {
+            const source = memory().sources[key];
+            minedRooms.add(`${source.homeRoom}>${source.room}`);
+        }
+    }
+    return minedRooms.has(`${homeRoom}>${roomName}`);
+}
+
 export function getRemoteSource(key: string | undefined): RemoteSource | undefined {
     return key ? memory().sources[key] : undefined;
 }
