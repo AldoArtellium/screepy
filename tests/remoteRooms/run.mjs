@@ -1,6 +1,6 @@
 /**
  * Offline check of remote/remoteRooms: rooms a remote path never crosses (other players' rooms and
- * remotes, source keeper rooms). Cases from shard0 on 2026-10-26.
+ * remotes, source keeper rooms, rooms another player mines or reserves). Cases from shard0 on 2026-10-26.
  *
  *   node tests/remoteRooms/run.mjs
  */
@@ -30,7 +30,7 @@ try {
     // Type errors outside this file (global declarations) don't prevent emitting
 }
 
-const { isRemoteBlocked } = require(join(OUT, "remote", "remoteRooms.js"));
+const { contestingPlayer, isContested, isRemoteBlocked, noteContest, pruneContests } = require(join(OUT, "remote", "remoteRooms.js"));
 
 let failures = 0;
 const check = (name, ok) => {
@@ -51,6 +51,36 @@ check("invader reservation is not blocked", !isRemoteBlocked("W28N4", { reserver
 check("our room", !isRemoteBlocked("W28N7", { owner: ME }, ME));
 check("our reservation", !isRemoteBlocked("W28N6", { reserver: ME }, ME));
 check("unknown plain room", !isRemoteBlocked("W28N6", undefined, ME));
+
+// shard0 2026-10-26: W28N4:43:10 mined by Blindfold (harvester on the container, its reserver) while our
+// 3 reservers fought the reservation back: blocked although the reservation is ours right now
+check("contested room with our reservation", isRemoteBlocked("W28N4", { reserver: ME }, ME, true));
+check("contested room never scouted", isRemoteBlocked("W28N4", undefined, ME, true));
+
+const sighting = (creeps, extra = {}) => ({ creeps, ...extra });
+check("Blindfold's harvester on the source", contestingPlayer(sighting([{ owner: "Blindfold", harvests: true, claims: false }]), ME) === "Blindfold");
+check("Blindfold's reserver at the controller", contestingPlayer(sighting([{ owner: "Blindfold", harvests: false, claims: true }]), ME) === "Blindfold");
+check("Blindfold's reservation", contestingPlayer(sighting([], { reserver: "Blindfold" }), ME) === "Blindfold");
+check("a player's creep passing through", contestingPlayer(sighting([{ owner: "Blindfold", harvests: false, claims: false }]), ME) === undefined);
+check("invader reservation", contestingPlayer(sighting([], { reserver: "Invader" }), ME) === undefined);
+check("invader creeps", contestingPlayer(sighting([{ owner: "Invader", harvests: true, claims: true }]), ME) === undefined);
+check("source keeper", contestingPlayer(sighting([{ owner: "Source Keeper", harvests: true, claims: false }]), ME) === undefined);
+check("our reservation", contestingPlayer(sighting([], { reserver: ME }), ME) === undefined);
+check("owned room is never contested", contestingPlayer(sighting([{ owner: "Blindfold", harvests: true, claims: false }], { owner: "Blindfold" }), ME) === undefined);
+
+const entries = {};
+check("first sighting is new", noteContest(entries, "W28N4", "Blindfold", 1000, 19000) === true);
+check("contested right after", isContested(entries.W28N4, 1001));
+check("next sighting is not new", noteContest(entries, "W28N4", "Blindfold", 5000, 21000) === false);
+check("ttl kept, last sighting moved", entries.W28N4.ttl === 19000 && entries.W28N4.seen === 5000);
+check("still contested 18999 ticks after the last sighting", isContested(entries.W28N4, 5000 + 18999));
+check("free 19000 ticks after the last sighting", !isContested(entries.W28N4, 5000 + 19000));
+check("contested room blocked through isRemoteBlocked", isRemoteBlocked("W28N4", { reserver: ME }, ME, isContested(entries.W28N4, 6000)));
+check("sighting after expiry is new again", noteContest(entries, "W28N4", "Blindfold", 30000, 20000) === true);
+entries.W27N4 = { player: "Blindfold", seen: 0, ttl: 20000 };
+pruneContests(entries, 25000);
+check("prune drops expired entries only", !entries.W27N4 && !!entries.W28N4);
+check("unknown room is not contested", !isContested(undefined, 1000));
 
 console.log(failures === 0 ? "\nall checks passed" : `\n${failures} check(s) failed`);
 process.exit(failures === 0 ? 0 : 1);

@@ -13,7 +13,7 @@
 import { creepsByRole } from "../core/roomState";
 import { claimingSquadsOf } from "../expansion/Expansion";
 import { intelManager } from "../modules/IntelManager";
-import { hasInvaderCore, isRoomUnderAttack } from "../modules/RoomIntel";
+import { hasInvaderCore, isRoomContested, isRoomUnderAttack } from "../modules/RoomIntel";
 import { roomPlanner } from "../planner/RoomPlanner";
 import { log } from "../utils/logger";
 import { spawnManager } from "../modules/SpawnManager";
@@ -183,9 +183,12 @@ function pathRooms(source: RemoteSource): string[] {
     return rooms.includes(source.room) ? rooms : rooms.concat(source.room);
 }
 
-/** Another player's room or remote, or a source keeper room: never crossed on the way to a remote (remoteRooms.ts) */
+/**
+ * Another player's room or remote (reserved, or mined / reserved by them within ~20000 ticks), or a
+ * source keeper room: never mined nor crossed on the way to a remote (remoteRooms.ts)
+ */
 function isBlockedRoom(roomName: string): boolean {
-    return isRemoteBlocked(roomName, intelManager.getIntel(roomName), Memory.username);
+    return isRemoteBlocked(roomName, intelManager.getIntel(roomName), Memory.username, isRoomContested(roomName));
 }
 
 /** Positions of a packed path; the array is shared, don't modify it */
@@ -402,12 +405,15 @@ function worldTile(roomName: string, x: number, y: number): { x: number; y: numb
     return { x: world.wx * 50 + x, y: world.wy * 50 + y };
 }
 
-/** Remote room candidates of a home room: known, not owned, not source keeper, within 3 rooms */
+/**
+ * Remote room candidates of a home room: known, not owned, not source keeper, not another player's
+ * remote (their reservation, or contested: see remoteRooms.ts), within 3 rooms
+ */
 function candidateRooms(home: Room): string[] {
     return roomsInRange(home.name, MAX_ROOM_DISTANCE).filter(roomName => {
         const intel = intelManager.getIntel(roomName);
         if (!intel?.sources?.length) return false;
-        if (intel.owner || intel.hasSourceKeepers) return false;
+        if (intel.owner || isBlockedRoom(roomName)) return false;
         const route = Game.map.findRoute(home.name, roomName);
         return route !== ERR_NO_PATH && route.length <= MAX_ROOM_DISTANCE;
     });

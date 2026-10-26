@@ -6,11 +6,56 @@
  */
 
 import { activePower, effectiveHits, isFast } from "../defense/RoomDefense";
+import { CONTEST_TTL, ContestEntry, contestingPlayer, isContested, noteContest, pruneContests } from "../remote/remoteRooms";
+import { jitter } from "../utils/jitter";
+import { log } from "../utils/logger";
+import { countStat } from "../utils/stats";
 
 declare global {
     interface RoomMemory {
         defenseMode?: boolean;
     }
+    interface Memory {
+        /** Rooms another player mines or reserves, blocked for remote mining (remote/remoteRooms.ts) */
+        remoteContested?: { [room: string]: ContestEntry };
+    }
+}
+
+/** Ticks between two prunings of Memory.remoteContested (heap timestamp: the module is mandatory) */
+const CONTEST_PRUNE_INTERVAL = 1000;
+let lastContestPrune = 0;
+
+/**
+ * Another player mining or reserving a room we don't own (not in Hivemind): shard0 W28N4, Blindfold's
+ * harvester on the source container and its reserver, while ours fought its reservation back
+ */
+function recordContest(room: Room): void {
+    const controller = room.controller;
+    if (!controller || controller.owner) return;
+    const reserver = controller.reservation?.username;
+    const players = room.find(FIND_HOSTILE_CREEPS, {
+        filter: c => c.owner.username !== "Invader" && c.owner.username !== "Source Keeper"
+    });
+    if (!players.length && (!reserver || reserver === Memory.username || reserver === "Invader")) return;
+    let sources: Source[] | undefined;
+    const creeps = players.map(c => ({
+        owner: c.owner.username,
+        harvests:
+            c.getActiveBodyparts(WORK) > 0 && (sources ??= room.find(FIND_SOURCES)).some(s => c.pos.isNearTo(s)),
+        claims: c.getActiveBodyparts(CLAIM) > 0 && c.pos.isNearTo(controller)
+    }));
+    const player = contestingPlayer({ reserver, creeps }, Memory.username);
+    if (!player) return;
+    Memory.remoteContested ??= {};
+    if (noteContest(Memory.remoteContested, room.name, player, Game.time, jitter(CONTEST_TTL))) {
+        countStat("remote:contested");
+        log.info("RoomIntel", `${room.name} contested by ${player}: no remote mining there for ~${CONTEST_TTL} ticks`);
+    }
+}
+
+/** Another player mined or reserved the room within the last ~20000 ticks */
+export function isRoomContested(roomName: string): boolean {
+    return isContested(Memory.remoteContested?.[roomName], Game.time);
 }
 
 const HARMLESS_AT_HOME: BodyPartConstant[] = [MOVE, TOUGH];
@@ -25,8 +70,14 @@ function dangerous(room: Room): Creep[] {
 }
 
 export const roomIntelModule = () => {
+    if (Memory.remoteContested && Game.time - lastContestPrune >= CONTEST_PRUNE_INTERVAL) {
+        lastContestPrune = Game.time;
+        pruneContests(Memory.remoteContested, Game.time);
+        if (Object.keys(Memory.remoteContested).length === 0) delete Memory.remoteContested;
+    }
     for (const name in Game.rooms) {
         const room = Game.rooms[name];
+        recordContest(room);
         const hostiles = dangerous(room);
         const cores = room.find(FIND_HOSTILE_STRUCTURES, {
             filter: s => s.structureType === STRUCTURE_INVADER_CORE

@@ -43,7 +43,7 @@ Object.assign(globalThis, {
 });
 
 const { buildBody } = require(join(OUT, "core", "bodyBuilder.js"));
-const { brawlerWins, defenseResponse, meleeOrder, skipsEnergyGate } = require(join(OUT, "remote", "defenseModel.js"));
+const { brawlerWins, defenseResponse, meleeOrder, skipsEnergyGate, unarmedPlayers } = require(join(OUT, "remote", "defenseModel.js"));
 
 // Same bodies as remoteDefense.ts (MoveMode.PLAINS = 1, energy limit 90% of the capacity)
 const common = cap => ({ moveMode: 1, moveBufferRatio: 0.4, energyLimit: cap * 0.9 });
@@ -74,6 +74,15 @@ check("boosted smallMelee, 800 capacity", respond(smallMeleeBoosted, 800), null)
 check("smallRanged, 800 capacity (no melee to close in on)", respond(smallRanged, 800), ["blinkyPair", null]);
 check("melee only, 550 capacity (Hivemind rule)", respond(meleeOnly, 550), "miniBrawler");
 check("invader core", respond({ ...base, hasInvaderCore: true }, 800), "attacker");
+
+// shard0 W28N4 (2026-10-26): Blindfold's reserver (CLAIM, damage 0) drew a remoteDefender from W28N7
+const unarmedPlayer = { ...base, hits: 1300, players: true };
+check("player reserver / harvester (unarmed), 1300 capacity", respond(unarmedPlayer, 1300), null);
+check("unarmed player creeps", unarmedPlayers(unarmedPlayer), true);
+check("player healer is armed", unarmedPlayers({ ...unarmedPlayer, heal: 24 }), false);
+check("player with ATTACK is armed", unarmedPlayers({ ...unarmedPlayer, damage: 30 }), false);
+check("invader core with a player reserver", respond({ ...unarmedPlayer, hasInvaderCore: true }, 800), "attacker");
+check("unarmed invader (no player) unchanged", respond({ ...base, hits: 500 }, 800), "miniBrawler");
 
 // Mockup W7N4: with its ATTACK parts in front, an 800-energy brawler lost them in the first 300 damage
 // and died leaving the smallMelee at 310 hits

@@ -20,7 +20,7 @@ import {
     remoteSources,
     remoteThreatRoom
 } from "./RemoteMining";
-import { DefenseResponse, defenseResponse, meleeOrder, skipsEnergyGate } from "./defenseModel";
+import { DefenseResponse, defenseResponse, meleeOrder, skipsEnergyGate, unarmedPlayers } from "./defenseModel";
 
 export { DefenseResponse } from "./defenseModel";
 
@@ -101,6 +101,8 @@ export function remoteDefenseOptions(home: Room): DefenseOption[] {
         // Strongholds (core level 1+) are military targets (military/targets.ts): an ATTACKER would die to their towers
         if ((Memory.military?.rooms?.[source.room]?.coreLevel ?? 0) > 0) continue;
         const enemies = remoteEnemyData(source);
+        // A player's harvesters and reservers get no defender, and don't hold back the other remotes' defense
+        if (unarmedPlayers(enemies)) continue;
         // Hivemind returns here: no remote gets a defender while the home room is short on energy
         if (underAttack && effectiveEnergy(home) < MIN_DEFENSE_ENERGY && !skipsEnergyGate(!!home.storage, enemies)) {
             return options;

@@ -87,6 +87,17 @@ export function meleeOrder(body: BodyPartConstant[]): BodyPartConstant[] {
 }
 
 /**
+ * Only a player's unarmed creeps (no ATTACK, RANGED_ATTACK or HEAL; abroad RoomIntel counts a CLAIM
+ * part as dangerous): a reserver or a harvester of theirs gets no defender (not in Hivemind, whose
+ * power 0 answers them with a mini brawler). shard0 2026-10-26: W28N7 sent a remoteDefender to W28N4
+ * against Blindfold's reserver (damage 0), a fight with a much stronger player for a room it mines
+ * (the room is now contested, remoteRooms.ts). An invader core keeps its ATTACKER.
+ */
+export function unarmedPlayers(enemies: EnemyData): boolean {
+    return enemies.players && !enemies.hasInvaderCore && enemies.damage <= 0 && enemies.heal <= 0;
+}
+
+/**
  * Response to the hostiles (Hivemind getDefenseCreepSize); `miniBrawler` / `miniBlinky` / `blinky`: the
  * bodies the home can spawn. Not in Hivemind: a blinky response also has to win the fight (blinkyWins),
  * else the next step, else none: the remote waits for the hostiles to die. A mini brawler also answers
@@ -99,6 +110,7 @@ export function defenseResponse(
     miniBlinky: BodyPartConstant[],
     blinky: BodyPartConstant[]
 ): DefenseResponse | null {
+    if (unarmedPlayers(enemies)) return null;
     const power = enemies.damage + 5 * enemies.heal;
     if (enemies.hasInvaderCore && power < SMALL_DEFENDER_POWER) return DefenseResponse.ATTACKER;
     if (power < SMALL_DEFENDER_POWER / 2 && (!enemies.ranged || brawlerWins(enemies, miniBrawler))) {

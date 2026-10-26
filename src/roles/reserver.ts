@@ -9,19 +9,27 @@ import { trafficManager } from "../modules/TrafficManager";
 import { remotePath, remoteSources } from "../remote/RemoteMining";
 import { RESERVER } from "../remote/remoteSpawnRole";
 import { fleeIfThreatened } from "./flee";
+import { performRecycle } from "./recycle";
 import { registerRole } from "./registry";
 
 export function runReserver(creep: Creep): void {
     const roomName = creep.memory.reserveRoom;
     if (!roomName) return;
+    const source = remoteSources(creep.memory.room ?? "").find(s => s.room === roomName);
+    // Remote room dropped from the selection (contested, budget, exclusion): recycle like the remote
+    // harvesters. Before, the reserver kept attacking the room's other reservation (shard0 W28N4: 3
+    // reservers against Blindfold's for a room harvested by Blindfold)
+    if (!source) {
+        performRecycle(creep);
+        return;
+    }
     const controllerPos = intelManager.getIntel(roomName)?.controllerPos;
     if (!controllerPos) return;
     const target = new RoomPosition(controllerPos.x, controllerPos.y, roomName);
     if (fleeIfThreatened(creep, target)) return;
     if (creep.room.name !== roomName) {
         // The stored path of one of the room's sources up to the room, then the controller
-        const source = remoteSources(creep.memory.room ?? "").find(s => s.room === roomName);
-        if (source && followPath(creep, remotePath(source), true, 40)) return;
+        if (followPath(creep, remotePath(source), true, 40)) return;
         trafficManager.requestMove(creep, target, { range: 1, priority: 40 });
         return;
     }
