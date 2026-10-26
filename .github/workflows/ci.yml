@@ -89,6 +89,9 @@ jobs:
       - name: Military CPU guard check
         run: node tests/militaryCpu/run.mjs
 
+      - name: Remote blocked rooms check
+        run: node tests/remoteRooms/run.mjs
+
       - uses: actions/upload-artifact@v4
         with:
           name: bundle

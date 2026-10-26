@@ -3,6 +3,8 @@
  * offline check node tests/squadRoute/run.mjs). See military/route.ts for how they are read.
  */
 
+import { isKeeperRoom } from "../utils/rooms";
+
 /**
  * Cost of a room entered on the route (Game.map.findRoute): our rooms and remotes, then neutral
  * rooms, then other players' remotes; their rooms (towers) and source keeper rooms are never crossed,
@@ -16,20 +18,8 @@ export interface RouteRoomInfo {
     reserver?: string;
 }
 
-/**
- * Source keeper room by its name: the 8 rooms around a sector center (coordinates 4-6 within the sector,
- * the center 5,5 excepted). cartographer avoids the tiles within 5 of their sources and minerals while the
- * squads' own PathFinder did not: shard0 2026-10-25, the W27N9 quad routed through W26N5 got ERR_NO_PATH
- * from cartographer on every step, ~5 CPU per tick, and keepers around.
- */
-export function isKeeperRoom(roomName: string): boolean {
-    const match = /^[WE](\d+)[NS](\d+)$/.exec(roomName);
-    if (!match) return false;
-    const x = Number(match[1]) % 10;
-    const y = Number(match[2]) % 10;
-    return x >= 4 && x <= 6 && y >= 4 && y <= 6 && !(x === 5 && y === 5);
-}
-
+// Keeper rooms (utils/rooms.ts isKeeperRoom): shard0 2026-10-25, the W27N9 quad routed through W26N5 got
+// ERR_NO_PATH from cartographer on every step, ~5 CPU per tick, and keepers around
 export function routeRoomCost(
     roomName: string,
     target: string,
