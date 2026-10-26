@@ -331,6 +331,19 @@ function printExcluded(memory, time) {
   );
 }
 
+function printMilitary(memory, time) {
+  const military = memory.military ?? {};
+  const target = military.attack ? `${military.attack} (manual)` : military.target ? `${military.target.room} (${military.target.reason}, roi ${military.target.roi ?? "?"}, since ${military.target.since})` : "none";
+  section(`Military: target ${target}`);
+  const aggression = Object.entries(military.aggression ?? {}).map(([p, v]) => `${p} ${Math.round(v)}`);
+  console.log(`aggression: ${aggression.join(", ") || "none"}`);
+  const skipped = Object.entries(military.skipped ?? {});
+  if (skipped.length > 0) table(["left alone", "why"], skipped, [0, 1]);
+  const recent = (military.log ?? []).filter(e => time === undefined || time - e.time < 50000);
+  if (recent.length > 0)
+    table(["mission", "result", "tick", "losses", "squad"], recent.map(e => [e.room, e.result, e.time, e.losses, e.squad ?? ""]), [0, 1, 4]);
+}
+
 function printCpu(entries, memory) {
   const recent = entries.slice(-LAST);
   const ticks = recent.reduce((s, e) => s + e.ticks, 0);
@@ -393,6 +406,7 @@ try {
   }
   printRemotes(history.remotes, source.memory);
   printExcluded(source.memory, source.time);
+  printMilitary(source.memory, source.time);
   printSpawns(history.spawns);
 } catch (e) {
   console.error(`live-inspect: ${e.message}`);

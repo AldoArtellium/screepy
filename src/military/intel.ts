@@ -60,8 +60,15 @@ declare global {
              * the target, "max" the strongest in stock (before 2026-10-25), "none" plain bodies
              */
             boosts?: "auto" | "max" | "none";
-            /** Automatic target (strongholds near our rooms, players with `auto`) */
-            target?: { room: string; reason: "stronghold" | "player"; since: number; roi?: number };
+            /** Automatic target with its strategic reason (targets.ts, strategy.ts) */
+            target?: {
+                room: string;
+                reason: import("./strategy").StrategicReason;
+                since: number;
+                roi?: number;
+            };
+            /** Hostile rooms left alone for want of a strategic reason at the last target search: why */
+            skipped?: { [room: string]: string };
             duos: { [name: string]: import("./duo").DuoMemory };
             quads?: { [name: string]: import("./quad").QuadMemory };
             /** Lowest RCL of the attacking room (default 4; lower it to test sooner) */

@@ -341,6 +341,11 @@ export function buildReport(state: ReportState): string {
         for (const entry of (military.log ?? []).filter(e => e.time > state.time)) {
             parts.push(`${entry.room} ${entry.result}, ${entry.losses} lost`);
         }
+        const skipped = Object.keys(military.skipped ?? {});
+        if (skipped.length > 0) {
+            const more = skipped.length > 5 ? ` +${skipped.length - 5}` : "";
+            parts.push(`left alone ${skipped.slice(0, 5).join(", ")}${more}`);
+        }
         if (parts.length > 0) lines.push(`Attack ${parts.join(" | ")}`);
     }
 

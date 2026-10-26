@@ -1,5 +1,6 @@
 /**
- * Which players we may attack automatically (targets.ts), pure functions (tests/militaryRoi/run.mjs).
+ * A player's size and aggression, read by strategy.ts to decide whether we may attack them, pure
+ * functions (tests/militaryRoi/run.mjs).
  *
  * - Strength: the game API gives no other player's GCL, so a player's size is the number of rooms we
  *   have seen owned by them (military intel and static intel, seen within ROOMS_SEEN_AGE). A player with
@@ -9,7 +10,8 @@
  * - Aggression: damage their creeps dealt to ours (creeps, and structures in our owned and remote rooms),
  *   from the room event log (EVENT_ATTACK, our hits back on them left out), decaying like infamy. Unlike
  *   infamy (energy value of every creep of theirs seen in our rooms: scouts, harvesters and reservers
- *   included), only real hostile acts count. A stronger player that hurt us recently is fair game again.
+ *   included), only real hostile acts count. A stronger player that hurt us enough is fair game again
+ *   (strategy.ts AGGRESSION_RETALIATE).
  * Our design.
  */
 
@@ -51,15 +53,6 @@ export function playerRoomCounts(
 
 export function looksStronger(theirRooms: number, ourRooms: number): boolean {
     return theirRooms > ourRooms;
-}
-
-export function isAggressive(aggression: number): boolean {
-    return aggression >= AGGRESSION_HOSTILE;
-}
-
-/** A player's room is an automatic target unless the player looks stronger and has not attacked us */
-export function mayTargetPlayer(theirRooms: number, ourRooms: number, aggression: number): boolean {
-    return !looksStronger(theirRooms, ourRooms) || isAggressive(aggression);
 }
 
 export interface AttackEventItem {
