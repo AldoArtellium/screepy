@@ -9,7 +9,8 @@ import { stayInPlace, whenInRange } from "../core/movement";
 import { isFast } from "../defense/RoomDefense";
 import { trafficManager } from "../modules/TrafficManager";
 import { isRoomUnderAttack } from "../modules/RoomIntel";
-import { groupMembers, REMOTE_DEFENDER, waitingForGroup } from "../remote/remoteDefense";
+import { groupMembers, missingBoosts, REMOTE_DEFENDER, waitingForGroup } from "../remote/remoteDefense";
+import { countStat } from "../utils/stats";
 import { performRecycle } from "./recycle";
 import { registerRole } from "./registry";
 
@@ -23,6 +24,14 @@ const KITE_RANGE = 3;
 export function runRemoteDefender(creep: Creep): void {
     const targetRoom = creep.memory.targetRoom;
     if (!targetRoom) {
+        performRecycle(creep);
+        return;
+    }
+    // A defender spawned to win boosted whose boosts timed out would lose the fight: recycle it
+    // (CreepRunner keeps it at the labs while its request lasts)
+    if (missingBoosts(creep)) {
+        countStat("remoteDefense:boostMissed");
+        delete creep.memory.targetRoom;
         performRecycle(creep);
         return;
     }
