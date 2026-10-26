@@ -17,15 +17,16 @@ import {
     canReserveFrom,
     hasRemoteContainer,
     isRemoteUnderAttack,
-    maintenanceWork,
     needsRepairs,
     remoteContainer,
     remotePath,
     RemoteSource,
+    repairNeed,
     remoteSources,
     sourceEnergyCapacity
 } from "./RemoteMining";
 import { cpuPressure, reservationValue } from "./remoteIncome";
+import { builderWork } from "./repairs";
 import { pathTerrain, recordSpawnLateness, spawnLeadObserved, travelObserved, walkTicks } from "./travel";
 
 export const REMOTE_HARVESTER = "remoteHarvester";
@@ -193,9 +194,9 @@ function hasRemoteHarvesters(home: Room, source: RemoteSource): boolean {
     return creepsByRole(home.name, REMOTE_HARVESTER).some(c => c.memory.source === source.key);
 }
 
-/** WORK a source's container and roads need, once it is mined and something needs repairs */
-function builderDemand(home: Room, source: RemoteSource): number {
-    return hasRemoteHarvesters(home, source) && needsRepairs(source) ? maintenanceWork(source) : 0;
+/** A source's container and roads need a builder trip, once it is mined */
+function builderDue(home: Room, source: RemoteSource): boolean {
+    return hasRemoteHarvesters(home, source) && needsRepairs(source);
 }
 
 function builderBody(home: Room, size: number, energy = energyLimit(home)): BodyPartConstant[] {
@@ -207,21 +208,24 @@ function builderBody(home: Room, size: number, energy = energyLimit(home)): Body
     });
 }
 
-/** Builders of equal size covering the maintenance of every active source (Hivemind getMaximumBuilderSize) */
-function builderSize(home: Room): number {
-    const total = _.sum(remoteSources(home.name).filter(s => !isRemoteUnderAttack(s)), s => maintenanceWork(s));
-    const maxWork = builderBody(home, total, home.energyCapacityAvailable).filter(p => p === WORK).length;
-    if (maxWork === 0) return 0;
-    return Math.ceil(total / Math.ceil(total / maxWork));
-}
-
-function builderOption(home: Room, demand: number): RemoteOption | null {
+/**
+ * One remote builder per home at a time, its WORK sized on what the due sources miss (repairs.ts
+ * builderWork: hits to repair and progress to build, spent within one life) and capped by the body the
+ * home can spawn. Hivemind: builders of equal size until their WORK covers 0.7 + 0.03 per path tile of
+ * every source (getMaximumBuilderSize); shard0 W27N5 kept ~4.7 builders of 33 parts on healthy roads.
+ */
+function builderOption(home: Room): RemoteOption | null {
     if (!home.storage && !home.terminal) return null;
     if (effectiveEnergy(home) < 5000) return null;
-    if (activeParts(creepsByRole(home.name, REMOTE_BUILDER), WORK) >= demand) return null;
-    const size = builderSize(home);
+    if (creepsByRole(home.name, REMOTE_BUILDER).length > 0) return null;
+    const due = remoteSources(home.name).filter(s => !isRemoteUnderAttack(s) && builderDue(home, s));
+    const work = builderWork(due.map(s => ({ ...repairNeed(s), travel: s.travelTime })));
+    if (work === 0) return null;
+    const maxWork = builderBody(home, work, home.energyCapacityAvailable).filter(p => p === WORK).length;
+    const size = Math.min(work, maxWork);
     if (size === 0) return null;
-    return { role: REMOTE_BUILDER, unit: "builder", priority: 3, weight: 0, size };
+    const reason = `${work} WORK for ${due.length} source(s)`;
+    return { role: REMOTE_BUILDER, unit: "builder", priority: 3, weight: 0, size, reason };
 }
 
 /**
@@ -326,7 +330,7 @@ export const remoteSpawnRole: SpawnRole = {
         // Serious enemies at home: no remote spawn
         if (enemyStrength(home) >= ENEMY_STRENGTH_NORMAL) return [];
         let haulerDemand = 0;
-        let buildDemand = 0;
+        let builderChecked = false;
         const reserved = new Set<string>();
         for (const source of remoteSources(home.name)) {
             if (isRemoteUnderAttack(source)) continue;
@@ -334,9 +338,12 @@ export const remoteSpawnRole: SpawnRole = {
             if (hasRemoteContainer(source) && hasRemoteHarvesters(home, source)) haulerDemand += requiredCarry(home, source);
             const hauler = haulerOption(home, haulerDemand);
             if (hauler) return [hauler];
-            buildDemand += builderDemand(home, source);
-            const builder = builderOption(home, buildDemand);
-            if (builder) return [builder];
+            // The builder covers every due source: offered at the first (closest) one, checked once
+            if (!builderChecked && builderDue(home, source)) {
+                builderChecked = true;
+                const builder = builderOption(home);
+                if (builder) return [builder];
+            }
             const harvester = harvesterOption(home, source);
             if (!harvester) harvesterWanted.delete(source.key);
             else if (!harvesterWanted.has(source.key)) {

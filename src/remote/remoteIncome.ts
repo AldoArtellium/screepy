@@ -15,7 +15,10 @@ export interface SourceEconomy {
     distance: number;
     /** Roads (storage era): haulers and harvesters get road bodies */
     roads: boolean;
-    /** WORK of the remote builders keeping its container and roads up (0 before the storage) */
+    /**
+     * Steady WORK of the remote builder keeping its roads up (0 before the storage): a fraction of the
+     * home's one builder, repairs.ts upkeepWork (RemoteMining maintenanceWork)
+     */
     maintenanceWork: number;
 }
 
@@ -45,10 +48,11 @@ export function sourceNet(source: SourceEconomy): number {
     const carry = (2 * distance * generation) / CARRY_CAPACITY;
     const haulerCost = costWithMove(carry, CARRY, roads) / CREEP_LIFE_TIME;
 
-    // Remote builders (storage era): CARRY 5 : WORK 2 on road bodies
+    // Remote builders (storage era): CARRY 5 : WORK 2 on road bodies; the steady WORK is a fraction of the
+    // home's one builder (repairs.ts upkeepWork), so no rounding
     const builderWork = source.maintenanceWork;
-    const builderCarry = Math.ceil(builderWork * 2.5);
-    const builderMoves = Math.ceil((builderWork + builderCarry) / 2);
+    const builderCarry = builderWork * 2.5;
+    const builderMoves = (builderWork + builderCarry) / 2;
     const builderCost =
         (builderWork * BODYPART_COST[WORK] + builderCarry * BODYPART_COST[CARRY] + builderMoves * BODYPART_COST[MOVE]) /
         CREEP_LIFE_TIME;
@@ -192,8 +196,8 @@ export function sourceParts(source: SourceEconomy): number {
     const carry = (2 * distance * generation) / CARRY_CAPACITY;
     const haulers = carry + moveParts(carry, roads);
     const builderWork = source.maintenanceWork;
-    const builderCarry = Math.ceil(builderWork * 2.5);
-    const builders = builderWork + builderCarry + Math.ceil((builderWork + builderCarry) / 2);
+    const builderCarry = builderWork * 2.5;
+    const builders = builderWork + builderCarry + (builderWork + builderCarry) / 2;
     return harvester + haulers + builders;
 }
 
