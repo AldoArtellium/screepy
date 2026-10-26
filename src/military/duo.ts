@@ -248,6 +248,20 @@ function moveHealer(healer: Creep, to: RoomPosition, range: number): void {
     trafficManager.requestMove(healer, to, { range, priority: HEALER_PRIORITY });
 }
 
+/**
+ * Keeps a creep where it is. On an exit tile outside the target room it steps off the edge instead:
+ * the engine carries a creep left there to the next room every tick, so a pair holding on both sides
+ * of a border swapped rooms every tick and never met (shard0 W28N5 / W27N5, 2026-10-26)
+ */
+function hold(creep: Creep, priority: number, targetRoom?: string): void {
+    const { x, y } = creep.pos;
+    if ((x === 0 || y === 0 || x === 49 || y === 49) && creep.room.name !== targetRoom) {
+        trafficManager.moveToRoom(creep, creep.room.name, { priority });
+    } else {
+        trafficManager.requestMove(creep, creep.pos, { range: 0, priority });
+    }
+}
+
 /** Moves the pair one tile: the attacker to `to` when the healer is next to it, the healer behind */
 function movePair(attacker: Creep, healer: Creep, to: RoomPosition | null, solo = false, targetRoom?: string): void {
     const together = attacker.pos.roomName === healer.pos.roomName && attacker.pos.isNearTo(healer);
@@ -266,7 +280,7 @@ function movePair(attacker: Creep, healer: Creep, to: RoomPosition | null, solo 
                 trafficManager.requestMove(healer, healer.pos, { range: 0, priority: HEALER_PRIORITY });
             }
         } else {
-            trafficManager.requestMove(attacker, attacker.pos, { range: 0, priority: ATTACKER_PRIORITY });
+            hold(attacker, ATTACKER_PRIORITY, targetRoom);
             moveHealer(healer, attacker.pos, 1);
         }
         return;
@@ -279,13 +293,13 @@ function movePair(attacker: Creep, healer: Creep, to: RoomPosition | null, solo 
         return;
     }
     if (!to || to.isEqualTo(attacker.pos) || attacker.fatigue > 0 || healer.fatigue > 0 || blockerAt(to, targetRoom ?? "")) {
-        trafficManager.requestMove(attacker, attacker.pos, { range: 0, priority: ATTACKER_PRIORITY });
-        trafficManager.requestMove(healer, healer.pos, { range: 0, priority: HEALER_PRIORITY });
+        hold(attacker, ATTACKER_PRIORITY, targetRoom);
+        hold(healer, HEALER_PRIORITY, targetRoom);
         return;
     }
     trafficManager.requestStep(attacker, to, ATTACKER_PRIORITY);
     // The healer keeps adjacent: it takes the attacker's tile unless it is already next to the new one
-    if (healer.pos.isNearTo(to) && to.roomName === healer.pos.roomName) trafficManager.requestMove(healer, healer.pos, { range: 0, priority: HEALER_PRIORITY });
+    if (healer.pos.isNearTo(to) && to.roomName === healer.pos.roomName) hold(healer, HEALER_PRIORITY, targetRoom);
     else moveHealer(healer, attacker.pos, 0);
 }
 
