@@ -37,6 +37,7 @@ import {
 } from "./remoteIncome";
 import { blockerCost } from "./blockers";
 import { isRemoteExcluded } from "./remoteBalance";
+import { isRemoteBlocked } from "./remoteRooms";
 import { Hits, repairsDue } from "./repairs";
 
 export interface RemoteSource {
@@ -182,16 +183,9 @@ function pathRooms(source: RemoteSource): string[] {
     return rooms.includes(source.room) ? rooms : rooms.concat(source.room);
 }
 
-/**
- * Another player's room or remote (reserved by them): never crossed on the way to a remote, as
- * The International's remotesManager (remoteTypeWeights: enemy and enemyRemote are Infinity).
- * Invader reservations (invader cores) don't count: RoomIntel tracks their danger.
- */
-function isForeignRoom(roomName: string): boolean {
-    const intel = intelManager.getIntel(roomName);
-    if (!intel) return false;
-    if (intel.owner && intel.owner !== Memory.username) return true;
-    return !!intel.reserver && intel.reserver !== Memory.username && intel.reserver !== "Invader";
+/** Another player's room or remote, or a source keeper room: never crossed on the way to a remote (remoteRooms.ts) */
+function isBlockedRoom(roomName: string): boolean {
+    return isRemoteBlocked(roomName, intelManager.getIntel(roomName), Memory.username);
 }
 
 /** Positions of a packed path; the array is shared, don't modify it */
@@ -368,9 +362,9 @@ function pathFor(home: Room, sourcePos: RoomPosition): RoomPosition[] | null {
     if (cache) {
         const ttl = cache.path ? PATH_TTL : FAILED_PATH_TTL;
         // A cached path that now crosses someone else's room is searched again at once
-        const crossesForeign =
-            !!cache.path && roomsOf(cache.path).some(r => r !== sourcePos.roomName && isForeignRoom(r));
-        if (Game.time - cache.generated < jitterFor(key, ttl) && !crossesForeign) return cache.path ? unpackPath(cache.path) : null;
+        const crossesBlocked =
+            !!cache.path && roomsOf(cache.path).some(r => r !== sourcePos.roomName && isBlockedRoom(r));
+        if (Game.time - cache.generated < jitterFor(key, ttl) && !crossesBlocked) return cache.path ? unpackPath(cache.path) : null;
     }
     const storagePos = roomPlanner.getPlan(home.name)?.getLocations("storage")[0];
     // No plan yet: don't cache the failure (Hivemind cached null for 5000 ticks)
@@ -386,7 +380,7 @@ function pathFor(home: Room, sourcePos: RoomPosition): RoomPosition[] | null {
         maxOps: 10000,
         heuristicWeight: 1,
         roomCallback: roomName =>
-            roomName !== sourcePos.roomName && isForeignRoom(roomName) ? false : sharedCostMatrix(roomName, shared)
+            roomName !== sourcePos.roomName && isBlockedRoom(roomName) ? false : sharedCostMatrix(roomName, shared)
     });
     const found = start ? [start, ...result.path] : result.path;
     const path = result.incomplete || found.length >= MAX_PATH_LENGTH ? null : found;

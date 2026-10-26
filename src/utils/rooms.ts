@@ -1,5 +1,5 @@
 /**
- * Room name helpers: world coordinates, rooms in range, highways, room status (heap cache).
+ * Room name helpers: world coordinates, rooms in range, highways, source keeper rooms, room status (heap cache).
  */
 
 import { jitter } from "./jitter";
@@ -22,6 +22,20 @@ export function roomNameFromCoords(wx: number, wy: number): string {
 export function isHighway(roomName: string): boolean {
     const match = /^[WE](\d+)[NS](\d+)$/.exec(roomName);
     return !!match && (Number(match[1]) % 10 === 0 || Number(match[2]) % 10 === 0);
+}
+
+/**
+ * Source keeper room by its name: the 8 rooms around a sector center (coordinates 4-6 within the sector,
+ * the center 5,5 excepted). cartographer avoids the tiles within 5 of their sources and minerals, so a
+ * path PathFinder found through one gets ERR_NO_PATH from cartographer (shard0 2026-10-25/26: the W27N9
+ * quad in W26N5, W28N7's reservers to W27N7 in W26N6).
+ */
+export function isKeeperRoom(roomName: string): boolean {
+    const match = /^[WE](\d+)[NS](\d+)$/.exec(roomName);
+    if (!match) return false;
+    const x = Number(match[1]) % 10;
+    const y = Number(match[2]) % 10;
+    return x >= 4 && x <= 6 && y >= 4 && y <= 6 && !(x === 5 && y === 5);
 }
 
 /** Room status (normal / novice / respawn / closed), heap cache: novice and respawn areas are walled off */
