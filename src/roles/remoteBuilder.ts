@@ -23,6 +23,7 @@ import {
     remoteSources,
     sourcePos
 } from "../remote/RemoteMining";
+import { onRoomEdge } from "../remote/repairs";
 import { REMOTE_BUILDER, REMOTE_HARVESTER } from "../remote/remoteSpawnRole";
 import { buildEnergy, countWork, repairEnergy } from "../utils/history";
 import { fleeIfThreatened } from "./flee";
@@ -205,8 +206,8 @@ function buildRoadOnPath(creep: Creep, source: RemoteSource, work: number, state
             if (road.hits < road.hitsMax - 2 * work * REPAIR_POWER) return true;
             continue;
         }
-        // Our rooms get their roads from the room builder
-        if (road || controller?.my) continue;
+        // Our rooms get their roads from the room builder; no site can stand on a room edge
+        if (road || controller?.my || onRoomEdge(pos)) continue;
         if (_.size(Game.constructionSites) >= MAX_GLOBAL_SITES) continue;
         if (pos.lookFor(LOOK_CONSTRUCTION_SITES).length > 0) continue;
         const roomSites = _.filter(Game.constructionSites, s => s.pos.roomName === pos.roomName).length;

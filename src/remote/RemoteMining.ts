@@ -38,7 +38,7 @@ import {
 import { blockerCost } from "./blockers";
 import { isRemoteExcluded } from "./remoteBalance";
 import { isRemoteBlocked } from "./remoteRooms";
-import { Hits, PathNeed, pathNeed, repairsDue, Tile, upkeepWork } from "./repairs";
+import { Hits, onRoomEdge, PathNeed, pathNeed, repairsDue, Tile, upkeepWork } from "./repairs";
 
 export interface RemoteSource {
     /** `${room}:${x}:${y}` */
@@ -951,9 +951,9 @@ function isOwnedRoom(roomName: string): boolean {
     return !!Game.rooms[roomName]?.controller?.my;
 }
 
-/** Path tiles outside our rooms: the remote builders keep a road on them */
+/** Path tiles outside our rooms, off the room edges (repairs.ts onRoomEdge): remote builders keep a road there */
 export function remoteRoadPath(source: RemoteSource): RoomPosition[] {
-    return remotePath(source).filter(p => !isOwnedRoom(p.roomName));
+    return remotePath(source).filter(p => !isOwnedRoom(p.roomName) && !onRoomEdge(p));
 }
 
 /**
@@ -1048,7 +1048,7 @@ export function operationRoadPositions(homeRoom: string): RoomPosition[] {
         const positions: { [xy: number]: RoomPosition } = {};
         for (const source of remoteSources(homeRoom)) {
             for (const pos of remotePath(source)) {
-                if (pos.roomName === homeRoom) positions[pos.y * 50 + pos.x] = pos;
+                if (pos.roomName === homeRoom && !onRoomEdge(pos)) positions[pos.y * 50 + pos.x] = pos;
             }
         }
         return Object.values(positions);
