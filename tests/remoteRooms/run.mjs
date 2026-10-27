@@ -82,5 +82,25 @@ pruneContests(entries, 25000);
 check("prune drops expired entries only", !entries.W27N4 && !!entries.W28N4);
 check("unknown room is not contested", !isContested(undefined, 1000));
 
+// Released rooms (after our squad destroyed the player's room they were mined from): shard0 2026-10-27,
+// W24N7 reserved and mined by Blindfold from W25N7, W24N8's only reachable remote
+const { releaseFrom, RELEASE_TTL, RELEASE_CREEP_GRACE } = require(join(OUT, "remote", "remoteRooms.js"));
+const released = { player: "Blindfold", since: 10000, until: 10000 + RELEASE_TTL };
+check("release lasts RELEASE_TTL", RELEASE_TTL >= 5000);
+check("released right after", releaseFrom(released, 10001)?.player === "Blindfold");
+check("over after RELEASE_TTL", releaseFrom(released, 10000 + RELEASE_TTL) === undefined);
+check("their leftover creeps ignored at first", releaseFrom(released, 10000 + RELEASE_CREEP_GRACE - 1)?.creeps === true);
+check("their creeps count again after the grace", releaseFrom(released, 10000 + RELEASE_CREEP_GRACE)?.creeps === false);
+const early = releaseFrom(released, 10100);
+const late = releaseFrom(released, 10000 + RELEASE_CREEP_GRACE + 100);
+check("their reservation does not contest", contestingPlayer(sighting([], { reserver: "Blindfold" }), ME, early) === undefined);
+check("their reservation still not, later", contestingPlayer(sighting([], { reserver: "Blindfold" }), ME, late) === undefined);
+check("their leftover harvester does not contest", contestingPlayer(sighting([{ owner: "Blindfold", harvests: true, claims: false }]), ME, early) === undefined);
+check("a new harvester after the grace contests", contestingPlayer(sighting([{ owner: "Blindfold", harvests: true, claims: false }]), ME, late) === "Blindfold");
+check("another player still contests", contestingPlayer(sighting([], { reserver: "asdpof" }), ME, early) === "asdpof");
+check("their reservation does not block the room", !isRemoteBlocked("W24N7", { reserver: "Blindfold" }, ME, false, "Blindfold"));
+check("another player's reservation still blocks", isRemoteBlocked("W24N7", { reserver: "asdpof" }, ME, false, "Blindfold"));
+check("their owned room still blocks", isRemoteBlocked("W25N7", { owner: "Blindfold" }, ME, false, "Blindfold"));
+
 console.log(failures === 0 ? "\nall checks passed" : `\n${failures} check(s) failed`);
 process.exit(failures === 0 ? 0 : 1);

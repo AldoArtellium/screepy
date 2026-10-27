@@ -31,7 +31,7 @@ import {
     SquadPlan,
     SquadType
 } from "./sizing";
-import { chooseAutoTarget } from "./targets";
+import { chooseAutoTarget, releaseFallen } from "./targets";
 import { militaryCpuAverage, militaryCpuTooHigh } from "./cpuGuard";
 import { decisionBucket } from "../utils/throttle";
 
@@ -106,7 +106,10 @@ function finish(
     mission: { targetRoom: string; spawnRoom: string; losses: number },
     result: "success" | "abandoned" | "retargeted"
 ): void {
-    if (result === "success") startLooting(mission.targetRoom, mission.spawnRoom);
+    if (result === "success") {
+        startLooting(mission.targetRoom, mission.spawnRoom);
+        releaseFallen(mission.targetRoom);
+    }
     // The members go to be recycled: boosting them first (CreepRunner boosts before the role) wastes the compound
     for (const creep of kind === "duo" ? duoCreeps(name) : quadCreeps(name)) cancelBoost(creep.name);
     const memory = militaryMemory();
@@ -234,6 +237,7 @@ function runMilitary(): void {
         const auto = chooseAutoTarget(!!memory.target && isEngaged(memory.target.room));
         if (auto && auto.room !== memory.target?.room) {
             memory.target = { room: auto.room, reason: auto.reason, since: Game.time, roi: Math.round(auto.roi * 100) / 100 };
+            countStat(`military:target:${auto.reason}`);
             log.info("Military", `Automatic target: ${auto.room} (${auto.reason}, value ${auto.value} for a squad of ${auto.cost} energy, CPU priced ${auto.cpu}, spawn time ${auto.spawnTime})`);
         } else if (!auto && memory.target && !hasMission(memory.target.room)) delete memory.target;
     }

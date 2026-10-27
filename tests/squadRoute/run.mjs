@@ -62,6 +62,11 @@ check("sector center W25N5 (no keepers)", cost("W25N5", {}), ROUTE_COST.neutral)
 check("room next to the keeper block W27N5", cost("W27N5", {}), ROUTE_COST.neutral);
 check("highway W30N5", cost("W30N5", {}), ROUTE_COST.neutral);
 check("keeper room that is the target", cost("W26N5", {}, false, "W26N5"), ROUTE_COST.ally);
+// shard0 2026-10-27: W24N8 (respawn zone) to W25N7 was routed through W25N8 (normal zone, walled off):
+// findRoute ignores the zone walls, the quad would have stood at the wall
+check("room of another zone", routeRoomCost("W25N8", "W25N7", { reserver: "asdpof" }, ME, false, false), Infinity);
+check("target in another zone", routeRoomCost("W25N7", "W25N7", { owner: "Blindfold" }, ME, false, false), Infinity);
+check("same zone by default", routeRoomCost("W24N7", "W25N7", { reserver: "Blindfold" }, ME, false), ROUTE_COST.enemyRemote);
 check("order ally < neutral < enemy remote < enemy",
     ROUTE_COST.ally < ROUTE_COST.neutral && ROUTE_COST.neutral < ROUTE_COST.enemyRemote && ROUTE_COST.enemyRemote < Infinity, true);
 

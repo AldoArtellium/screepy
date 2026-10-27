@@ -7,6 +7,11 @@
  * - expansion: the player reserves our expansion target from that room, or claimed it.
  * - territory: its fall frees remote sources we can mine: none while the remote CPU budget is full.
  * - stronghold (targets.ts): the remote sources it blocks, by the same budget rule.
+ * - encroacher: a small room (RCL <= ENCROACHER_MAX_RCL, ENCROACHER_MAX_TOWERS towers, no armed creep
+ *   seen) within ENCROACHER_RANGE of one of ours, whatever its owner's size, until that owner answers
+ *   (AGGRESSION_HOSTILE): shard0 2026-10-27, Blindfold (8 rooms, GCL 8) rebuilt W25N7 at RCL 3 next to
+ *   W24N8 and reserved W24N7, the only remote W24N8 reaches in its respawn area. Razed once at tick
+ *   78579596 with no answer in 28000 ticks; it is attacked again while it is small, before more towers.
  * Loot and infamy only add to the value of a target that has a reason (roi.ts).
  * shard0 2026-10-26 (tick 78586437), before: 5 missions in ~25000 ticks, 17 creeps lost, 2 rooms
  * destroyed (Blindfold's W25N7, rebuilt since; DoctorCat92's W29N3 for 300 loot), no player had hurt us
@@ -17,7 +22,32 @@
 import { AGGRESSION_HOSTILE } from "./playerThreat";
 import { RESERVATION_FRESH, RoomHolding } from "./roi";
 
-export type StrategicReason = "aggressor" | "expansion" | "territory" | "stronghold";
+export type StrategicReason = "aggressor" | "expansion" | "territory" | "stronghold" | "encroacher";
+
+/** Linear distance of an encroaching room from our closest owned room */
+export const ENCROACHER_RANGE = 2;
+/** Encroaching rooms are only attacked while small: a few hundred hits of tower damage, no labs */
+export const ENCROACHER_MAX_RCL = 3;
+export const ENCROACHER_MAX_TOWERS = 1;
+
+export interface EncroachFacts {
+    /** Linear distance to our closest owned room */
+    distance: number;
+    rcl?: number;
+    towers: number;
+    /** Damage per tick of the hostile creeps seen in the room (military intel) */
+    damage: number;
+}
+
+/** A small player room next to ours, without armed creeps */
+export function isEncroacher(facts: EncroachFacts): boolean {
+    return (
+        facts.distance <= ENCROACHER_RANGE &&
+        (facts.rcl ?? 0) <= ENCROACHER_MAX_RCL &&
+        facts.towers <= ENCROACHER_MAX_TOWERS &&
+        facts.damage === 0
+    );
+}
 
 /** Damage (hits) a stronger player must deal us before we answer (~10 tower shots) */
 export const AGGRESSION_RETALIATE = 3000;
@@ -70,11 +100,17 @@ export interface PlayerFacts {
     /** Freed remote sources we could mine (usableSources) */
     usableSources: number;
     blocksExpansion: boolean;
+    /** isEncroacher */
+    encroacher?: boolean;
 }
 
-/** Reason to attack a player's room, null to leave it alone; a stronger player only for aggression */
+/**
+ * Reason to attack a player's room, null to leave it alone; a stronger player only for aggression, or
+ * for an encroaching room until it answers (AGGRESSION_HOSTILE): then only real aggression counts
+ */
 export function playerReason(facts: PlayerFacts): StrategicReason | null {
     if (isAggressor(facts.aggression, facts.stronger)) return "aggressor";
+    if (facts.encroacher && facts.aggression < AGGRESSION_HOSTILE) return "encroacher";
     if (facts.stronger) return null;
     if (facts.blocksExpansion) return "expansion";
     if (facts.usableSources > 0) return "territory";

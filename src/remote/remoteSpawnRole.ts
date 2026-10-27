@@ -9,7 +9,7 @@ import { bodyCost, buildBody, MoveMode } from "../core/bodyBuilder";
 import { activeParts, creepsByRole, effectiveEnergy } from "../core/roomState";
 import { ENEMY_STRENGTH_NORMAL, enemyStrength } from "../defense/RoomDefense";
 import { intelManager } from "../modules/IntelManager";
-import { hasInvaderCore } from "../modules/RoomIntel";
+import { hasInvaderCore, releasedPlayer } from "../modules/RoomIntel";
 import { countStat } from "../utils/stats";
 import { harvesterSizeFactor } from "../utils/throttle";
 import type { SpawnOption, SpawnRole } from "../spawning/spawnRoles";
@@ -288,8 +288,10 @@ function reserverOption(home: Room, source: RemoteSource): RemoteOption | null {
     if (!intel?.controllerPos || intel.owner) return null;
     const positions = intel.reservePositions ?? 0;
     const reservedByOther = !!intel.reserver && intel.reserver !== Memory.username;
-    // Under CPU pressure a reservation that doesn't pay per CPU is left out; another one is still attacked
-    if (!reservedByOther && !reservationPays(home, source.room)) return null;
+    // Under CPU pressure a reservation that doesn't pay per CPU is left out; another one is still attacked,
+    // and a room released from a player stays reserved for the release (a reserved controller can't be
+    // claimed, and an unreserved one is theirs to reserve again: shard0 W24N7 from Blindfold's W25N7)
+    if (!reservedByOther && !reservationPays(home, source.room) && !releasedPlayer(source.room)) return null;
     if (home.energyCapacityAvailable < 1300 && !(home.energyCapacityAvailable >= 650 && (positions > 1 || reservedByOther))) {
         return null;
     }
