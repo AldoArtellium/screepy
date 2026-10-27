@@ -75,15 +75,3 @@ export function throttleMultiplier(stopAt = 0, throttleAt = 5000): number {
     if (bucket < throttleAt) multiplier *= (throttleAt - stopAt) / (bucket - stopAt);
     return multiplier;
 }
-
-/**
- * Harvester size factor (Hivemind spawn-role/harvester.ts getHarvesterSizeFactor): each harvest
- * intent costs 0.2 official CPU whatever the WORK count, so twice the WORK drains a source with half
- * the intents. Hivemind does it from RCL 6 when the CPU use is above 75% of the limit; we do it as
- * soon as the room has a storage (energy to spare for the bigger bodies), with the same CPU condition.
- * Memory.stats.cpuAvg includes the intents' CPU on the official server.
- */
-export function harvesterSizeFactor(room: Room): number {
-    if (!room.storage) return 1;
-    return (Memory.stats?.cpuAvg ?? 0) > Game.cpu.limit * 0.75 ? 2 : 1;
-}

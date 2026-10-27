@@ -41,7 +41,7 @@ Object.assign(globalThis, {
 
 const {
     sourceCreeps, sourceNet, roomEnergyPerCreep, cpuAverage, budgetRooms,
-    reservationValue, reserverCpu, reserverClaimParts, reserverCost, sourceCpu, cpuPressure, expansionCpuFits,
+    reserverCost, cpuPressure, expansionCpuFits,
 } = require(join(OUT, "remote", "remoteIncome.js"));
 
 let failures = 0;
@@ -87,60 +87,30 @@ for (let i = 0; i < 20; i++) longAvg = cpuAverage(longAvg, 20 * 20, 20);
 check("400 ticks at a new level cover most of the way", longAvg > 16 && longAvg < 17, longAvg.toFixed(2));
 check("no sample keeps the average", cpuAverage(12, 0, 0) === 12);
 
-// shard0 W27N5, second dump: 15/20 CPU, bucket full, capped at 7
-const capped = { cpuAvg: 15, limit: 20, bucket: 10000, fullBucketTicks: 0, maxRooms: 7, currentRooms: 7, possibleRooms: 9 };
-check("75% CPU with a fresh full bucket keeps the cap", budgetRooms(capped) === 7);
-check("a bucket full for 1000 ticks allows one more room", budgetRooms({ ...capped, fullBucketTicks: 1000 }) === 8);
-check("below 75% one more room", budgetRooms({ ...capped, cpuAvg: 14.9 }) === 8);
-check("one more than possible lifts the cap", budgetRooms({ ...capped, maxRooms: 9, fullBucketTicks: 2000 }) === undefined);
-check("above 95% keeps the cap while the bucket holds 9000", budgetRooms({ ...capped, cpuAvg: 19.1, fullBucketTicks: 5000 }) === 7);
+// shard0 W27N5, second dump: 15/20 CPU, bucket full, capped at 7 (it used to stay capped there)
+const capped = { cpuAvg: 15, limit: 20, bucket: 10000, maxRooms: 7, currentRooms: 7, possibleRooms: 9 };
+check("75% CPU with a full bucket allows one more room", budgetRooms(capped) === 8);
+check("a bucket below 9000 keeps the cap", budgetRooms({ ...capped, bucket: 8900 }) === 7);
+check("one more than possible lifts the cap", budgetRooms({ ...capped, maxRooms: 9 }) === undefined);
+check("above 95% keeps the cap while the bucket holds 8000", budgetRooms({ ...capped, cpuAvg: 19.1 }) === 7);
 check("above 95% keeps the cap on a dip to 8900 (hysteresis)", budgetRooms({ ...capped, cpuAvg: 19.1, bucket: 8900 }) === 7);
 check("above 95% drops a room once the bucket is below 8000", budgetRooms({ ...capped, cpuAvg: 19.1, bucket: 7900 }) === 6);
-check("above the limit drops a room whatever the bucket", budgetRooms({ ...capped, cpuAvg: 20.1, fullBucketTicks: 5000 }) === 6);
+check("above the limit drops a room whatever the bucket", budgetRooms({ ...capped, cpuAvg: 20.1 }) === 6);
 check("a low bucket drops a room", budgetRooms({ ...capped, cpuAvg: 10, bucket: 4000 }) === 6);
 check("uncapped stays uncapped below 95%", budgetRooms({ ...capped, maxRooms: undefined, cpuAvg: 18 }) === undefined);
 
-// A bucket full for 1000 ticks: one more room must fit under 98% of the limit (shard0 2026-10-25:
-// 18.46/20, a room measured 0.86 with its moves, capped at 7 while the bucket stayed full)
-const near = { ...capped, cpuAvg: 18.46, fullBucketTicks: 2000 };
-check("shard0: a full bucket at 92% adds a measured 0.86 room", budgetRooms({ ...near, roomCpu: 0.86 }) === 8);
-check("a measured 1.5 CPU room does not fit at 18.46", budgetRooms({ ...near, roomCpu: 1.5 }) === 7);
-check("a measured room of 0.5 CPU still counts 0.8", budgetRooms({ ...near, cpuAvg: 18.9, roomCpu: 0.5 }) === 7);
-check("a fresh full bucket at 92% adds nothing", budgetRooms({ ...near, roomCpu: 0.86, fullBucketTicks: 999 }) === 7);
-check("below 75% the room must fit too", budgetRooms({ ...capped, limit: 10, cpuAvg: 7.4, roomCpu: 2 }) === 7);
-check("below 75% a room that fits is added", budgetRooms({ ...capped, limit: 10, cpuAvg: 7.4, roomCpu: 1.5 }) === 8);
+// One more room must fit under 95% of the limit with its measured CPU (shard0 2026-10-25: a room 0.86 with its moves)
+check("18.0 + a measured 0.86 room fits", budgetRooms({ ...capped, cpuAvg: 18, roomCpu: 0.86 }) === 8);
+check("18.46 + a measured 0.86 room does not fit", budgetRooms({ ...capped, cpuAvg: 18.46, roomCpu: 0.86 }) === 7);
+check("a measured room of 0.5 CPU still counts 0.8", budgetRooms({ ...capped, cpuAvg: 18.3, roomCpu: 0.5 }) === 7);
+check("a room that fits is added", budgetRooms({ ...capped, limit: 10, cpuAvg: 7.4, roomCpu: 1.5 }) === 8);
+check("a room that does not fit is not", budgetRooms({ ...capped, limit: 10, cpuAvg: 7.4, roomCpu: 2.2 }) === 7);
 // Hysteresis after a drop
 check("no room added within 5000 ticks of a drop", budgetRooms({ ...capped, cpuAvg: 12, ticksSinceDrop: 4999 }) === 7);
 check("a room added 5000 ticks after a drop", budgetRooms({ ...capped, cpuAvg: 12, ticksSinceDrop: 5000 }) === 8);
 check("the hold never delays a drop", budgetRooms({ ...capped, cpuAvg: 19.5, bucket: 7500, ticksSinceDrop: 10 }) === 6);
 check("the hold keeps an uncapped budget uncapped", budgetRooms({ ...capped, maxRooms: undefined, cpuAvg: 12, ticksSinceDrop: 10 }) === undefined);
-// Reservations under CPU pressure: energy added per CPU added, against a neutral source's energy per CPU
-const fmt = v => `+${v.energy.toFixed(2)} energy for ${v.cpu.toFixed(3)} CPU = ${v.perCpu.toFixed(1)}/CPU vs ${v.alternative.toFixed(1)}`;
-const room = (distance, roads = false) => ({ generation: 10, distance, roads, maintenanceWork: 0 });
-for (const [capacity, distance, n] of [[650, 50, 1], [650, 50, 2], [1300, 50, 1], [1300, 50, 2], [1300, 120, 1], [1950, 80, 1], [1800, 50, 1]]) {
-    console.log(`reservation ${n} source(s), ${distance} tiles, ${capacity} capacity: ${fmt(reservationValue(room(distance), n, capacity))}`);
-}
-const oneSmall = reservationValue(room(50), 1, 650);
-const twoSmall = reservationValue(room(50), 2, 650);
-const oneBig = reservationValue(room(50), 1, 1300);
-check("1-CLAIM reservers: a one-source room doesn't pay per CPU", !oneSmall.pays, fmt(oneSmall));
-check("1-CLAIM reservers: a two-source room pays per CPU", twoSmall.pays, fmt(twoSmall));
-check("2-CLAIM reservers, one at a time: a one-source room still doesn't pay per CPU", !oneBig.pays, fmt(oneBig));
-check("2-CLAIM reservers: a two-source room pays per CPU", reservationValue(room(50), 2, 1300).pays);
-check("a far one-source room pays even less", !reservationValue(room(120), 1, 1300).pays);
-check("a second source doubles the reservation's energy", twoSmall.energy > 2 * oneSmall.energy);
-check("a 2-CLAIM reserver costs half the CPU per tick of a 1-CLAIM one", Math.abs(reserverCpu(2, 50) * 2 - reserverCpu(1, 50)) < 1e-9);
-check("reserver CPU: 600 x (code + reserve intent) over 550 ticks", Math.abs(reserverCpu(1, 50) - (600 * 0.26) / 550) < 1e-9, reserverCpu(1, 50).toFixed(3));
-check("claim parts by capacity", reserverClaimParts(649) === 0 && reserverClaimParts(1300) === 2 && reserverClaimParts(1800) === 2 && reserverClaimParts(10000) === 8);
-check("bigger haulers: fewer CPU per energy", sourceCpu(room(50), 26) < sourceCpu(room(50), 6));
-
-// The score of a reserved room under pressure: the CPU-priced reserver brings a one-source room close to its neutral income
-const neutral = sourceNet({ ...room(50), generation: 5 });
-const reservedScore = sourceNet(room(50)) - reserverCost(50, true);
-const plainScore = sourceNet(room(50)) - reserverCost(50, false);
-console.log(`one source at 50 tiles: neutral ${neutral.toFixed(2)}, reserved ${plainScore.toFixed(2)}, reserved with CPU priced ${reservedScore.toFixed(2)}`);
-check("no pressure: the reserver costs its energy only", Math.abs(reserverCost(50, false) - 650 / 550) < 1e-9);
-check("under pressure the reserved score of a one-source room drops near its neutral income", reservedScore < plainScore && Math.abs(reservedScore - neutral) < 1.5, `${reservedScore.toFixed(2)} vs ${neutral.toFixed(2)}`);
+check("the reserver costs its energy over its time on station", Math.abs(reserverCost(50) - 650 / 550) < 1e-9);
 check("no Memory: no pressure", cpuPressure() === false);
 
 // Expansion CPU gate (Hivemind getCpuStats): 80% of the limit below 5 remote rooms, the whole limit from 5

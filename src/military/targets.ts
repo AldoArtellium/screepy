@@ -17,8 +17,6 @@
  *    (encroacher, whatever its owner's size until they answer) counts every source it frees. Rooms in safe mode or
  *    without spawn are skipped. Rooms left alone for want of a reason are listed in
  *    `Memory.military.skipped` (room: why) and logged once per change.
- * Under CPU pressure (remote budget capped, or CPU above 85%) the squad's CPU is priced in energy
- * (roi.ts squadCpu x a neutral remote source's energy per CPU): the remote budget gives that CPU up.
  * Rooms that failed in the last FAILURE_MEMORY ticks are left alone, and only targets the chosen squad
  * can fight (sizing.ts feasible) count. Before, Harabi's score (durability x distance / threat) with
  * strongholds always first: the mockup quad lost 8 creeps (~16k energy each way) for 22 units of loot.
@@ -27,9 +25,7 @@
 
 import { intelManager } from "../modules/IntelManager";
 import { releaseRooms } from "../modules/RoomIntel";
-import { cpuPressure, neutralEnergyPerCpu } from "../remote/remoteIncome";
-import { minedRemoteRooms, remoteSources, spawnBusyShare } from "../remote/RemoteMining";
-import { roomCountersSince } from "../utils/history";
+import { minedRemoteRooms, remoteSources } from "../remote/RemoteMining";
 import { log } from "../utils/logger";
 import { HostileRoom, militaryMemory } from "./intel";
 import { looksStronger, OwnedRoomSeen, playerRoomCounts } from "./playerThreat";
@@ -41,17 +37,13 @@ import {
     releasedRooms,
     remoteValue,
     RoomHolding,
-    spawnTimeCost,
     squadCost,
-    squadCpu,
     targetValue
 } from "./roi";
-import { planSquad, SquadPlan, squadMemberCosts, squadMemberParts } from "./sizing";
+import { planSquad, SquadPlan, squadMemberCosts } from "./sizing";
 import { blocksExpansion, isEncroacher, playerReason, spareRemoteRooms, StrategicReason, usableSources } from "./strategy";
 
 const MAX_DISTANCE = 10;
-/** Distance of the neutral remote source whose energy per CPU prices a squad's CPU (remoteIncome examples) */
-const CPU_PRICE_DISTANCE = 50;
 /** Linear distance of a stronghold from our rooms (remotes: one less) */
 const STRONGHOLD_RANGE = 2;
 /** A failed target is left alone this long */
@@ -62,24 +54,8 @@ export interface AutoTarget {
     reason: StrategicReason;
     roi: number;
     value: number;
-    /** Spawn energy with replacements, plus `cpu` */
+    /** Spawn energy and boosts with replacements */
     cost: number;
-    /** The squad's CPU priced in energy (0 without CPU pressure) */
-    cpu: number;
-    /** The income the origin's economy loses while its spawns make the squad (roi.ts spawnTimeCost) */
-    spawnTime: number;
-}
-
-/** Room income (local + remote harvest) per tick is averaged over this */
-const INCOME_WINDOW = 5000;
-
-/** Energy harvested per tick by each owned room's creeps over INCOME_WINDOW (history room counters) */
-function incomePerTick(): { [room: string]: number } {
-    const income: { [room: string]: number } = {};
-    for (const [room, { ticks, counters }] of Object.entries(roomCountersSince(Game.time - INCOME_WINDOW))) {
-        if (ticks > 0) income[room] = ((counters.harvest ?? 0) + (counters.remoteHarvest ?? 0)) / ticks;
-    }
-    return income;
 }
 
 interface Origin {
@@ -255,7 +231,6 @@ export function rankTargets(engaged = false): AutoTarget[] {
         delete memory.skipped;
         return targets;
     }
-    const income = incomePerTick();
     const context = {
         counts: playerRooms(),
         ours: ownedRooms(),
@@ -277,18 +252,8 @@ export function rankTargets(engaged = false): AutoTarget[] {
         const { plan } = near;
         const energy = near.origin.room.energyCapacityAvailable;
         const members = squadMemberCosts(plan.type, energy);
-        const cpu = cpuPressure()
-            ? Math.round(squadCpu(members.length) * neutralEnergyPerCpu(CPU_PRICE_DISTANCE, energy))
-            : 0;
-        const origin = near.origin.room;
-        const spawnTime = spawnTimeCost(
-            squadMemberParts(plan.type, energy),
-            origin.find(FIND_MY_SPAWNS).length,
-            income[origin.name] ?? 0,
-            spawnBusyShare(origin.name)
-        );
         // The compounds the squad needs against this target (sizing.ts planSquad) are spent too
-        const cost = squadCost(members, ATTRITION, plan.boostCost) + cpu + spawnTime;
+        const cost = squadCost(members, ATTRITION, plan.boostCost);
         const ticksLeft = (intel.collapse ?? Infinity) - Game.time;
         const remote = remoteValue(candidate.sources, reason === "stronghold" ? ticksLeft : REMOTE_HORIZON);
         const value = targetValue({
@@ -297,7 +262,7 @@ export function rankTargets(engaged = false): AutoTarget[] {
             // The energy a player's creeps made us lose only counts once they fought us
             infamy: reason === "aggressor" ? (memory.infamy?.[intel.owner!] ?? 0) : 0
         });
-        targets.push({ room: roomName, reason, roi: value / cost, value: Math.round(value), cost, cpu, spawnTime });
+        targets.push({ room: roomName, reason, roi: value / cost, value: Math.round(value), cost });
     }
     memory.skipped = skipped;
     return targets;

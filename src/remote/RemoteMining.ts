@@ -24,7 +24,6 @@ import { segmentStore } from "../utils/segments";
 import { countStat } from "../utils/stats";
 import { jitter, jitterFor } from "../utils/jitter";
 import {
-    BUDGET_FULL_BUCKET,
     budgetRooms,
     INTENT_CPU,
     cpuAverage,
@@ -87,8 +86,6 @@ declare global {
             roomCpu?: number;
             /** Sum of the remote roles' CPU counters at the last budget update, and its tick */
             roleCpu?: { total: number; tick: number; moves?: boolean };
-            /** First tick of the current run of ticks with a full (decision) bucket */
-            bucketFullSince?: number;
             /** Sources a home's spawn can keep harvested (none = no cap yet), by home room */
             sourceCaps?: { [home: string]: { max: number; changed: number } };
             /** Share of the ticks every spawn of a home was spawning or waiting for energy, ~400 ticks average, by home */
@@ -472,11 +469,6 @@ function sampleSpawns(): void {
 }
 
 /** Slow average of the busy share of a home's spawns, updated from the samples since the last call */
-/** Last measured busy share of a home's spawns (~400-tick average, 0 before the first selection) */
-export function spawnBusyShare(home: string): number {
-    return Memory.remoteMining?.spawnBusy?.[home] ?? 0;
-}
-
 function spawnBusy(home: string): number {
     const busy = (memory().spawnBusy ??= {});
     const sample = spawnSamples.get(home);
@@ -541,17 +533,11 @@ function maxRemotes(home: Room): number {
  * Not in Hivemind: an empire-wide cap on remote rooms from the CPU actually used. Remotes are the
  * bulk of the creeps (a room at RCL 2 with 5 remotes ran ~55 small creeps, 18 of 20 CPU on
  * shard0); the official CPU includes the 0.2 per intent, so the tick CPU is the right signal.
- * Above 95% of the limit while the bucket is below 8000 (above the limit, or bucket < 5000, whatever
- * the bucket) the worst remote room goes, below 75% (bucket > 9000)
- * one more is allowed, and also above it once the bucket has stayed full for BUDGET_FULL_TICKS
- * (shard0 W27N5: 15/20 CPU with a full bucket stayed capped); at most one change per 1000 ticks so
- * the creeps of a dropped remote can die out. A room is only added when the average plus one
- * room's measured CPU (remote roles' CPU and moves over the mined rooms, at least 0.8) stays under
- * 90% (98% once the bucket stayed above 9000 for 1000 ticks; above 95% a room is then only dropped
- * when the bucket falls below 8000, see remoteIncome.ts budgetRooms), and
- * not within BUDGET_RAISE_HOLD ticks of a drop (shard0 at ~90% of 20 CPU: 7 -> 8 -> 7 in 5 of 6
- * windows of 1000 ticks, the bucket falling, the spawn energy spent on creeps of a dropped room).
- * (85% / 70% cut W7N3 by 27% in the mockup: it oscillated while the bucket stayed full.)
+ * One share, 95% of the limit (remoteIncome.ts budgetRooms): with the bucket at 9000 or more a room is
+ * added while the average plus one room's measured CPU (remote roles' CPU and moves over the mined
+ * rooms, at least 0.8) stays under it; above it the worst remote room goes once the bucket falls below
+ * 8000 (above the limit, or bucket < 5000, whatever the bucket). At most one change per 1000 ticks so
+ * the creeps of a dropped remote can die out, and no room added within BUDGET_RAISE_HOLD ticks of a drop.
  * The average covers every tick (sampleCpu): one sample per selection, 20 ticks apart, stayed in
  * phase with the other periodic modules (shard0: 19.3 for a real 16.5-17.5), and the tick of a
  * global reset (93 CPU on shard0) is left out.
@@ -572,9 +558,6 @@ function sampleCpu(): void {
     if (stats.tick === globalStart) return;
     cpuSamples.sum += stats.cpu;
     cpuSamples.count++;
-    const mem = memory();
-    if (decisionBucket() < BUDGET_FULL_BUCKET) delete mem.bucketFullSince;
-    else mem.bucketFullSince ??= Game.time;
 }
 
 /**
@@ -616,7 +599,6 @@ function updateBudget(currentRooms: number, possibleRooms: number): void {
         cpuAvg,
         limit,
         bucket,
-        fullBucketTicks: mem.bucketFullSince === undefined ? 0 : Game.time - mem.bucketFullSince,
         maxRooms: mem.maxRooms,
         currentRooms,
         possibleRooms,

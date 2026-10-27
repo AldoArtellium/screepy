@@ -237,7 +237,7 @@ function runMilitary(): void {
         if (auto && auto.room !== memory.target?.room) {
             memory.target = { room: auto.room, reason: auto.reason, since: Game.time, roi: Math.round(auto.roi * 100) / 100 };
             countStat(`military:target:${auto.reason}`);
-            log.info("Military", `Automatic target: ${auto.room} (${auto.reason}, value ${auto.value} for a squad of ${auto.cost} energy, CPU priced ${auto.cpu}, spawn time ${auto.spawnTime})`);
+            log.info("Military", `Automatic target: ${auto.room} (${auto.reason}, value ${auto.value} for a squad of ${auto.cost} energy)`);
         } else if (!auto && memory.target && !hasMission(memory.target.room)) delete memory.target;
     }
     const target = currentTarget();
