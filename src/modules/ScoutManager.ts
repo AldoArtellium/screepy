@@ -117,6 +117,11 @@ class ScoutManager {
      * Run individual scout behavior
      */
     runScout(scout: Creep): void {
+        // Scouts walk through hostile rooms: no "creep attacked" email from the game (one intent per scout)
+        if (!scout.memory.scoutQuiet && scout.notifyWhenAttacked(false) === OK) {
+            scout.memory.scoutQuiet = true;
+        }
+
         // Get or assign target room
         if (!scout.memory.scoutTarget) {
             const homeRoom = scout.memory.room ?? scout.room.name;
@@ -167,6 +172,8 @@ declare global {
     interface CreepMemory {
         /** Room the scout is heading to */
         scoutTarget?: string;
+        /** notifyWhenAttacked(false) already applied */
+        scoutQuiet?: boolean;
     }
 
     interface RoomMemory {
