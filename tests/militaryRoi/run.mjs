@@ -272,5 +272,36 @@ check("Blindfold blocking our expansion: no reason", playerReason({ ...facts, st
 check("Blindfold after 300 hits: no reason", playerReason({ ...facts, stronger: true, aggression: AGGRESSION_HOSTILE }) === null);
 check("Blindfold after 3000 hits: aggressor", playerReason({ ...facts, stronger: true, aggression: AGGRESSION_RETALIATE }) === "aggressor");
 
+// Encroachers (strategy.ts isEncroacher): shard0 2026-10-27, Blindfold (8 rooms, GCL 8) rebuilt W25N7 (RCL 3,
+// 1 tower, unarmed creeps) next to W24N8 and took W24N7, W24N8's only reachable remote
+const { isEncroacher, ENCROACHER_RANGE, ENCROACHER_MAX_RCL, ENCROACHER_MAX_TOWERS } = require(join(OUT, "military", "strategy.js"));
+const w25n7 = { distance: 1, rcl: 3, towers: 1, damage: 0 };
+check("W25N7 next to W24N8 is an encroacher", isEncroacher(w25n7));
+check("range 2 still counts", isEncroacher({ ...w25n7, distance: ENCROACHER_RANGE }));
+check("3 rooms away: no", !isEncroacher({ ...w25n7, distance: ENCROACHER_RANGE + 1 }));
+check("RCL 4: no", !isEncroacher({ ...w25n7, rcl: ENCROACHER_MAX_RCL + 1 }));
+check("2 towers: no", !isEncroacher({ ...w25n7, towers: ENCROACHER_MAX_TOWERS + 1 }));
+check("armed creeps seen: no", !isEncroacher({ ...w25n7, damage: 30 }));
+check("rebuilding at RCL 1 without tower", isEncroacher({ ...w25n7, rcl: 1, towers: 0 }));
+check("Blindfold W25N7 (stronger), encroacher: encroacher", playerReason({ ...facts, stronger: true, encroacher: true }) === "encroacher");
+check("weaker encroacher with usable sources: encroacher", playerReason({ ...facts, usableSources: 2, encroacher: true }) === "encroacher");
+// Phase 4: once the player answers (AGGRESSION_HOSTILE), no more encroacher attacks on a stronger player
+check("stronger encroacher that hit back 300: left alone", playerReason({ ...facts, stronger: true, encroacher: true, aggression: AGGRESSION_HOSTILE }) === null);
+check("stronger encroacher that hit back 3000: aggressor", playerReason({ ...facts, stronger: true, encroacher: true, aggression: AGGRESSION_RETALIATE }) === "aggressor");
+
+// Rooms released by a player's fallen room (roi.ts releasedRooms): the target and the rooms reserved from it
+const { releasedRooms } = require(join(OUT, "military", "roi.js"));
+const blindfoldRooms = [
+    { room: "W25N7", owner: "Blindfold", sources: 1, scouted: T0 - 100 },
+    { room: "W24N7", reserver: "Blindfold", sources: 1, scouted: T0 - 400 },
+    { room: "W24N3", owner: "Blindfold", sources: 2, scouted: T0 - 100 },
+    { room: "W24N4", reserver: "Blindfold", sources: 1, scouted: T0 - 100 },
+    { room: "W25N8", reserver: "asdpof", sources: 2, scouted: T0 - 100 },
+];
+check("W25N7 releases itself and W24N7", releasedRooms("W25N7", "Blindfold", blindfoldRooms, dist, T0).join() === "W25N7,W24N7", releasedRooms("W25N7", "Blindfold", blindfoldRooms, dist, T0).join());
+check("not another player's reservation", !releasedRooms("W25N7", "Blindfold", blindfoldRooms, dist, T0).includes("W25N8"));
+check("not a room closer to another of their rooms", !releasedRooms("W25N7", "Blindfold", blindfoldRooms, dist, T0).includes("W24N4"));
+check("a stale reservation is not released", releasedRooms("W25N7", "Blindfold", blindfoldRooms.map(r => (r.room === "W24N7" ? { ...r, scouted: T0 - 6000 } : r)), dist, T0).join() === "W25N7");
+
 console.log(failures === 0 ? "\nall checks passed" : `\n${failures} check(s) failed`);
 process.exit(failures === 0 ? 0 : 1);

@@ -6,6 +6,7 @@
 
 import { intelManager } from "../modules/IntelManager";
 import { jitter } from "../utils/jitter";
+import { roomStatus } from "../utils/rooms";
 import { ObstacleCache, RouteRoomInfo, routeRoomCost } from "./routeModel";
 
 /** Route of a pair of rooms, reused this long (intel changes slowly, the squad moves room by room) */
@@ -36,8 +37,10 @@ export function squadRoute(from: string, to: string): string[] | null {
     const cached = routes.get(key);
     if (cached && cached.until > Game.time) return cached.rooms;
     const ours = remoteRooms();
+    const zone = roomStatus(from);
     const route = Game.map.findRoute(from, to, {
-        routeCallback: roomName => routeRoomCost(roomName, to, roomInfo(roomName), Memory.username, ours.has(roomName))
+        routeCallback: roomName =>
+            routeRoomCost(roomName, to, roomInfo(roomName), Memory.username, ours.has(roomName), roomStatus(roomName) === zone)
     });
     const rooms = route === ERR_NO_PATH ? null : [from, ...route.map(step => step.room)];
     if (routes.size > 200) routes.clear();

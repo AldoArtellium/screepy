@@ -6,7 +6,17 @@
  */
 
 import { activePower, effectiveHits, isFast } from "../defense/RoomDefense";
-import { CONTEST_TTL, ContestEntry, contestingPlayer, isContested, noteContest, pruneContests } from "../remote/remoteRooms";
+import {
+    CONTEST_TTL,
+    ContestEntry,
+    contestingPlayer,
+    isContested,
+    noteContest,
+    pruneContests,
+    RELEASE_TTL,
+    ReleaseEntry,
+    releaseFrom
+} from "../remote/remoteRooms";
 import { jitter } from "../utils/jitter";
 import { log } from "../utils/logger";
 import { countStat } from "../utils/stats";
@@ -18,7 +28,25 @@ declare global {
     interface Memory {
         /** Rooms another player mines or reserves, blocked for remote mining (remote/remoteRooms.ts) */
         remoteContested?: { [room: string]: ContestEntry };
+        /** Rooms released from a player whose room our squad destroyed (remote/remoteRooms.ts releaseFrom) */
+        remoteReleased?: { [room: string]: ReleaseEntry };
     }
+}
+
+/** The player whose reservation no longer blocks the room, while the release lasts */
+export function releasedPlayer(roomName: string): string | undefined {
+    return releaseFrom(Memory.remoteReleased?.[roomName], Game.time)?.player;
+}
+
+/** Releases rooms from a player (military.ts, a successful attack) and forgets their contests there */
+export function releaseRooms(rooms: string[], player: string): void {
+    Memory.remoteReleased ??= {};
+    for (const roomName of rooms) {
+        Memory.remoteReleased[roomName] = { player, since: Game.time, until: Game.time + RELEASE_TTL };
+        if (Memory.remoteContested?.[roomName]?.player === player) delete Memory.remoteContested[roomName];
+    }
+    countStat("remote:released", rooms.length);
+    log.info("RoomIntel", `${rooms.join(" ")} released from ${player} for ${RELEASE_TTL} ticks`);
 }
 
 /** Ticks between two prunings of Memory.remoteContested (heap timestamp: the module is mandatory) */
@@ -44,7 +72,7 @@ function recordContest(room: Room): void {
             c.getActiveBodyparts(WORK) > 0 && (sources ??= room.find(FIND_SOURCES)).some(s => c.pos.isNearTo(s)),
         claims: c.getActiveBodyparts(CLAIM) > 0 && c.pos.isNearTo(controller)
     }));
-    const player = contestingPlayer({ reserver, creeps }, Memory.username);
+    const player = contestingPlayer({ reserver, creeps }, Memory.username, releaseFrom(Memory.remoteReleased?.[room.name], Game.time));
     if (!player) return;
     Memory.remoteContested ??= {};
     if (noteContest(Memory.remoteContested, room.name, player, Game.time, jitter(CONTEST_TTL))) {
@@ -70,10 +98,17 @@ function dangerous(room: Room): Creep[] {
 }
 
 export const roomIntelModule = () => {
-    if (Memory.remoteContested && Game.time - lastContestPrune >= CONTEST_PRUNE_INTERVAL) {
+    if ((Memory.remoteContested || Memory.remoteReleased) && Game.time - lastContestPrune >= CONTEST_PRUNE_INTERVAL) {
         lastContestPrune = Game.time;
-        pruneContests(Memory.remoteContested, Game.time);
-        if (Object.keys(Memory.remoteContested).length === 0) delete Memory.remoteContested;
+        if (Memory.remoteContested) {
+            pruneContests(Memory.remoteContested, Game.time);
+            if (Object.keys(Memory.remoteContested).length === 0) delete Memory.remoteContested;
+        }
+        if (Memory.remoteReleased) {
+            for (const roomName in Memory.remoteReleased)
+                if (!releaseFrom(Memory.remoteReleased[roomName], Game.time)) delete Memory.remoteReleased[roomName];
+            if (Object.keys(Memory.remoteReleased).length === 0) delete Memory.remoteReleased;
+        }
     }
     for (const name in Game.rooms) {
         const room = Game.rooms[name];

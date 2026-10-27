@@ -13,13 +13,13 @@
 import { creepsByRole } from "../core/roomState";
 import { claimingSquadsOf } from "../expansion/Expansion";
 import { intelManager } from "../modules/IntelManager";
-import { hasInvaderCore, isRoomContested, isRoomUnderAttack } from "../modules/RoomIntel";
+import { hasInvaderCore, isRoomContested, isRoomUnderAttack, releasedPlayer } from "../modules/RoomIntel";
 import { roomPlanner } from "../planner/RoomPlanner";
 import { log } from "../utils/logger";
 import { spawnManager } from "../modules/SpawnManager";
 import { decisionBucket } from "../utils/throttle";
 import { decodePath, encodePath } from "../utils/pathCodec";
-import { parseRoomName, roomsInRange } from "../utils/rooms";
+import { parseRoomName, roomsInRange, roomStatus } from "../utils/rooms";
 import { segmentStore } from "../utils/segments";
 import { countStat } from "../utils/stats";
 import { jitter, jitterFor } from "../utils/jitter";
@@ -188,7 +188,13 @@ function pathRooms(source: RemoteSource): string[] {
  * source keeper room: never mined nor crossed on the way to a remote (remoteRooms.ts)
  */
 function isBlockedRoom(roomName: string): boolean {
-    return isRemoteBlocked(roomName, intelManager.getIntel(roomName), Memory.username, isRoomContested(roomName));
+    return isRemoteBlocked(
+        roomName,
+        intelManager.getIntel(roomName),
+        Memory.username,
+        isRoomContested(roomName),
+        releasedPlayer(roomName)
+    );
 }
 
 /** Positions of a packed path; the array is shared, don't modify it */
@@ -373,6 +379,8 @@ function pathFor(home: Room, sourcePos: RoomPosition): RoomPosition[] | null {
     // No plan yet: don't cache the failure (Hivemind cached null for 5000 ticks)
     if (!storagePos) return null;
     const shared = sharedTiles(home.name, key);
+    // Rooms of another zone (novice / respawn area) are walled off
+    const zone = roomStatus(home.name);
     // The container tile of the other home's path too: a source changing home keeps its container
     const previousPath = cache?.path ?? stored?.path;
     const previous = previousPath ? unpackPath(previousPath)[0] : undefined;
@@ -383,7 +391,9 @@ function pathFor(home: Room, sourcePos: RoomPosition): RoomPosition[] | null {
         maxOps: 10000,
         heuristicWeight: 1,
         roomCallback: roomName =>
-            roomName !== sourcePos.roomName && isBlockedRoom(roomName) ? false : sharedCostMatrix(roomName, shared)
+            (roomName !== sourcePos.roomName && isBlockedRoom(roomName)) || roomStatus(roomName) !== zone
+                ? false
+                : sharedCostMatrix(roomName, shared)
     });
     const found = start ? [start, ...result.path] : result.path;
     const path = result.incomplete || found.length >= MAX_PATH_LENGTH ? null : found;

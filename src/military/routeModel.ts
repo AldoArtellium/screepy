@@ -19,14 +19,18 @@ export interface RouteRoomInfo {
 }
 
 // Keeper rooms (utils/rooms.ts isKeeperRoom): shard0 2026-10-25, the W27N9 quad routed through W26N5 got
-// ERR_NO_PATH from cartographer on every step, ~5 CPU per tick, and keepers around
+// ERR_NO_PATH from cartographer on every step, ~5 CPU per tick, and keepers around.
+// Rooms of another zone (novice / respawn area, utils/rooms.ts roomStatus) are walled off: findRoute
+// ignores the walls (shard0 2026-10-27: W24N8 to W25N7 staged in W25N8, behind the respawn area wall)
 export function routeRoomCost(
     roomName: string,
     target: string,
     info: RouteRoomInfo | undefined,
     me: string | undefined,
-    ourRemote: boolean
+    ourRemote: boolean,
+    sameZone = true
 ): number {
+    if (!sameZone) return Infinity;
     if (roomName === target) return ROUTE_COST.ally;
     if (isKeeperRoom(roomName)) return Infinity;
     if (info?.owner) return info.owner === me ? ROUTE_COST.ally : Infinity;

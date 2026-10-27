@@ -13,7 +13,8 @@
  *    we own, only from AGGRESSION_RETALIATE), it reserves or claimed our expansion target, or its fall
  *    frees remote sources the remote budget can take (territory). Value: loot seen in sight (storage,
  *    terminal, containers), those usable sources (roi.ts freedSources, REMOTE_HORIZON ticks of income)
- *    and, for an aggressor only, the energy its creeps made us lose (infamy). Rooms in safe mode or
+ *    and, for an aggressor only, the energy its creeps made us lose (infamy). A small room next to ours
+ *    (encroacher, whatever its owner's size until they answer) counts every source it frees. Rooms in safe mode or
  *    without spawn are skipped. Rooms left alone for want of a reason are listed in
  *    `Memory.military.skipped` (room: why) and logged once per change.
  * Under CPU pressure (remote budget capped, or CPU above 85%) the squad's CPU is priced in energy
@@ -25,6 +26,7 @@
  */
 
 import { intelManager } from "../modules/IntelManager";
+import { releaseRooms } from "../modules/RoomIntel";
 import { cpuPressure, neutralEnergyPerCpu } from "../remote/remoteIncome";
 import { minedRemoteRooms, remoteSources, spawnBusyShare } from "../remote/RemoteMining";
 import { roomCountersSince } from "../utils/history";
@@ -36,6 +38,7 @@ import {
     freedSources,
     pickTarget,
     REMOTE_HORIZON,
+    releasedRooms,
     remoteValue,
     RoomHolding,
     spawnTimeCost,
@@ -44,7 +47,7 @@ import {
     targetValue
 } from "./roi";
 import { planSquad, SquadPlan, squadMemberCosts, squadMemberParts } from "./sizing";
-import { blocksExpansion, playerReason, spareRemoteRooms, StrategicReason, usableSources } from "./strategy";
+import { blocksExpansion, isEncroacher, playerReason, spareRemoteRooms, StrategicReason, usableSources } from "./strategy";
 
 const MAX_DISTANCE = 10;
 /** Distance of the neutral remote source whose energy per CPU prices a squad's CPU (remoteIncome examples) */
@@ -209,14 +212,20 @@ function playerCandidate(
     const usable = usableSources(freed, context.spare);
     const expansion = Memory.expand?.current?.roomName;
     const blocking = blocksExpansion(roomName, owner, expansion, context.holdings, linearDistance, Game.time);
-    const reason = playerReason({ aggression, stronger, usableSources: usable, blocksExpansion: blocking });
+    const distance = _.min(context.ours.map(o => linearDistance(o, roomName)));
+    const encroacher = isEncroacher({ distance, rcl: intel.rcl, towers: intel.towers, damage: intel.damage });
+    const reason = playerReason({ aggression, stronger, usableSources: usable, blocksExpansion: blocking, encroacher });
     // Blocking our expansion costs at least the target room's sources, whatever the remote budget
     if (reason === "expansion") return { reason, sources: Math.max(usable, intelManager.sourceCount(expansion!)) };
+    // An encroacher is attacked to deny the land: every freed source counts, whatever the remote budget
+    if (reason === "encroacher") return { reason, sources: Math.max(usable, freed) };
     if (reason) return { reason, sources: usable };
     if (kept) return { reason: kept, sources: usable };
-    const why = stronger
-        ? `${owner} stronger (${theirRooms} rooms seen for our ${context.ours.length}), aggression ${aggression}`
-        : `${owner}: no strategic reason (aggression ${aggression}, freed sources ${freed}, usable ${usable})`;
+    const why = encroacher
+        ? `${owner} answered our attacks (aggression ${aggression}): encroacher left alone`
+        : stronger
+          ? `${owner} stronger (${theirRooms} rooms seen for our ${context.ours.length}), aggression ${aggression}`
+          : `${owner}: no strategic reason (aggression ${aggression}, freed sources ${freed}, usable ${usable})`;
     skip(skipped, roomName, why);
     return null;
 }
@@ -292,6 +301,17 @@ export function rankTargets(engaged = false): AutoTarget[] {
     }
     memory.skipped = skipped;
     return targets;
+}
+
+/**
+ * A player's room fell to our squad: it and the rooms they reserved from it are released for remote
+ * mining (RoomIntel releaseRooms), so their leftover reservation and creeps don't keep them contested
+ */
+export function releaseFallen(roomName: string): void {
+    const owner = militaryMemory().rooms?.[roomName]?.owner;
+    if (!owner || owner === Memory.username || owner === "Invader") return;
+    const rooms = releasedRooms(roomName, owner, holdings(), linearDistance, Game.time);
+    if (rooms.length > 0) releaseRooms(rooms, owner);
 }
 
 /** Best automatic target (null: nothing pays for its squad); `engaged`: the current target's squad has creeps */

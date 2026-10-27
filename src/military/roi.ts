@@ -103,13 +103,40 @@ export function freedSources(
     let sources = 0;
     for (const r of rooms) {
         if (!inReach(r.room)) continue;
-        if (r.room === target) sources += r.sources;
-        else if (r.reserver === owner && !r.owner && now - (r.scouted ?? now) <= RESERVATION_FRESH) {
-            const toTarget = distance(r.room, target);
-            if (playerRooms.every(p => p === target || distance(r.room, p) > toTarget)) sources += r.sources;
-        }
+        if (r.room === target || reservedFrom(r, target, owner, playerRooms, distance, now)) sources += r.sources;
     }
     return sources;
+}
+
+/** A fresh reservation of `owner` whose strictly closest room of theirs is `target` */
+function reservedFrom(
+    r: RoomHolding,
+    target: string,
+    owner: string,
+    playerRooms: string[],
+    distance: (a: string, b: string) => number,
+    now: number
+): boolean {
+    if (r.reserver !== owner || r.owner || now - (r.scouted ?? now) > RESERVATION_FRESH) return false;
+    const toTarget = distance(r.room, target);
+    return playerRooms.every(p => p === target || distance(r.room, p) > toTarget);
+}
+
+/**
+ * Rooms a player's fallen room releases (military.ts on a success): the room itself and the rooms they
+ * reserved from it (freedSources' rule, without the reach), whose contest RoomIntel then forgets
+ * (remote/remoteRooms.ts releaseFrom)
+ */
+export function releasedRooms(
+    target: string,
+    owner: string,
+    rooms: RoomHolding[],
+    distance: (a: string, b: string) => number,
+    now: number
+): string[] {
+    const playerRooms = rooms.filter(r => r.owner === owner).map(r => r.room);
+    if (!playerRooms.includes(target)) return [];
+    return [target, ...rooms.filter(r => r.room !== target && reservedFrom(r, target, owner, playerRooms, distance, now)).map(r => r.room)];
 }
 
 /** Remote income a stronghold blocks until it collapses (ticksLeft) */
