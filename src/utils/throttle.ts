@@ -8,15 +8,9 @@
  * - `throttleMultiplier(stopAt, throttleAt)`: factor applied to a periodic module's interval.
  */
 
-/**
- * Bucket for CPU decisions (throttling, remote budget, upgraders, visuals, planner, reclaim): a bucket drained by
- * pixel generation (modules/Pixels.ts) counts as full while it refills, else every pixel would stop or throttle the
- * economy for the ~1000 ticks it takes to refill. The Pixels module clears the flag once the bucket is full again or
- * the CPU average rises above 80% of the limit: the real bucket applies again. Displays keep the real bucket.
- */
+/** Bucket for CPU decisions (no bucket in the simulation room: full) */
 export function decisionBucket(): number {
-    // No bucket in the simulation room: full
-    return Memory.pixelState?.refilling ? 10000 : (Game.cpu.bucket ?? 10000);
+    return Game.cpu.bucket ?? 10000;
 }
 
 const throttleNumbers: number[] = [];

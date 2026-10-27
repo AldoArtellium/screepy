@@ -6,7 +6,6 @@
 
 import { energyPrice } from "../modules/MarketManager";
 import { remoteSources } from "../remote/RemoteMining";
-import { lootRamparts } from "./loot";
 import {
     aggressionFromEvents,
     AGGRESSION_DECAY,
@@ -14,7 +13,7 @@ import {
     AttackEventItem,
     decayAggression
 } from "./playerThreat";
-import { lootValue, RAID_MIN_LOOT } from "./roi";
+import { lootValue } from "./roi";
 
 export interface HostileRoom {
     /** Tick of the record */
@@ -38,10 +37,6 @@ export interface HostileRoom {
     heal: number;
     /** Loot seen in the room, in energy (roi.ts lootValue at market prices) */
     loot?: number;
-    /** Energy in the hostile towers (raids need them empty) */
-    towerEnergy?: number;
-    /** Hits of the strongest hostile rampart over loot (raids: a dismantler must open it) */
-    lootBarrier?: number;
 }
 
 declare global {
@@ -51,8 +46,6 @@ declare global {
             attack?: string;
             /** Automatic attacks on player rooms (default on since 2026-10-25; false: strongholds only) */
             auto?: boolean;
-            /** Allow raids on rooms with loot and no defense (loot.ts; default off) */
-            raid?: boolean;
             /** Force the squad type of new missions ("duo" or "quad"; default: sized from the threat) */
             squad?: "duo" | "quad";
             /**
@@ -161,8 +154,7 @@ function recordRoom(room: Room, ours: Set<string>): void {
     const structures = room.find(FIND_HOSTILE_STRUCTURES);
     const core = structures.find(s => s.structureType === STRUCTURE_INVADER_CORE) as StructureInvaderCore | undefined;
     const loot = roomLoot(room, ours);
-    // Kept with enough loot even without owner, core or tower: an abandoned base (raids)
-    if (!hostileOwner && !core && !structures.some(s => s.structureType === STRUCTURE_TOWER) && loot < RAID_MIN_LOOT) {
+    if (!hostileOwner && !core && !structures.some(s => s.structureType === STRUCTURE_TOWER)) {
         if (memory.rooms?.[room.name]) delete memory.rooms[room.name];
         return;
     }
@@ -173,7 +165,6 @@ function recordRoom(room: Room, ours: Set<string>): void {
     const collapse = core?.effects?.find(e => e.effect === EFFECT_COLLAPSE_TIMER);
     const power = combatPower(room.find(FIND_HOSTILE_CREEPS, { filter: c => c.owner.username !== "Source Keeper" }));
     const towers = structures.filter((s): s is StructureTower => s.structureType === STRUCTURE_TOWER);
-    const lootBarrier = _.max([0, ...lootRamparts(room).map(r => r.hits)]);
     memory.rooms = memory.rooms ?? {};
     memory.rooms[room.name] = {
         t: Game.time,
@@ -186,9 +177,7 @@ function recordRoom(room: Room, ours: Set<string>): void {
         ...(collapse && { collapse: Game.time + collapse.ticksRemaining }),
         damage: power.damage,
         heal: power.heal,
-        ...(loot > 0 && { loot }),
-        ...(towers.length > 0 && { towerEnergy: _.sum(towers, t => t.store.energy) }),
-        ...(lootBarrier > 0 && { lootBarrier })
+        ...(loot > 0 && { loot })
     };
 }
 

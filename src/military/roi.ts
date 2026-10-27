@@ -183,34 +183,10 @@ export function pickTarget<T extends { room: string; roi: number }>(
     return best;
 }
 
-/** Raids (opt-in `Memory.military.raid`): loot of a room without defense, taken without a squad */
-export const RAID_MIN_LOOT = 10000;
-/** Intel older than this is not trusted for a raid (towers may have been refilled) */
-export const RAID_INTEL_AGE = 5000;
-/** A tower with less than a shot of energy can't fire */
-const RAID_MAX_TOWER_ENERGY = 10;
 const MAX_LOOTERS = 3;
 const TILES_PER_ROOM = 50;
 /** CREEP_LIFE_TIME (a constant here: the module stays pure for the offline check) */
 const LIFE_TIME = 1500;
-
-interface RaidIntel {
-    t: number;
-    loot?: number;
-    coreLevel?: number;
-    towerEnergy?: number;
-    damage: number;
-    safeMode?: number;
-    lootBarrier?: number;
-}
-
-/** Enough loot, fresh intel, no stronghold, no safe mode, towers empty, no armed creep, ramparts a dismantler opens */
-export function isRaidable(intel: RaidIntel, now: number, maxBarrier: number): boolean {
-    if ((intel.loot ?? 0) < RAID_MIN_LOOT || now - intel.t > RAID_INTEL_AGE) return false;
-    if (intel.coreLevel !== undefined || (intel.safeMode ?? 0) > now) return false;
-    if ((intel.towerEnergy ?? 0) >= RAID_MAX_TOWER_ENERGY || intel.damage > 0) return false;
-    return (intel.lootBarrier ?? 0) <= maxBarrier;
-}
 
 /**
  * Looters a loot needs: round trips over a creep's life, at least one while loot is left, at most
@@ -220,16 +196,4 @@ export function lootersNeeded(amount: number, routeRooms: number, capacity: numb
     if (amount <= 0 || capacity <= 0) return 0;
     const trips = (amount * 2 * Math.max(1, routeRooms) * TILES_PER_ROOM) / (LIFE_TIME * capacity);
     return Math.min(MAX_LOOTERS, Math.max(1, Math.ceil(trips)));
-}
-
-/** Spawn cost of a raid: its looters, and a dismantler when ramparts cover the loot */
-export function raidCost(
-    loot: number,
-    routeRooms: number,
-    looterCost: number,
-    looterCapacity: number,
-    dismantlerCost: number,
-    covered: boolean
-): number {
-    return lootersNeeded(loot, routeRooms, looterCapacity) * looterCost + (covered ? dismantlerCost : 0);
 }

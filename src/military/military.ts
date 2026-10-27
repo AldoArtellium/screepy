@@ -16,7 +16,7 @@ import { countStat } from "../utils/stats";
 import { BOOST_MARGIN, BoostedEffect } from "./boostNeed";
 import { DUO_ATTACKER, DUO_HEALER, DuoMemory, runDuo } from "./duo";
 import { hostileRoom, militaryMemory, updateMilitaryIntel } from "./intel";
-import { lootRamparts, startLooting, startRaids, updateLootMissions } from "./loot";
+import { lootRamparts, startLooting, updateLootMissions } from "./loot";
 import { QUAD_ATTACKER, QUAD_HEALER, QUAD_ROSTER, QuadMemory, runQuad } from "./quad";
 import { squadRoute } from "./route";
 import {
@@ -231,7 +231,6 @@ export const militaryModule = (): void => {
 function runMilitary(): void {
     updateMilitaryIntel();
     updateLootMissions();
-    startRaids();
     const memory = militaryMemory();
     if (!memory.attack && Game.time % AUTO_TARGET_EVERY === 0) {
         const auto = chooseAutoTarget(!!memory.target && isEngaged(memory.target.room));

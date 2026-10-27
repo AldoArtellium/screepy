@@ -47,9 +47,6 @@ jobs:
       - name: Planner check
         run: node tests/planner/run.mjs
 
-      - name: Pixels check
-        run: node tests/pixels/run.mjs
-
       - name: Visuals check
         run: node tests/visuals/run.mjs
 
