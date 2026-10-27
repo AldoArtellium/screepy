@@ -9,9 +9,8 @@ import { bodyCost, buildBody, MoveMode } from "../core/bodyBuilder";
 import { activeParts, creepsByRole, effectiveEnergy } from "../core/roomState";
 import { ENEMY_STRENGTH_NORMAL, enemyStrength } from "../defense/RoomDefense";
 import { intelManager } from "../modules/IntelManager";
-import { hasInvaderCore, releasedPlayer } from "../modules/RoomIntel";
+import { hasInvaderCore } from "../modules/RoomIntel";
 import { countStat } from "../utils/stats";
-import { harvesterSizeFactor } from "../utils/throttle";
 import type { SpawnOption, SpawnRole } from "../spawning/spawnRoles";
 import {
     canReserveFrom,
@@ -25,7 +24,6 @@ import {
     remoteSources,
     sourceEnergyCapacity
 } from "./RemoteMining";
-import { cpuPressure, reservationValue } from "./remoteIncome";
 import { builderWork } from "./repairs";
 import { pathTerrain, recordSpawnLateness, spawnLeadObserved, travelObserved, walkTicks } from "./travel";
 
@@ -62,60 +60,14 @@ function energyLimit(room: Room): number {
     return Math.min(room.energyCapacityAvailable, Math.max(room.energyCapacityAvailable * 0.9, room.energyAvailable));
 }
 
-/** Our reservation left on a remote controller: live when visible, else extrapolated from our last reserver's lastClaim */
-function reservationLeft(roomName: string): number {
-    const reservation = Game.rooms[roomName]?.controller?.reservation;
-    if (reservation) return reservation.username === Memory.username ? reservation.ticksToEnd : 0;
-    const lastClaim = Memory.rooms[roomName]?.lastClaim;
-    return lastClaim ? Math.max(0, lastClaim.value + lastClaim.time - Game.time) : 0;
-}
-
-/** reservationPays per home and remote room, for the current tick (haulerOption sums every source's demand) */
-let paysCache: { time: number; rooms: { [key: string]: boolean } } = { time: -1, rooms: {} };
-
-/**
- * Whether a home keeps a remote room reserved. Not in Hivemind (which reserves every room it can):
- * while CPU is the binding constraint (`cpuPressure`: remote budget capped, or CPU average above 85%
- * of the limit), a room whose reservation adds less energy per official CPU than a neutral source
- * would mine with that CPU is left neutral (remoteIncome reservationValue: in practice the rooms
- * mined for one source). Another player's or an invader's reservation is still attacked (reserverOption).
- */
-function reservationPays(home: Room, roomName: string): boolean {
-    if (!cpuPressure()) return true;
-    if (paysCache.time !== Game.time) paysCache = { time: Game.time, rooms: {} };
-    const key = `${home.name}>${roomName}`;
-    if (paysCache.rooms[key] === undefined) {
-        const sources = remoteSources(home.name).filter(s => s.room === roomName);
-        const economy = {
-            generation: SOURCE_ENERGY_CAPACITY / ENERGY_REGEN_TIME,
-            distance: sources.length > 0 ? _.sum(sources, s => s.travelTime) / sources.length : 0,
-            roads: haulerMove(home) === MoveMode.ROAD,
-            maintenanceWork: 0
-        };
-        paysCache.rooms[key] =
-            sources.length === 0 || reservationValue(economy, sources.length, home.energyCapacityAvailable).pays;
-    }
-    return paysCache.rooms[key];
-}
-
-/**
- * Energy a remote source regenerates: 3000 while our reservation runs or the room is reserved, 1500
- * for a room left neutral (RemoteMining sourceEnergyCapacity assumes every reservable room reserved)
- */
-function expectedSourceCapacity(home: Room, source: RemoteSource): number {
-    const capacity = sourceEnergyCapacity(home, source);
-    if (capacity !== SOURCE_ENERGY_CAPACITY || reservationLeft(source.room) > 0) return capacity;
-    return reservationPays(home, source.room) ? capacity : SOURCE_ENERGY_NEUTRAL_CAPACITY;
-}
-
 /** CARRY needed to bring a source's output home: 2 * travel * energy per tick / 50 */
 function requiredCarry(home: Room, source: RemoteSource): number {
-    const capacity = expectedSourceCapacity(home, source);
+    const capacity = sourceEnergyCapacity(home, source);
     return Math.ceil((2 * source.travelTime * capacity) / ENERGY_REGEN_TIME / CARRY_CAPACITY);
 }
 
 function requiredWork(home: Room, source: RemoteSource): number {
-    return expectedSourceCapacity(home, source) / ENERGY_REGEN_TIME / HARVEST_POWER;
+    return sourceEnergyCapacity(home, source) / ENERGY_REGEN_TIME / HARVEST_POWER;
 }
 
 function harvesterSize(home: Room, source: RemoteSource): number {
@@ -153,7 +105,7 @@ function harvesterBody(home: Room, option: RemoteOption): BodyPartConstant[] {
     const established = option.remote ? isEstablished(option.remote) : false;
     return buildBody({
         weights: { [WORK]: 20, [CARRY]: 1 },
-        partLimits: { [WORK]: option.size ? option.size * (established ? harvesterSizeFactor(home) : 1) + 1 : 0 },
+        partLimits: { [WORK]: option.size ? option.size + 1 : 0 },
         // Road bodies only once the home builds remote roads (storage era): off roads they walk at half speed
         moveMode: established && haulerMove(home) === MoveMode.ROAD ? MoveMode.ROAD : MoveMode.PLAINS,
         carryContentLevel: 0,
@@ -288,10 +240,6 @@ function reserverOption(home: Room, source: RemoteSource): RemoteOption | null {
     if (!intel?.controllerPos || intel.owner) return null;
     const positions = intel.reservePositions ?? 0;
     const reservedByOther = !!intel.reserver && intel.reserver !== Memory.username;
-    // Under CPU pressure a reservation that doesn't pay per CPU is left out; another one is still attacked,
-    // and a room released from a player stays reserved for the release (a reserved controller can't be
-    // claimed, and an unreserved one is theirs to reserve again: shard0 W24N7 from Blindfold's W25N7)
-    if (!reservedByOther && !reservationPays(home, source.room) && !releasedPlayer(source.room)) return null;
     if (home.energyCapacityAvailable < 1300 && !(home.energyCapacityAvailable >= 650 && (positions > 1 || reservedByOther))) {
         return null;
     }

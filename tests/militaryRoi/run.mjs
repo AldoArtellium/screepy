@@ -48,20 +48,6 @@ check("squad cost: 4 members of 1000", squadCost([1000, 1000, 1000, 1000]) === 8
 // Boosts: the replacements are boosted too (12 HEAL parts of XLHO2 at ~50 energy each)
 check("squad cost: boosts with the replacements", squadCost([1000, 1000, 1000, 1000], ATTRITION, 600) === 9200, squadCost([1000, 1000, 1000, 1000], ATTRITION, 600));
 
-// Spawn time: the income a saturated spawn would have made in the ticks the squad takes (shard0 W29N7,
-// 2026-10-25: one spawn 88% busy, ~50 energy per tick, quad of 40 + 40 + 16 + 16 parts)
-const { spawnTimeCost, SPAWN_SATURATED } = require(join(OUT, "military", "roi.js"));
-const quadParts = [40, 40, 16, 16];
-const w29n7 = spawnTimeCost(quadParts, 1, 50, 0.88);
-check("SPAWN_SATURATED is 0.8", SPAWN_SATURATED === 0.8);
-check("W29N7 quad: 112 parts x 3 ticks x 2 x 50 energy", w29n7 === 33600, w29n7);
-check("two spawns halve it", spawnTimeCost(quadParts, 2, 50, 0.88) === 16800, spawnTimeCost(quadParts, 2, 50, 0.88));
-check("a spawn 40% busy pays half", spawnTimeCost(quadParts, 1, 50, 0.4) === 16800, spawnTimeCost(quadParts, 1, 50, 0.4));
-check("no income: free", spawnTimeCost(quadParts, 1, 0, 0.9) === 0);
-check("no spawn: free", spawnTimeCost(quadParts, 0, 50, 0.9) === 0);
-// W27N9 (132k loot, roi 6.75 on spawn energy alone) still pays with W29N7's spawn time
-const w27n9 = 132442 / (squadCost([2250, 2250, 2200, 2200]) + w29n7);
-check("W27N9 still pays from W29N7", w27n9 > MIN_ROI && w27n9 < 3, w27n9.toFixed(2));
 // RCL 7 quad (mockup W7N3 --preset rcl7, 5600 capacity): ~4000 per member
 const quadRcl7 = squadCost([4000, 4000, 4000, 4000]);
 
@@ -86,20 +72,7 @@ check("L1 stronghold blocking 2 sources: ROI >= 1", blocking >= MIN_ROI, blockin
 const collapsing = targetValue({ loot: 100, remote: remoteValue(2, 1000), infamy: 0 }) / quadRcl7;
 check("stronghold collapsing in 1000 ticks: ROI < 1", collapsing < MIN_ROI, collapsing.toFixed(2));
 
-// Squad CPU (mockup W7N3 --preset rcl7 --stronghold W7N4:1: ~1900 official CPU for 12 quad creeps spawned)
-const { squadCpu, SQUAD_CREEP_CPU, freedSources } = require(join(OUT, "military", "roi.js"));
-check("SQUAD_CREEP_CPU is 160", SQUAD_CREEP_CPU === 160);
-check("squad CPU: 4 members with their replacements", squadCpu(4) === 4 * ATTRITION * 160, squadCpu(4));
-// Under CPU pressure the CPU is priced at a neutral remote source's energy per CPU (neutralEnergyPerCpu
-// at 50 tiles: 8.4 at 1300 capacity, 9.8 at 1800, 10.9 at 2300, 11.2 at 5600)
-const quadWithCpu = quadRcl7 + squadCpu(4) * 11.2;
-const blockingCpu = targetValue({ loot: 100, remote: remoteValue(2, 70000), infamy: 0 }) / quadWithCpu;
-check("CPU priced: the quad costs ~45% more at RCL 7", quadWithCpu / quadRcl7 > 1.4 && quadWithCpu / quadRcl7 < 1.5, (quadWithCpu / quadRcl7).toFixed(2));
-check("CPU priced: L1 stronghold blocking 2 sources still pays", blockingCpu >= MIN_ROI, blockingCpu.toFixed(2));
-// A small player target worth its loot alone no longer pays once the CPU is priced
-const smallLoot = targetValue({ loot: 30000, remote: 0, infamy: 4000 });
-check("player loot 34k: pays on energy alone", smallLoot / quadRcl7 >= MIN_ROI, (smallLoot / quadRcl7).toFixed(2));
-check("player loot 34k: doesn't pay with the CPU priced", smallLoot / quadWithCpu < MIN_ROI, (smallLoot / quadWithCpu).toFixed(2));
+const { freedSources } = require(join(OUT, "military", "roi.js"));
 
 // Sources a player's room frees when it falls: its own and the rooms it reserves (closest room of that
 // player, strictly), within reach of our rooms. shard0 2026-10-25 around W28N7 (doorknobnob)
@@ -152,30 +125,13 @@ check("engaged current kept against a clearly better one", pickTarget([a, c], "A
 check("engaged current kept below MIN_ROI", pickTarget([{ room: "A", roi: 0.8 }, c], "A", true)?.room === "A");
 check("engaged current no longer a candidate: replaced", pickTarget([b, c], "A", true)?.room === "C");
 
-// --- Raids: rooms with loot and no defense, looted without a squad ---
-const { isRaidable, lootersNeeded, raidCost, RAID_MIN_LOOT, RAID_INTEL_AGE } = require(join(OUT, "military", "roi.js"));
-const NOW = 100000;
-const MAX_BARRIER = 200000;
-const abandoned = { t: NOW - 100, loot: 50000, towers: 0, spawns: 0, barrier: 0, damage: 0, heal: 0 };
-check("RAID_MIN_LOOT is 10000", RAID_MIN_LOOT === 10000);
-check("raid: abandoned storage, no tower", isRaidable(abandoned, NOW, MAX_BARRIER));
-check("raid: towers with energy", !isRaidable({ ...abandoned, towers: 1, towerEnergy: 500 }, NOW, MAX_BARRIER));
-check("raid: empty tower", isRaidable({ ...abandoned, towers: 1, towerEnergy: 0 }, NOW, MAX_BARRIER));
-check("raid: armed creeps seen", !isRaidable({ ...abandoned, damage: 30 }, NOW, MAX_BARRIER));
-check("raid: safe mode", !isRaidable({ ...abandoned, safeMode: NOW + 10 }, NOW, MAX_BARRIER));
-check("raid: stronghold", !isRaidable({ ...abandoned, coreLevel: 1 }, NOW, MAX_BARRIER));
-check("raid: rampart too strong to dismantle", !isRaidable({ ...abandoned, lootBarrier: 300000 }, NOW, MAX_BARRIER));
-check("raid: rampart a dismantler opens", isRaidable({ ...abandoned, lootBarrier: 100000 }, NOW, MAX_BARRIER));
-check("raid: too little loot", !isRaidable({ ...abandoned, loot: 5000 }, NOW, MAX_BARRIER));
-check("raid: stale intel", !isRaidable({ ...abandoned, t: NOW - RAID_INTEL_AGE - 1 }, NOW, MAX_BARRIER));
+const { lootersNeeded } = require(join(OUT, "military", "roi.js"));
 
 // Looters (Overmind DirectiveHaul): amount x 2 x route tiles / (1500 x capacity), 1 to 3
 check("looters: 50k one room away, 1250 capacity", lootersNeeded(50000, 1, 1250) === 3, lootersNeeded(50000, 1, 1250));
 check("looters: 1000 units", lootersNeeded(1000, 1, 1250) === 1);
 check("looters: nothing left", lootersNeeded(0, 1, 1250) === 0);
 // Cost: looters + a dismantler when ramparts cover the loot
-check("raid cost with ramparts", raidCost(50000, 1, 2500, 1250, 3750, true) === 3 * 2500 + 3750, raidCost(50000, 1, 2500, 1250, 3750, true));
-check("raid cost without ramparts", raidCost(50000, 1, 2500, 1250, 3750, false) === 3 * 2500);
 
 // Player size (playerThreat.ts): rooms seen owned. shard0 2026-10-26: Blindfold (GCL ~9) with 6 rooms
 // seen, we own 4.

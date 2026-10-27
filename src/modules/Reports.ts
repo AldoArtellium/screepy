@@ -74,11 +74,7 @@ const TRACKED = [
     "globalReset",
     "safeMode",
     "memory:deadCreep",
-    "military:lost",
-    "pixels:generated",
-    "pixels:sold",
-    "cpuUnlock:bought",
-    "cpuUnlock:used"
+    "military:lost"
 ];
 const TRACKED_PREFIXES = ["roleError:", "throttled:"];
 
@@ -245,16 +241,6 @@ export function buildReport(state: ReportState): string {
             (resets > 0 ? ` | ${resets} global reset${resets > 1 ? "s" : ""}` : "")
     );
 
-    // Pixels and CPU unlocks (modules/Pixels.ts, Memory.pixels)
-    const pixelCounts = ["pixels:generated", "pixels:sold", "cpuUnlock:bought", "cpuUnlock:used"].map(n => delta(counters, state.counters, n));
-    if (Memory.pixels || _.some(pixelCounts, n => n > 0)) {
-        const [generated, sold, bought, used] = pixelCounts;
-        lines.push(
-            `Pixels ${generated} generated, ${sold} sold (stock ${Game.resources[PIXEL] ?? 0}) | CPU unlocks ${bought} bought, ${used} used (stock ${Game.resources[CPU_UNLOCK] ?? 0})` +
-                (Game.cpu.unlockedTime ? ` | full CPU ${((Game.cpu.unlockedTime - Date.now()) / 3600000).toFixed(1)} h` : "") +
-                ` | credits ${Math.round(Game.market.credits)}`
-        );
-    }
 
     // Errors since the last report (Memory.moduleErrors keeps the last 20)
     const moduleErrors = _.countBy(

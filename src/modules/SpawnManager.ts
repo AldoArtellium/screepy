@@ -12,7 +12,6 @@ import { getBestOption } from "../core/options";
 import { creepsByRole, mySpawns } from "../core/roomState";
 import { ECONOMY_SPAWN_ROLES, SpawnOption, SpawnRole, starvedRooms } from "../spawning/spawnRoles";
 import { markForBoosting } from "../labs/boosts";
-import { spawnEnergyStructures, spawnExitDirections } from "../spawning/spawnPlacement";
 import { recordSpawn } from "../utils/history";
 import { log } from "../utils/logger";
 import { countStat } from "../utils/stats";
@@ -236,12 +235,7 @@ class SpawnManager {
 
         const memory = { room: room.name, ...option.spawnRole.memory(room, option), role: option.role } as CreepMemory;
         const name = this.creepName(option.role);
-        const opts: SpawnOptions = { memory };
-        const energyStructures = spawnEnergyStructures(room);
-        if (energyStructures) opts.energyStructures = energyStructures;
-        const directions = spawnExitDirections(spawn);
-        if (directions) opts.directions = directions;
-        const result = spawn.spawnCreep(body, name, opts);
+        const result = spawn.spawnCreep(body, name, { memory });
         if (result !== OK) {
             log.warn("SpawnManager", `Failed to spawn ${option.role} in ${room.name}: ${result}`);
             // Energy is there but unusable (inactive extensions) and nobody can fix it: recovery transporter

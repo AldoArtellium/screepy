@@ -8,15 +8,9 @@
  * - `throttleMultiplier(stopAt, throttleAt)`: factor applied to a periodic module's interval.
  */
 
-/**
- * Bucket for CPU decisions (throttling, remote budget, upgraders, visuals, planner, reclaim): a bucket drained by
- * pixel generation (modules/Pixels.ts) counts as full while it refills, else every pixel would stop or throttle the
- * economy for the ~1000 ticks it takes to refill. The Pixels module clears the flag once the bucket is full again or
- * the CPU average rises above 80% of the limit: the real bucket applies again. Displays keep the real bucket.
- */
+/** Bucket for CPU decisions (no bucket in the simulation room: full) */
 export function decisionBucket(): number {
-    // No bucket in the simulation room: full
-    return Memory.pixelState?.refilling ? 10000 : (Game.cpu.bucket ?? 10000);
+    return Game.cpu.bucket ?? 10000;
 }
 
 const throttleNumbers: number[] = [];
@@ -80,16 +74,4 @@ export function throttleMultiplier(stopAt = 0, throttleAt = 5000): number {
     if (bucket <= stopAt) return 99999;
     if (bucket < throttleAt) multiplier *= (throttleAt - stopAt) / (bucket - stopAt);
     return multiplier;
-}
-
-/**
- * Harvester size factor (Hivemind spawn-role/harvester.ts getHarvesterSizeFactor): each harvest
- * intent costs 0.2 official CPU whatever the WORK count, so twice the WORK drains a source with half
- * the intents. Hivemind does it from RCL 6 when the CPU use is above 75% of the limit; we do it as
- * soon as the room has a storage (energy to spare for the bigger bodies), with the same CPU condition.
- * Memory.stats.cpuAvg includes the intents' CPU on the official server.
- */
-export function harvesterSizeFactor(room: Room): number {
-    if (!room.storage) return 1;
-    return (Memory.stats?.cpuAvg ?? 0) > Game.cpu.limit * 0.75 ? 2 : 1;
 }

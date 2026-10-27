@@ -60,128 +60,24 @@ export function sourceNet(source: SourceEconomy): number {
     return generation - harvesterCost - haulerCost - builderCost - CONTAINER_UPKEEP;
 }
 
-/**
- * One CLAIM + MOVE reserver kept on the controller: 650 energy per (600 - distance) ticks. Under CPU
- * pressure (`cpuPressure`) its official CPU is priced too, at the energy per CPU of a neutral remote
- * source at that distance (`neutralEnergyPerCpu`): a room whose reservation doesn't pay per CPU is
- * not reserved then (remoteSpawnRole `reservationPays`), and the CPU-priced reserver brings the
- * reserved score of such a room down to about its unreserved income (sourceNet at 5 energy per tick).
- */
-export function reserverCost(distance: number, pressure = cpuPressure()): number {
-    const energy = (BODYPART_COST[CLAIM] + BODYPART_COST[MOVE]) / Math.max(1, CREEP_CLAIM_LIFE_TIME - distance);
-    if (!pressure) return energy;
-    return energy + reserverCpu(1, distance) * neutralEnergyPerCpu(distance);
+/** One CLAIM + MOVE reserver kept on the controller: 650 energy per (600 - distance) ticks */
+export function reserverCost(distance: number): number {
+    return (BODYPART_COST[CLAIM] + BODYPART_COST[MOVE]) / Math.max(1, CREEP_CLAIM_LIFE_TIME - distance);
 }
-
-// ------------------------------------------------------------------ reservations under CPU pressure
 
 /** Official CPU of an intent */
 export const INTENT_CPU = 0.2;
-/** Code CPU of a remote creep per tick (shard0: remote haulers 0.069; mockup: reservers 0.03-0.05) */
-export const CREEP_CODE_CPU = 0.06;
-/** Share of the CPU limit above which the reservations are judged per CPU (or while the remote budget is capped) */
-export const RESERVE_CPU_PRESSURE = 0.85;
+/** Share of the CPU limit above which CPU counts as the binding constraint (or while the remote budget is capped) */
+export const CPU_PRESSURE_SHARE = 0.85;
 
-/** CPU is the binding constraint: the remote budget is capped, or the CPU average is above 85% of the limit */
+/**
+ * CPU is the binding constraint: the remote budget is capped, or the CPU average is above 85% of the
+ * limit. The one CPU signal the visuals and the ownership rescout read.
+ */
 export function cpuPressure(): boolean {
     if (typeof Memory === "undefined" || typeof Game === "undefined") return false;
     if (Memory.remoteMining?.maxRooms !== undefined) return true;
-    return (Memory.stats?.cpuAvg ?? 0) > Game.cpu.limit * RESERVE_CPU_PRESSURE;
-}
-
-/** CLAIM parts of the reservers a home of `capacity` energy spawns (remoteSpawnRole reserverBody) */
-export function reserverClaimParts(capacity: number): number {
-    const unit = BODYPART_COST[CLAIM] + BODYPART_COST[MOVE];
-    return Math.min(Math.floor(CONTROLLER_RESERVE_MAX / CREEP_CLAIM_LIFE_TIME), Math.floor(capacity / unit));
-}
-
-/**
- * Ticks one reserver keeps a reservation up: on station it adds `claimParts` per tick against a decay
- * of 1, so a 2-CLAIM reserver holds the room for twice its time on station (when it is not sent before
- * the reservation needs it, see remoteSpawnRole reserverOption).
- */
-export function reserverPeriod(claimParts: number, distance: number): number {
-    return Math.max(1, claimParts) * Math.max(1, CREEP_CLAIM_LIFE_TIME - distance);
-}
-
-/** Official CPU per tick of keeping a room reserved: code over the reserver's life, a move per tile, a reserve per tick on station */
-export function reserverCpu(claimParts: number, distance: number): number {
-    return (CREEP_CLAIM_LIFE_TIME * (CREEP_CODE_CPU + INTENT_CPU)) / reserverPeriod(claimParts, distance);
-}
-
-/** CARRY per remote hauler a home of `capacity` energy builds (remoteSpawnRole haulerSize upper bound) */
-export function haulerCarryParts(capacity: number, roads: boolean): number {
-    return Math.max(
-        1,
-        Math.min(
-            Math.floor(MAX_CREEP_SIZE / (roads ? 1.5 : 2)),
-            Math.floor((0.9 * CONTAINER_CAPACITY) / CARRY_CAPACITY),
-            Math.floor(capacity / (BODYPART_COST[CARRY] + BODYPART_COST[MOVE] / (roads ? 2 : 1)))
-        )
-    );
-}
-
-/**
- * Official CPU per tick of mining a remote source: the harvester (code, a move per tile on its way, a
- * harvest per tick while the source has energy: its WORK drain it faster than it regenerates) and the
- * haulers (code, a move per tile both ways and a withdraw + a transfer per trip of `haulerCarry` CARRY).
- * Remote builders left out (storage era, the same with or without a reservation).
- */
-export function sourceCpu(source: SourceEconomy, haulerCarry: number): number {
-    const { generation, distance } = source;
-    const lifetime = Math.max(1, CREEP_LIFE_TIME - distance);
-    const work = Math.ceil(generation / HARVEST_POWER) + 1;
-    const harvests = generation / (work * HARVEST_POWER);
-    const harvester = (CREEP_LIFE_TIME * CREEP_CODE_CPU + distance * INTENT_CPU) / lifetime + harvests * INTENT_CPU;
-    const trips = generation / (Math.max(1, haulerCarry) * CARRY_CAPACITY);
-    const haulers = trips * (2 * distance * (CREEP_CODE_CPU + INTENT_CPU) + 2 * INTENT_CPU);
-    return harvester + haulers;
-}
-
-/** Energy per official CPU of a neutral (5 energy per tick) remote source at `distance`, plains bodies */
-export function neutralEnergyPerCpu(distance: number, capacity = 1300): number {
-    const neutral: SourceEconomy = {
-        generation: SOURCE_ENERGY_NEUTRAL_CAPACITY / ENERGY_REGEN_TIME,
-        distance,
-        roads: false,
-        maintenanceWork: 0
-    };
-    return Math.max(0, sourceNet(neutral)) / sourceCpu(neutral, haulerCarryParts(capacity, false));
-}
-
-export interface ReservationValue {
-    /** Energy per tick the reservation adds: the sources at 10 instead of 5, minus their bigger crews and the reservers */
-    energy: number;
-    /** Official CPU per tick it adds: reservers, and the haulers' extra trips */
-    cpu: number;
-    /** energy / cpu */
-    perCpu: number;
-    /** Energy per CPU of a neutral source at the same distance: what the CPU would mine elsewhere */
-    alternative: number;
-    pays: boolean;
-}
-
-/**
- * Whether reserving a remote room pays per official CPU (not in Hivemind, which reserves every room
- * it can): the energy the reservation adds over the CPU it adds, against the energy per CPU of a
- * neutral source, which the remote budget would mine with that CPU instead. `source` describes the
- * room's average source (its `generation` is ignored), `sources` the sources mined there.
- * A one-source room doesn't pay, with 1-CLAIM (650-1299 capacity, 3.8 vs 5.3 at 50 tiles) or 2-CLAIM reservers
- * (7.6 vs 8.4): close margins, so the decision follows CREEP_CODE_CPU; two-source rooms pay (5.7, 11.2).
- */
-export function reservationValue(source: SourceEconomy, sources: number, capacity: number): ReservationValue {
-    const claimParts = Math.max(1, reserverClaimParts(capacity));
-    const haulerCarry = haulerCarryParts(capacity, source.roads);
-    const reserved = { ...source, generation: SOURCE_ENERGY_CAPACITY / ENERGY_REGEN_TIME };
-    const neutral = { ...source, generation: SOURCE_ENERGY_NEUTRAL_CAPACITY / ENERGY_REGEN_TIME };
-    const period = reserverPeriod(claimParts, source.distance);
-    const reserverEnergy = (claimParts * (BODYPART_COST[CLAIM] + BODYPART_COST[MOVE])) / period;
-    const energy = sources * (sourceNet(reserved) - sourceNet(neutral)) - reserverEnergy;
-    const haulCpu = sourceCpu(reserved, haulerCarry) - sourceCpu(neutral, haulerCarry);
-    const cpu = sources * haulCpu + reserverCpu(claimParts, source.distance);
-    const perCpu = cpu > 0 ? energy / cpu : 0;
-    const alternative = Math.max(0, sourceNet(neutral)) / sourceCpu(neutral, haulerCarry);
-    return { energy, cpu, perCpu, alternative, pays: energy > 0 && perCpu >= alternative };
+    return (Memory.stats?.cpuAvg ?? 0) > Game.cpu.limit * CPU_PRESSURE_SHARE;
 }
 
 /**
@@ -270,33 +166,18 @@ export function roomEnergyPerCreep(
 // ------------------------------------------------------------------ CPU budget (RemoteMining.ts updateBudget)
 
 /**
- * Above this share of the CPU limit the remote budget drops a room, unless the bucket holds
- * BUDGET_DROP_BUCKET (the bucket is the margin: it only falls above the limit); above the limit
- * or below 5000 bucket it always drops one
+ * The budget's one CPU share: a room is added while the average plus that room's CPU stays under it
+ * with a full bucket, and dropped above it once the bucket falls below BUDGET_DROP_BUCKET (the bucket
+ * only falls above the limit); above the limit or below 5000 bucket a room always goes
  */
 export const BUDGET_HIGH = 0.95;
-/** Below this share (bucket > 9000) it allows one more */
-export const BUDGET_LOW = 0.75;
 /**
- * Bucket counted as full, and how long it must stay full to allow a room while above BUDGET_LOW
- * (9900 before 2026-10-25: shard0's bucket dipped to 8964-9867 in every window of 1000 ticks from the
- * periodic modules' spikes, so it never counted as full and ~1.5 of 20 CPU went unused)
+ * Bucket counted as full (9900 before 2026-10-25: shard0's bucket dipped to 8964-9867 in every window
+ * of 1000 ticks from the periodic modules' spikes, so it never counted as full)
  */
 export const BUDGET_FULL_BUCKET = 9000;
-export const BUDGET_FULL_TICKS = 1000;
-/**
- * Above BUDGET_HIGH a room is only dropped below this bucket: a margin under BUDGET_FULL_BUCKET, so one
- * spike after a room was added at up to BUDGET_FIT_FULL does not drop it again
- */
+/** Above BUDGET_HIGH a room is only dropped below this bucket: the hysteresis against BUDGET_FULL_BUCKET */
 export const BUDGET_DROP_BUCKET = 8000;
-/**
- * One more room only when the average plus that room's CPU stays under this share of the limit:
- * a margin, so the room added is not dropped again (shard0 at ~90% of 20 CPU: 7 -> 8 -> 7 rooms in
- * 5 of 6 windows of 1000 ticks, the bucket falling, while a room's CPU was counted without its moves)
- */
-export const BUDGET_FIT = 0.9;
-/** The same share once the bucket stayed full for BUDGET_FULL_TICKS: CPU left over is lost */
-export const BUDGET_FIT_FULL = 0.98;
 /**
  * Least CPU per tick counted for one remote room. 1.2 while the measure left out the moves; with
  * them shard0 measured 0.86 (2026-10-25, 7 rooms: 0.48 code and intents, 0.38 moves)
@@ -320,8 +201,6 @@ export interface BudgetState {
     cpuAvg: number;
     limit: number;
     bucket: number;
-    /** Ticks the bucket has stayed at BUDGET_FULL_BUCKET or more */
-    fullBucketTicks: number;
     /** Current cap (undefined: none) */
     maxRooms: number | undefined;
     /** Remote rooms mined now, and rooms the homes would mine without a cap */
@@ -361,11 +240,6 @@ export function budgetRooms(state: BudgetState): number | undefined {
     if (high || bucket < 5000) return Math.max(0, state.currentRooms - 1);
     if (maxRooms === undefined) return undefined;
     if (state.ticksSinceDrop !== undefined && state.ticksSinceDrop < BUDGET_RAISE_HOLD) return maxRooms;
-    const spare = cpuAvg < limit * BUDGET_LOW && bucket > 9000;
-    // A bucket full for long: the CPU left over is spent on nothing (shard0 W27N5 at 15/20 stayed capped)
-    const unused = state.fullBucketTicks >= BUDGET_FULL_TICKS;
-    if (!spare && !unused) return maxRooms;
-    const fits = cpuAvg + budgetRoomCpu(state.roomCpu) <= limit * (unused ? BUDGET_FIT_FULL : BUDGET_FIT);
-    if (!fits) return maxRooms;
+    if (bucket < BUDGET_FULL_BUCKET || cpuAvg + budgetRoomCpu(state.roomCpu) > limit * BUDGET_HIGH) return maxRooms;
     return maxRooms >= state.possibleRooms ? undefined : maxRooms + 1;
 }

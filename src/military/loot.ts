@@ -1,19 +1,13 @@
 /**
  * Looting: the stores a squad leaves behind (stronghold containers and the core's ruin, ruins of a
- * player's storage or terminal, tombstones, piles), and raids on rooms with loot and no defense.
+ * player's storage or terminal, tombstones, piles).
  *
  * - A mission that succeeded (military.ts finish) starts a loot mission for its room from the squad's
  *   spawn room, while that room has a storage: `Memory.military.loot[room] = { home, since, until, ... }`.
  * - Stores under a hostile rampart can't be withdrawn from (the engine refuses it): those ramparts are
  *   squad targets (duo.ts pickTarget) and the attack is not over while they stand (isNeutralized), so
  *   the stronghold's container (bunker1: a rampart on the core and on the container) gets opened.
- * - Raids (opt-in `Memory.military.raid = true`, every RAID_EVERY ticks): a room the intel saw with at
- *   least RAID_MIN_LOOT of loot, empty towers, no armed creep, no safe mode and ramparts over the loot
- *   a dismantler can open (roi.ts isRaidable) is looted without a squad from the closest home with a
- *   storage within RAID_MAX_ROUTE rooms, one raid per home, when the loot pays for the looters and the
- *   dismantler (raidCost). The ramparts over the loot go to that home's dismantler
- *   (remote/dismantle.ts dismantleTargets). A tower seen with energy or an armed creep ends the raid,
- *   and the room is left alone for RAID_FAILURE_MEMORY ticks.
+ * - Ramparts left over the loot go to the home's dismantler (remote/dismantle.ts dismantleTargets).
  * - Looters: CARRY / MOVE (plains), priority 3, weight 0 like the dismantler; as many as the open loot
  *   needs (roi.ts lootersNeeded). They take every resource and deliver through the destination
  *   dispatcher (storage / terminal), then recycle once nothing is left.
@@ -30,7 +24,6 @@ import { clearOrder, creepsByRole, effectiveEnergy } from "../core/roomState";
 import { ENEMY_STRENGTH_NORMAL, enemyStrength } from "../defense/RoomDefense";
 import { isRoomUnderAttack } from "../modules/RoomIntel";
 import { trafficManager } from "../modules/TrafficManager";
-import { MAX_DISMANTLE_HITS } from "../remote/blockers";
 import { remoteSources } from "../remote/RemoteMining";
 import { fleeIfThreatened } from "../roles/flee";
 import { performRecycle } from "../roles/recycle";
@@ -40,7 +33,7 @@ import type { SpawnOption, SpawnRole } from "../spawning/spawnRoles";
 import { log } from "../utils/logger";
 import { countStat } from "../utils/stats";
 import { militaryMemory } from "./intel";
-import { isRaidable, lootersNeeded, raidCost } from "./roi";
+import { lootersNeeded } from "./roi";
 
 export const LOOTER = "looter";
 
@@ -52,14 +45,6 @@ const MISSION_TICKS = 20000;
 const MIN_ENERGY = 5000;
 /** Tiles per room on the way (route length x 50) */
 const TILES_PER_ROOM = 50;
-const RAID_EVERY = 100;
-const RAID_MAX_ROUTE = 5;
-/** A raid that met a defense is not tried again before this */
-const RAID_FAILURE_MEMORY = 20000;
-/** A tower with this much energy can fire */
-const ARMED_TOWER = 10;
-/** Dismantler body cap (remote/dismantle.ts MAX_WORK: 25 WORK + 25 MOVE) */
-const DISMANTLER_MAX_COST = 25 * (BODYPART_COST[WORK] + BODYPART_COST[MOVE]);
 
 export interface LootMission {
     home: string;
@@ -73,8 +58,6 @@ export interface LootMission {
     covered?: number;
     /** Hostile ramparts over loot ("x,y"), for the home's dismantler */
     ramparts?: string[];
-    /** Started as a raid (no squad) */
-    raid?: boolean;
     /** Units brought home so far */
     looted: number;
 }
@@ -152,15 +135,8 @@ function coveredAmount(room: Room): number {
     );
 }
 
-function hostileTowerEnergy(room: Room): number {
-    return _.sum(
-        room.find(FIND_HOSTILE_STRUCTURES).filter((s): s is StructureTower => s.structureType === STRUCTURE_TOWER),
-        t => t.store.energy
-    );
-}
-
-/** Loot a room from a home (needs its storage); `raid`: no squad went there */
-export function startLooting(roomName: string, home: string, raid = false): void {
+/** Loot a room from a home (needs its storage) */
+export function startLooting(roomName: string, home: string): void {
     const homeRoom = Game.rooms[home];
     if (!homeRoom?.storage?.my) return;
     const route = Game.map.findRoute(home, roomName);
@@ -176,15 +152,9 @@ export function startLooting(roomName: string, home: string, raid = false): void
         rooms: route.length,
         amount,
         covered,
-        ...(raid && { raid }),
         looted: 0
     };
-    log.info("Military", `${raid ? "Raid on" : "Looting"} ${roomName} from ${home}: ${amount} units open, ${covered} under ramparts`);
-}
-
-function logRaid(roomName: string, result: "success" | "abandoned"): void {
-    const memory = militaryMemory();
-    memory.log = [...(memory.log ?? []).slice(-9), { room: roomName, result, time: Game.time, losses: 0, squad: "raid" }];
+    log.info("Military", `Looting ${roomName} from ${home}: ${amount} units open, ${covered} under ramparts`);
 }
 
 /** Every tick: refresh the loot left in sight, end the missions that are done */
@@ -197,24 +167,17 @@ export function updateLootMissions(): void {
             mission.covered = coveredAmount(room);
             mission.ramparts = lootRamparts(room).map(r => `${r.pos.x},${r.pos.y}`);
         }
-        const defended = mission.raid && (isRoomUnderAttack(roomName) || (room && hostileTowerEnergy(room) >= ARMED_TOWER));
         const reason =
             Game.time > mission.until
                 ? "timeout"
                 : !Game.rooms[mission.home]?.storage?.my
                   ? "home lost its storage"
-                  : defended
-                    ? "defended"
-                    : room && mission.amount === 0 && !mission.covered
-                      ? "empty"
-                      : null;
+                  : room && mission.amount === 0 && !mission.covered
+                    ? "empty"
+                    : null;
         if (!reason) continue;
         delete missions[roomName];
         countStat("loot:missions");
-        if (mission.raid) {
-            countStat(`loot:raid:${reason === "empty" ? "done" : "abandoned"}`);
-            logRaid(roomName, reason === "empty" ? "success" : "abandoned");
-        }
         log.info("Military", `Looting ${roomName} over (${reason}): ${mission.looted} units brought home in ${Game.time - mission.since} ticks`);
     }
 }
@@ -230,48 +193,6 @@ export function lootDismantlePositions(home: string): RoomPosition[] {
         }
     }
     return positions;
-}
-
-function recentlyFailed(roomName: string): boolean {
-    return (militaryMemory().log ?? []).some(
-        e => e.room === roomName && e.result === "abandoned" && Game.time - e.time < RAID_FAILURE_MEMORY
-    );
-}
-
-let lastRaidCheck = 0;
-
-/** Opt-in raids: the best raidable room per home without a raid (closest home within RAID_MAX_ROUTE) */
-export function startRaids(): void {
-    const memory = militaryMemory();
-    if (!memory.raid || Game.time - lastRaidCheck < RAID_EVERY) return;
-    lastRaidCheck = Game.time;
-    const missions = lootMissions();
-    const busy = new Set(Object.values(missions).filter(m => m.raid).map(m => m.home));
-    const homes = _.filter(
-        Game.rooms,
-        r => !!r.controller?.my && r.controller.level >= 4 && !!r.storage?.my && r.find(FIND_MY_SPAWNS).length > 0
-    );
-    for (const [roomName, intel] of Object.entries(memory.rooms ?? {})) {
-        if (missions[roomName] || recentlyFailed(roomName)) continue;
-        if (!isRaidable(intel, Game.time, MAX_DISMANTLE_HITS)) continue;
-        let best: { home: Room; rooms: number } | null = null;
-        for (const home of homes) {
-            if (busy.has(home.name) || Game.map.getRoomLinearDistance(home.name, roomName) > RAID_MAX_ROUTE) continue;
-            const route = Game.map.findRoute(home.name, roomName);
-            if (route === ERR_NO_PATH || route.length > RAID_MAX_ROUTE) continue;
-            if (!best || route.length < best.rooms) best = { home, rooms: route.length };
-        }
-        if (!best) continue;
-        const body = looterBody(best.home);
-        const capacity = body.filter(p => p === CARRY).length * CARRY_CAPACITY;
-        const looterCost = _.sum(body, p => BODYPART_COST[p]);
-        const dismantlerCost = Math.min(best.home.energyCapacityAvailable, DISMANTLER_MAX_COST);
-        const cost = raidCost(intel.loot ?? 0, best.rooms, looterCost, capacity, dismantlerCost, (intel.lootBarrier ?? 0) > 0);
-        if ((intel.loot ?? 0) < cost) continue;
-        busy.add(best.home.name);
-        countStat("loot:raid:started");
-        startLooting(roomName, best.home.name, true);
-    }
 }
 
 function travelTicks(mission: LootMission): number {

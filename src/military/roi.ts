@@ -8,8 +8,7 @@
  *   sources its room's fall frees (freedSources, REMOTE_HORIZON ticks).
  * - Cost: the spawn cost of the squad's bodies, ATTRITION times (the creeps lost are replaced: the
  *   mockup quad against a level 1 stronghold spawned 12 creeps for 4 members, earlier runs 4), and
- *   under CPU pressure its CPU (squadCpu) priced in energy by targets.ts, plus the income its spawn
- *   time takes from the origin room's economy (spawnTimeCost).
+ *   the boosts the squad needs (sizing.ts planSquad).
  * - A target needs a ratio of MIN_ROI; the best one wins, the current one is kept unless another
  *   beats it by CURRENT_BONUS (no switching for a small difference).
  * Our design (Harabi's "ROI-driven target selection" with energy on both sides).
@@ -26,45 +25,6 @@ export const CURRENT_BONUS = 1.5;
 /** Spawn cost of the squad with its replacements, and their boosts (`boostCost`: one squad's, sizing.ts planSquad) */
 export function squadCost(memberCosts: number[], attrition = ATTRITION, boostCost = 0): number {
     return (memberCosts.reduce((sum, cost) => sum + cost, 0) + boostCost) * attrition;
-}
-
-/** Spawn busy share from which a spawn is saturated (RemoteMining's source cap fires above it) */
-export const SPAWN_SATURATED = 0.8;
-/** CREEP_SPAWN_TIME (a constant here: the module stays pure for the offline check) */
-const TICKS_PER_PART = 3;
-
-/**
- * Energy the economy loses while the spawns make the squad and its replacements: each spawn tick of a
- * saturated spawn is worth the room's income per tick and spawn, a spawn busy below SPAWN_SATURATED
- * gives up that share. shard0 W29N7 (one spawn 88% busy, ~50 energy per tick): a quad of 112 parts
- * took 33.6k, twice its spawn energy, and its first healers waited 200+ ticks for the attackers.
- */
-export function spawnTimeCost(
-    memberParts: number[],
-    spawns: number,
-    incomePerTick: number,
-    busy: number,
-    attrition = ATTRITION
-): number {
-    if (spawns <= 0 || incomePerTick <= 0) return 0;
-    const ticks = memberParts.reduce((sum, parts) => sum + parts, 0) * TICKS_PER_PART * attrition;
-    return Math.round(((ticks * incomePerTick) / spawns) * Math.min(1, Math.max(0, busy) / SPAWN_SATURATED));
-}
-
-/**
- * Official CPU per squad creep spawned (code, actions and moves over its life): mockup W7N3 `--preset
- * rcl7 --stronghold W7N4:1`, 4000 ticks, 12 quad creeps over 7036 creep-ticks for ~1900 CPU (Military
- * module 1646 with the quad's actions, roles 70, 1008 moves 202), ~0.27 per creep and tick.
- */
-export const SQUAD_CREEP_CPU = 160;
-
-/**
- * Official CPU of a squad with its replacements. Under CPU pressure targets.ts prices it at a neutral
- * remote source's energy per CPU (remoteIncome neutralEnergyPerCpu): the remote budget would mine
- * that energy with the CPU the squad takes (shard0: 17-19 of 20 CPU, remote rooms capped).
- */
-export function squadCpu(members: number, attrition = ATTRITION): number {
-    return members * attrition * SQUAD_CREEP_CPU;
 }
 
 /** Linear distance from a target's room to remote sources it frees (remote mining reaches 3 rooms, closer ones are mined first) */
@@ -183,34 +143,10 @@ export function pickTarget<T extends { room: string; roi: number }>(
     return best;
 }
 
-/** Raids (opt-in `Memory.military.raid`): loot of a room without defense, taken without a squad */
-export const RAID_MIN_LOOT = 10000;
-/** Intel older than this is not trusted for a raid (towers may have been refilled) */
-export const RAID_INTEL_AGE = 5000;
-/** A tower with less than a shot of energy can't fire */
-const RAID_MAX_TOWER_ENERGY = 10;
 const MAX_LOOTERS = 3;
 const TILES_PER_ROOM = 50;
 /** CREEP_LIFE_TIME (a constant here: the module stays pure for the offline check) */
 const LIFE_TIME = 1500;
-
-interface RaidIntel {
-    t: number;
-    loot?: number;
-    coreLevel?: number;
-    towerEnergy?: number;
-    damage: number;
-    safeMode?: number;
-    lootBarrier?: number;
-}
-
-/** Enough loot, fresh intel, no stronghold, no safe mode, towers empty, no armed creep, ramparts a dismantler opens */
-export function isRaidable(intel: RaidIntel, now: number, maxBarrier: number): boolean {
-    if ((intel.loot ?? 0) < RAID_MIN_LOOT || now - intel.t > RAID_INTEL_AGE) return false;
-    if (intel.coreLevel !== undefined || (intel.safeMode ?? 0) > now) return false;
-    if ((intel.towerEnergy ?? 0) >= RAID_MAX_TOWER_ENERGY || intel.damage > 0) return false;
-    return (intel.lootBarrier ?? 0) <= maxBarrier;
-}
 
 /**
  * Looters a loot needs: round trips over a creep's life, at least one while loot is left, at most
@@ -220,16 +156,4 @@ export function lootersNeeded(amount: number, routeRooms: number, capacity: numb
     if (amount <= 0 || capacity <= 0) return 0;
     const trips = (amount * 2 * Math.max(1, routeRooms) * TILES_PER_ROOM) / (LIFE_TIME * capacity);
     return Math.min(MAX_LOOTERS, Math.max(1, Math.ceil(trips)));
-}
-
-/** Spawn cost of a raid: its looters, and a dismantler when ramparts cover the loot */
-export function raidCost(
-    loot: number,
-    routeRooms: number,
-    looterCost: number,
-    looterCapacity: number,
-    dismantlerCost: number,
-    covered: boolean
-): number {
-    return lootersNeeded(loot, routeRooms, looterCapacity) * looterCost + (covered ? dismantlerCost : 0);
 }
