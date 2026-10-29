@@ -65,3 +65,35 @@ export function forcedBuyPays(price: number, history: PriceData | null, bestBuy:
     if (history === null) return false;
     return price <= Math.max(history.average, bestBuy ?? 0) * FORCED_BUY_MAX_RATIO;
 }
+
+export interface BuyOrder {
+    id: string;
+    price: number;
+    remainingAmount: number;
+}
+
+function committedCredits(orders: BuyOrder[]): number {
+    return orders.reduce((sum, o) => sum + o.price * o.remainingAmount, 0);
+}
+
+/**
+ * Credits new buys may spend: above the reserve and what our open buy orders will take when filled.
+ * Not in Hivemind: shard0 2026-10-29, buy orders created with 3M credits were filled after instant buys
+ * had spent the rest (credits 60 -> 5.64, below the 10000 reserve).
+ */
+export function spendableCredits(credits: number, reserve: number, orders: BuyOrder[]): number {
+    return Math.max(0, credits - reserve - committedCredits(orders));
+}
+
+/** Our open buy orders to cancel, most valuable first, until the rest fits in the credits above the reserve */
+export function buyOrdersToCancel(credits: number, reserve: number, orders: BuyOrder[]): string[] {
+    const open = orders.filter(o => o.remainingAmount > 0).sort((a, b) => b.price * b.remainingAmount - a.price * a.remainingAmount);
+    let committed = committedCredits(open);
+    const cancelled: string[] = [];
+    for (const order of open) {
+        if (committed <= credits - reserve) break;
+        cancelled.push(order.id);
+        committed -= order.price * order.remainingAmount;
+    }
+    return cancelled;
+}

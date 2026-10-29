@@ -31,7 +31,7 @@ try {
     // Type errors outside this file (global declarations) don't prevent emitting
 }
 
-const { sellOrderPrice, repricedSellPrice, instantSellPays, prefersInstantSell, forcedBuyPays, FORCED_BUY_MAX_RATIO } = require(join(OUT, "market", "pricing.js"));
+const { sellOrderPrice, repricedSellPrice, instantSellPays, prefersInstantSell, forcedBuyPays, FORCED_BUY_MAX_RATIO, spendableCredits, buyOrdersToCancel } = require(join(OUT, "market", "pricing.js"));
 
 let failures = 0;
 const check = (name, ok, detail) => {
@@ -81,6 +81,22 @@ check("no history: not bought", !forcedBuyPays(10, null, undefined));
 check("H at 620 bought (best buy 562 above the average)", forcedBuyPays(620.304, h, 562.739));
 check("H at 900 not bought", !forcedBuyPays(900, h, 562.739));
 check("without buy orders the average is the reference", !forcedBuyPays(620.304, h, undefined));
+
+// Credits committed to our open buy orders (shard0 2026-10-29: buy orders created with 3M credits were
+// filled once instant buys had spent the rest, credits 60 -> 5.64, below the 10000 reserve)
+const orders = [
+    { id: "u", price: 95.231, remainingAmount: 1266 },
+    { id: "k", price: 54.765, remainingAmount: 1000 },
+    { id: "o", price: 600, remainingAmount: 0 }
+];
+const committed = 95.231 * 1266 + 54.765 * 1000;
+check("spendable credits leave the reserve and the open buy orders", Math.abs(spendableCredits(500000, 10000, orders) - (490000 - committed)) < 1e-6);
+check("spendable credits never negative", spendableCredits(120000, 10000, orders) === 0);
+check("no buy order to cancel when credits cover them", buyOrdersToCancel(500000, 10000, orders).length === 0);
+const cancelled = buyOrdersToCancel(120622, 10000, orders);
+check("most valuable buy order cancelled first until the rest fits", cancelled.join() === "u", cancelled.join());
+check("every buy order cancelled below the reserve", buyOrdersToCancel(60, 10000, orders).join() === "u,k");
+check("filled orders are never cancelled", !buyOrdersToCancel(60, 10000, orders).includes("o"));
 
 console.log(failures === 0 ? "\nall checks passed" : `\n${failures} check(s) failed`);
 process.exit(failures === 0 ? 0 : 1);
