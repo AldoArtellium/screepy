@@ -104,6 +104,9 @@ jobs:
       - name: Scouting check
         run: node tests/scouting/run.mjs
 
+      - name: Highway intel check
+        run: node tests/highway/run.mjs
+
       - uses: actions/upload-artifact@v4
         with:
           name: bundle

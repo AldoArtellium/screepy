@@ -344,6 +344,27 @@ function printMilitary(memory, time) {
     table(["mission", "result", "tick", "losses", "squad"], recent.map(e => [e.room, e.result, e.time, e.losses, e.squad ?? ""]), [0, 1, 4]);
 }
 
+// Usable = close, cheap, fresh enough (src/highway/highwayIntel.ts decides it on each sighting)
+function printHighway(memory, time) {
+  const log = memory.highwayIntel;
+  if (!log) return;
+  const objects = Object.values(log.objects ?? {});
+  const ticks = time !== undefined ? time - log.since : 0;
+  const rate = kind => fmt((objects.filter(o => o.kind === kind && o.usable).length * 10000) / Math.max(1, ticks));
+  section(`Highway since ${log.since} (${ticks} ticks): usable deposits ${rate("deposit")}, power banks ${rate("powerBank")} per 10000 ticks`);
+  if (objects.length === 0) return;
+  table(
+    ["room", "kind", "usable", "home", "dist", "cooldown/power", "first seen", "decays in"],
+    objects
+      .sort((a, b) => a.firstSeen - b.firstSeen)
+      .map(o => [
+        o.room, o.kind === "deposit" ? o.type : "powerBank", o.usable ? "yes" : "no", o.home ?? "-", o.distance ?? "-",
+        o.kind === "deposit" ? o.cooldown : o.power, o.firstSeen, time !== undefined ? o.decayAt - time : "?"
+      ]),
+    [0, 1, 2, 3]
+  );
+}
+
 function printCpu(entries, memory) {
   const recent = entries.slice(-LAST);
   const ticks = recent.reduce((s, e) => s + e.ticks, 0);
@@ -407,6 +428,7 @@ try {
   printRemotes(history.remotes, source.memory);
   printExcluded(source.memory, source.time);
   printMilitary(source.memory, source.time);
+  printHighway(source.memory, source.time);
   printSpawns(history.spawns);
 } catch (e) {
   console.error(`live-inspect: ${e.message}`);
