@@ -14,12 +14,13 @@
  * Not ported: energy buying (off by default in Hivemind), pixels.
  * Not in Hivemind: at most 10 deals per tick, terminals on cooldown or already used this tick skipped,
  * credits spent on a run are deducted from what the next buys may spend, an instant buy never spends more
- * than the credits above the reserve.
+ * than the credits above the reserve, the credits our open buy orders will take count as spent and those
+ * orders are cancelled when they no longer fit above the reserve (market/pricing.ts).
  */
 
 import { getBestOption } from "../core/options";
 import { isFullOn, myRoomsWithTerminal, prepareForTrading, resourceAmount, totalResources } from "../core/resources";
-import { forcedBuyPays, instantSellPays, PriceData, prefersInstantSell, repricedSellPrice, sellOrderPrice } from "../market/pricing";
+import { buyOrdersToCancel, forcedBuyPays, instantSellPays, PriceData, prefersInstantSell, repricedSellPrice, sellOrderPrice, spendableCredits } from "../market/pricing";
 import { log } from "../utils/logger";
 
 /** Lowest buy price (Hivemind minTradeValue) */
@@ -383,7 +384,9 @@ export const marketManagerModule = (): void => {
     const rooms = myRoomsWithTerminal();
     if (rooms.length === 0) return;
     removeOldOrders();
-    availableCredits = Math.max(0, Game.market.credits - CREDIT_RESERVE);
+    const buyOrders = _.filter(Game.market.orders, o => o.type === ORDER_BUY);
+    for (const id of buyOrdersToCancel(Game.market.credits, CREDIT_RESERVE, buyOrders)) Game.market.cancelOrder(id);
+    availableCredits = spendableCredits(Game.market.credits, CREDIT_RESERVE, buyOrders);
 
     const states: ResourceStates = { rooms: rooms.map(r => r.name), total: {} };
     for (const room of rooms) {

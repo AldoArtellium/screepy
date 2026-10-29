@@ -4,7 +4,7 @@
  * (dispatcher `lab` source and destination). Ported from Hivemind (MIT), src/role/helper.ts.
  */
 
-import { whenInRange } from "../core/movement";
+import { stayInPlace, whenInRange } from "../core/movement";
 import { bestStorageSource, bestStorageTarget } from "../core/resources";
 import { boostLabs, labNeeds } from "../labs/boosts";
 import { roomPlanner } from "../planner/RoomPlanner";
@@ -108,7 +108,18 @@ function gather(creep: Creep): void {
         return;
     }
     park(creep);
+    restingUntil.set(creep.name, Game.time + REST_TICKS);
 }
+
+/** Heap: tick a helper with nothing to do looks at the labs again */
+const restingUntil: Map<string, number> = new Map();
+/**
+ * Ticks a helper with nothing to gather stays parked without looking at the labs (like an idle
+ * transporter). shard0 2026-10-29: 1.3 helpers at 0.21 CPU each per tick with 0 actions; mockup
+ * (--preset rcl6 --labs, 3000 ticks) 0.546 -> 0.447 CPU per helper, points equal. Boost requests
+ * live 150 ticks, so a 10-tick delay costs no boost.
+ */
+const REST_TICKS = 10;
 
 /** Heap: first tick each helper found no boost lab */
 const idleSince: Map<string, number> = new Map();
@@ -140,6 +151,11 @@ export function runHelper(creep: Creep): void {
         }
         return;
     }
+    if ((restingUntil.get(creep.name) ?? 0) > Game.time) {
+        stayInPlace(creep);
+        return;
+    }
+    restingUntil.delete(creep.name);
     if (creep.memory.delivering && creep.store.getUsedCapacity() === 0) creep.memory.delivering = false;
     else if (!creep.memory.delivering && creep.store.getFreeCapacity() === 0) creep.memory.delivering = true;
 

@@ -185,6 +185,12 @@ export const BUDGET_DROP_BUCKET = 8000;
 export const BUDGET_ROOM_CPU_MIN = 0.8;
 /** No room added for this many ticks after a drop: the dropped room's creeps die out, the average settles */
 export const BUDGET_RAISE_HOLD = 5000;
+/**
+ * No room added for this many ticks after a raise: the new room's creeps reach it and its CPU shows in
+ * the average (shard0 2026-10-29: rooms added 1000 ticks apart, 6 changes in 13000 ticks, each pair of
+ * raises followed by a pair of drops)
+ */
+export const BUDGET_RAISE_SETTLE = 3000;
 /** Weight of one tick in the CPU average: ~400 ticks */
 const CPU_AVG_DECAY = 1 / 400;
 
@@ -210,6 +216,8 @@ export interface BudgetState {
     roomCpu?: number;
     /** Ticks since the cap last went down (undefined: never) */
     ticksSinceDrop?: number;
+    /** Ticks since the cap last went up (undefined: never) */
+    ticksSinceRaise?: number;
 }
 
 /** Remote rooms from which an expansion may use the whole CPU limit (Hivemind getCpuStats) */
@@ -240,6 +248,7 @@ export function budgetRooms(state: BudgetState): number | undefined {
     if (high || bucket < 5000) return Math.max(0, state.currentRooms - 1);
     if (maxRooms === undefined) return undefined;
     if (state.ticksSinceDrop !== undefined && state.ticksSinceDrop < BUDGET_RAISE_HOLD) return maxRooms;
+    if (state.ticksSinceRaise !== undefined && state.ticksSinceRaise < BUDGET_RAISE_SETTLE) return maxRooms;
     if (bucket < BUDGET_FULL_BUCKET || cpuAvg + budgetRoomCpu(state.roomCpu) > limit * BUDGET_HIGH) return maxRooms;
     return maxRooms >= state.possibleRooms ? undefined : maxRooms + 1;
 }

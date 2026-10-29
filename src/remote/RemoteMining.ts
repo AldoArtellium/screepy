@@ -82,6 +82,8 @@ declare global {
             budgetChanged?: number;
             /** Last tick the cap went down (no room added for BUDGET_RAISE_HOLD ticks after it) */
             budgetDropped?: number;
+            /** Last tick the cap went up or was lifted (no room added for BUDGET_RAISE_SETTLE ticks after it) */
+            budgetRaised?: number;
             /** Slow average of the CPU per tick of one mined remote room (its remote roles' CPU and moves) */
             roomCpu?: number;
             /** Sum of the remote roles' CPU counters at the last budget update, and its tick */
@@ -603,10 +605,12 @@ function updateBudget(currentRooms: number, possibleRooms: number): void {
         currentRooms,
         possibleRooms,
         roomCpu: mem.roomCpu,
-        ticksSinceDrop: mem.budgetDropped === undefined ? undefined : Game.time - mem.budgetDropped
+        ticksSinceDrop: mem.budgetDropped === undefined ? undefined : Game.time - mem.budgetDropped,
+        ticksSinceRaise: mem.budgetRaised === undefined ? undefined : Game.time - mem.budgetRaised
     });
     if (next === mem.maxRooms) return;
     if (next !== undefined && (mem.maxRooms === undefined || next < mem.maxRooms)) mem.budgetDropped = Game.time;
+    else mem.budgetRaised = Game.time;
     mem.maxRooms = next;
     mem.budgetChanged = Game.time;
     countStat("remote:budgetChange");
