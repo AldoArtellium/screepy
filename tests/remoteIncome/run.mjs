@@ -109,6 +109,10 @@ check("a room that does not fit is not", budgetRooms({ ...capped, limit: 10, cpu
 check("no room added within 5000 ticks of a drop", budgetRooms({ ...capped, cpuAvg: 12, ticksSinceDrop: 4999 }) === 7);
 check("a room added 5000 ticks after a drop", budgetRooms({ ...capped, cpuAvg: 12, ticksSinceDrop: 5000 }) === 8);
 check("the hold never delays a drop", budgetRooms({ ...capped, cpuAvg: 19.5, bucket: 7500, ticksSinceDrop: 10 }) === 6);
+// shard0 2026-10-29: two rooms added 1000 ticks apart before the first one's CPU showed, both dropped
+check("no room added within 3000 ticks of a raise", budgetRooms({ ...capped, cpuAvg: 12, ticksSinceRaise: 2999 }) === 7);
+check("a room added 3000 ticks after a raise", budgetRooms({ ...capped, cpuAvg: 12, ticksSinceRaise: 3000 }) === 8);
+check("the settle never delays a drop", budgetRooms({ ...capped, cpuAvg: 19.5, bucket: 7500, ticksSinceRaise: 10 }) === 6);
 check("the hold keeps an uncapped budget uncapped", budgetRooms({ ...capped, maxRooms: undefined, cpuAvg: 12, ticksSinceDrop: 10 }) === undefined);
 check("the reserver costs its energy over its time on station", Math.abs(reserverCost(50) - 650 / 550) < 1e-9);
 check("no Memory: no pressure", cpuPressure() === false);
