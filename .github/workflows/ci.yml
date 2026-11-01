@@ -107,6 +107,9 @@ jobs:
       - name: Highway intel check
         run: node tests/highway/run.mjs
 
+      - name: Room map check
+        run: node tests/roomMap/run.mjs
+
       - uses: actions/upload-artifact@v4
         with:
           name: bundle

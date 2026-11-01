@@ -103,6 +103,69 @@ stat("Creeps", "sum(screeps_room_creeps)", 18, 3);
 stat("Salles", "count(screeps_room_rcl)", 21, 3);
 y += 4;
 
+// --- Maps: iframes of the exporter's live pages (websocket, refreshed every 2 s), then Prometheus views
+const EXPORTER = "http://localhost:9101";
+const iframe = (title, room, x, w, h, extra = {}) =>
+  panels.push({
+    type: "text",
+    title,
+    id: ++id,
+    gridPos: { h, w, x, y },
+    options: {
+      mode: "html",
+      content: `<iframe src="${EXPORTER}/map/live.html?room=${room}" style="display:block;width:100%;height:calc(100% - 8px);border:0"></iframe>`
+    },
+    ...extra
+  });
+row("Cartes (live, chaque tick)");
+iframe("Monde (salles possédées et remotes, trafic sur ~3000 ticks)", "world", 0, 14, 20);
+panels.push({
+  type: "table",
+  title: "Creeps",
+  id: ++id,
+  datasource: ds,
+  gridPos: { h: 20, w: 10, x: 14, y },
+  targets: [
+    target('max by (room, name, role, owner) (screeps_creep_x{room=~"$room"})', "", "A", { instant: true, format: "table" }),
+    target('max by (room, name, role, owner) (screeps_creep_y{room=~"$room"})', "", "B", { instant: true, format: "table" }),
+    target('max by (room, name, role, owner) (screeps_creep_health{room=~"$room"})', "", "C", { instant: true, format: "table" })
+  ],
+  transformations: [
+    { id: "merge", options: {} },
+    {
+      id: "organize",
+      options: {
+        excludeByName: { Time: true },
+        indexByName: { room: 0, name: 1, role: 2, "Value #A": 3, "Value #B": 4, "Value #C": 5, owner: 6 },
+        renameByName: { room: "Salle", name: "Creep", role: "Rôle", owner: "Joueur", "Value #A": "x", "Value #B": "y", "Value #C": "Santé" }
+      }
+    }
+  ],
+  fieldConfig: {
+    defaults: {},
+    overrides: [{ matcher: { id: "byName", options: "Santé" }, properties: [{ id: "unit", value: "percentunit" }, { id: "decimals", value: 0 }] }]
+  },
+  options: { showHeader: true, sortBy: [{ displayName: "Salle", desc: false }] }
+});
+y += 20;
+iframe("$room", "$room", 0, 8, 14, { repeat: "room", repeatDirection: "h", maxPerRow: 3 });
+y += 14;
+ts("Hostiles par salle", [["screeps_map_hostile_creeps > 0", "{{room}}"]], 0, 8, 8, "short", { min: 0, stack: true });
+ts("Creeps visibles par salle (les nôtres)", [['screeps_map_creeps{owner="mine"}', "{{room}}"]], 8, 8, 8, "short", { min: 0, stack: true });
+ts(
+  "CPU exact par tick (websocket)",
+  [
+    [`rate(screeps_ws_cpu_used_total${W}) / rate(screeps_ws_cpu_ticks_total${W})`, "moyenne"],
+    ["screeps_cpu_limit", "limite"]
+  ],
+  16,
+  8,
+  8,
+  "none",
+  { min: 0, description: "Moyenne de chaque tick vu par le websocket, sans l'échantillonnage du poll HTTP" }
+);
+y += 8;
+
 // --- CPU
 row("CPU");
 ts("CPU par tick", [["screeps_cpu_used", "dernier tick"], ["screeps_cpu_avg", "moyenne"], ["screeps_cpu_limit", "limite"]], 0, 12, 8, "none", { min: 0 });
@@ -198,7 +261,23 @@ const dashboard = {
   editable: true,
   panels,
   annotations: { list: [] },
-  templating: { list: [] }
+  templating: {
+    list: [
+      {
+        name: "room",
+        label: "Salle",
+        type: "query",
+        datasource: ds,
+        query: { query: "label_values(screeps_map_game_time, room)", refId: "rooms" },
+        definition: "label_values(screeps_map_game_time, room)",
+        refresh: 2,
+        multi: true,
+        includeAll: true,
+        current: { selected: true, text: ["All"], value: ["$__all"] },
+        sort: 1
+      }
+    ]
+  }
 };
 fs.writeFileSync(process.argv[2], JSON.stringify(dashboard, null, 2) + "\n");
 console.log(`${panels.length} panels written to ${process.argv[2]}`);
