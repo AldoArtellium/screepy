@@ -114,6 +114,11 @@ function priceData(resourceType: ResourceConstant): PriceData | null {
     return data;
 }
 
+/** Market average price of a resource (history and order book, cached), undefined without data (expansion/mineralValue.ts) */
+export function marketAverage(resourceType: ResourceConstant): number | undefined {
+    return priceData(resourceType)?.average;
+}
+
 /** Market average, or for compounds the worth of their reagents + 0.1% per reaction tick */
 function calculateWorth(resourceType: ResourceConstant): number {
     const cached = worthCache.get(resourceType);
