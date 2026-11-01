@@ -1,4 +1,5 @@
-# Live monitoring of the bot on the official server: exporter (Memory.stats) -> Prometheus -> Grafana.
+# Live monitoring of the bot on the official server: exporter (Memory.stats over HTTP, CPU and room
+# objects every tick over the websocket) -> Prometheus -> Grafana, live maps on http://localhost:9101/map/live.html.
 # Start: docker compose -f monitoring/docker-compose.yml up -d   then open http://localhost:3000
 # The token is read from ../screeps.json (mounted read-only), never copied into an image.
 name: screepy-monitoring
@@ -9,12 +10,18 @@ services:
     command: ["node", "/app/exporter.mjs"]
     volumes:
       - ./exporter.mjs:/app/exporter.mjs:ro
+      - ./roomMap.mjs:/app/roomMap.mjs:ro
       - ${SCREEPS_JSON:-../screeps.json}:/app/screeps.json:ro
     environment:
       SCREEPS_CONFIG: /app/screeps.json
       SCREEPS_SERVER: main
       SCREEPS_SHARD: shard0
       POLL_SECONDS: "120"
+      ROOMS_POLL_SECONDS: "600"
+      HEAT_HALF_LIFE_TICKS: "3000"
+    # The browser loads the live maps (/map/live.html) straight from the exporter inside Grafana iframes
+    ports:
+      - 127.0.0.1:9101:9101
     restart: unless-stopped
 
   prometheus:
@@ -36,6 +43,8 @@ services:
       GF_AUTH_ANONYMOUS_ORG_ROLE: Admin
       GF_AUTH_DISABLE_LOGIN_FORM: "true"
       GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH: /var/lib/grafana/dashboards/screepy-shard0.json
+      # The map panels are iframes of the exporter (local only, anonymous admin anyway)
+      GF_PANELS_DISABLE_SANITIZE_HTML: "true"
     volumes:
       - ./grafana/provisioning:/etc/grafana/provisioning:ro
       - ./grafana/dashboards:/var/lib/grafana/dashboards:ro

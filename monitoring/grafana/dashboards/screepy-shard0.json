@@ -437,7 +437,7 @@
     },
     {
       "type": "row",
-      "title": "CPU",
+      "title": "Cartes (live, chaque tick)",
       "id": 9,
       "collapsed": false,
       "gridPos": {
@@ -449,9 +449,345 @@
       "panels": []
     },
     {
+      "type": "text",
+      "title": "Monde (salles possédées et remotes, trafic sur ~3000 ticks)",
+      "id": 10,
+      "gridPos": {
+        "h": 20,
+        "w": 14,
+        "x": 0,
+        "y": 6
+      },
+      "options": {
+        "mode": "html",
+        "content": "<iframe src=\"http://localhost:9101/map/live.html?room=world\" style=\"display:block;width:100%;height:calc(100% - 8px);border:0\"></iframe>"
+      }
+    },
+    {
+      "type": "table",
+      "title": "Creeps",
+      "id": 11,
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "h": 20,
+        "w": 10,
+        "x": 14,
+        "y": 6
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "max by (room, name, role, owner) (screeps_creep_x{room=~\"$room\"})",
+          "legendFormat": "",
+          "refId": "A",
+          "instant": true,
+          "format": "table"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "max by (room, name, role, owner) (screeps_creep_y{room=~\"$room\"})",
+          "legendFormat": "",
+          "refId": "B",
+          "instant": true,
+          "format": "table"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "max by (room, name, role, owner) (screeps_creep_health{room=~\"$room\"})",
+          "legendFormat": "",
+          "refId": "C",
+          "instant": true,
+          "format": "table"
+        }
+      ],
+      "transformations": [
+        {
+          "id": "merge",
+          "options": {}
+        },
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": {
+              "Time": true
+            },
+            "indexByName": {
+              "room": 0,
+              "name": 1,
+              "role": 2,
+              "Value #A": 3,
+              "Value #B": 4,
+              "Value #C": 5,
+              "owner": 6
+            },
+            "renameByName": {
+              "room": "Salle",
+              "name": "Creep",
+              "role": "Rôle",
+              "owner": "Joueur",
+              "Value #A": "x",
+              "Value #B": "y",
+              "Value #C": "Santé"
+            }
+          }
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Santé"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "percentunit"
+              },
+              {
+                "id": "decimals",
+                "value": 0
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "showHeader": true,
+        "sortBy": [
+          {
+            "displayName": "Salle",
+            "desc": false
+          }
+        ]
+      }
+    },
+    {
+      "type": "text",
+      "title": "$room",
+      "id": 12,
+      "gridPos": {
+        "h": 14,
+        "w": 8,
+        "x": 0,
+        "y": 26
+      },
+      "options": {
+        "mode": "html",
+        "content": "<iframe src=\"http://localhost:9101/map/live.html?room=$room\" style=\"display:block;width:100%;height:calc(100% - 8px);border:0\"></iframe>"
+      },
+      "repeat": "room",
+      "repeatDirection": "h",
+      "maxPerRow": 3
+    },
+    {
+      "type": "timeseries",
+      "title": "Hostiles par salle",
+      "id": 13,
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 0,
+        "y": 40
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "screeps_map_hostile_creeps > 0",
+          "legendFormat": "{{room}}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "min": 0,
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 60,
+            "showPoints": "never",
+            "spanNulls": true,
+            "stacking": {
+              "mode": "normal",
+              "group": "A"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "calcs": [],
+          "sortDesc": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Creeps visibles par salle (les nôtres)",
+      "id": 14,
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 8,
+        "y": 40
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "screeps_map_creeps{owner=\"mine\"}",
+          "legendFormat": "{{room}}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "min": 0,
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 60,
+            "showPoints": "never",
+            "spanNulls": true,
+            "stacking": {
+              "mode": "normal",
+              "group": "A"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "calcs": [],
+          "sortDesc": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "CPU exact par tick (websocket)",
+      "id": 15,
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 16,
+        "y": 40
+      },
+      "description": "Moyenne de chaque tick vu par le websocket, sans l'échantillonnage du poll HTTP",
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "rate(screeps_ws_cpu_used_total[15m]) / rate(screeps_ws_cpu_ticks_total[15m])",
+          "legendFormat": "moyenne",
+          "refId": "A"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "screeps_cpu_limit",
+          "legendFormat": "limite",
+          "refId": "B"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "min": 0,
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 10,
+            "showPoints": "never",
+            "spanNulls": true,
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "calcs": [],
+          "sortDesc": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
+      "type": "row",
+      "title": "CPU",
+      "id": 16,
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 48
+      },
+      "panels": []
+    },
+    {
       "type": "timeseries",
       "title": "CPU par tick",
-      "id": 10,
+      "id": 17,
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus"
@@ -460,7 +796,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 6
+        "y": 49
       },
       "targets": [
         {
@@ -525,7 +861,7 @@
     {
       "type": "timeseries",
       "title": "Bucket",
-      "id": 11,
+      "id": 18,
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus"
@@ -534,7 +870,7 @@
         "h": 8,
         "w": 6,
         "x": 12,
-        "y": 6
+        "y": 49
       },
       "targets": [
         {
@@ -582,7 +918,7 @@
     {
       "type": "timeseries",
       "title": "Heap",
-      "id": 12,
+      "id": 19,
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus"
@@ -591,7 +927,7 @@
         "h": 8,
         "w": 6,
         "x": 18,
-        "y": 6
+        "y": 49
       },
       "targets": [
         {
@@ -639,7 +975,7 @@
     {
       "type": "timeseries",
       "title": "CPU par module (par tick)",
-      "id": 13,
+      "id": 20,
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus"
@@ -648,7 +984,7 @@
         "h": 10,
         "w": 12,
         "x": 0,
-        "y": 14
+        "y": 57
       },
       "targets": [
         {
@@ -700,7 +1036,7 @@
     {
       "type": "timeseries",
       "title": "CPU par rôle (par tick)",
-      "id": 14,
+      "id": 21,
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus"
@@ -709,7 +1045,7 @@
         "h": 10,
         "w": 12,
         "x": 12,
-        "y": 14
+        "y": 57
       },
       "description": "Biaisé : le CPU par rôle inclut les ordres du dispatcher (voir docs/decisions/economy.md)",
       "targets": [
@@ -762,20 +1098,20 @@
     {
       "type": "row",
       "title": "Économie (par 1000 ticks)",
-      "id": 15,
+      "id": 22,
       "collapsed": false,
       "gridPos": {
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 24
+        "y": 67
       },
       "panels": []
     },
     {
       "type": "timeseries",
       "title": "Travail",
-      "id": 16,
+      "id": 23,
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus"
@@ -784,7 +1120,7 @@
         "h": 9,
         "w": 12,
         "x": 0,
-        "y": 25
+        "y": 68
       },
       "targets": [
         {
@@ -835,7 +1171,7 @@
     {
       "type": "timeseries",
       "title": "Livraisons",
-      "id": 17,
+      "id": 24,
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus"
@@ -844,7 +1180,7 @@
         "h": 9,
         "w": 12,
         "x": 12,
-        "y": 25
+        "y": 68
       },
       "targets": [
         {
@@ -895,7 +1231,7 @@
     {
       "type": "timeseries",
       "title": "Énergie de source perdue",
-      "id": 18,
+      "id": 25,
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus"
@@ -904,7 +1240,7 @@
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 34
+        "y": 77
       },
       "description": "mining:wasted / mining:available",
       "targets": [
@@ -961,7 +1297,7 @@
     {
       "type": "timeseries",
       "title": "Creeps créés",
-      "id": 19,
+      "id": 26,
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus"
@@ -970,7 +1306,7 @@
         "h": 8,
         "w": 8,
         "x": 8,
-        "y": 34
+        "y": 77
       },
       "targets": [
         {
@@ -1017,7 +1353,7 @@
     {
       "type": "timeseries",
       "title": "Intents",
-      "id": 20,
+      "id": 27,
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus"
@@ -1026,7 +1362,7 @@
         "h": 8,
         "w": 8,
         "x": 16,
-        "y": 34
+        "y": 77
       },
       "targets": [
         {
@@ -1073,7 +1409,7 @@
     {
       "type": "timeseries",
       "title": "Throttling",
-      "id": 21,
+      "id": 28,
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus"
@@ -1082,7 +1418,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 42
+        "y": 85
       },
       "targets": [
         {
@@ -1129,7 +1465,7 @@
     {
       "type": "timeseries",
       "title": "Remote",
-      "id": 22,
+      "id": 29,
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus"
@@ -1138,7 +1474,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 42
+        "y": 85
       },
       "targets": [
         {
@@ -1185,7 +1521,7 @@
     {
       "type": "timeseries",
       "title": "Budget remote (salles)",
-      "id": 23,
+      "id": 30,
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus"
@@ -1194,7 +1530,7 @@
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 50
+        "y": 93
       },
       "description": "remoteIncome.ts budgetRooms : le plafond baisse quand le bucket passe sous 8000 avec un CPU au-dessus de 95 %",
       "targets": [
@@ -1252,7 +1588,7 @@
     {
       "type": "timeseries",
       "title": "CPU d'une salle remote",
-      "id": 24,
+      "id": 31,
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus"
@@ -1261,7 +1597,7 @@
         "h": 8,
         "w": 8,
         "x": 8,
-        "y": 50
+        "y": 93
       },
       "targets": [
         {
@@ -1309,7 +1645,7 @@
     {
       "type": "timeseries",
       "title": "Creeps inactifs (ticks par 1000)",
-      "id": 25,
+      "id": 32,
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus"
@@ -1318,7 +1654,7 @@
         "h": 8,
         "w": 8,
         "x": 16,
-        "y": 50
+        "y": 93
       },
       "description": "idle:<rôle> : ticks passés à attendre une source ; deliver:none : transporter chargé sans destination",
       "targets": [
@@ -1375,20 +1711,20 @@
     {
       "type": "row",
       "title": "Salles",
-      "id": 26,
+      "id": 33,
       "collapsed": false,
       "gridPos": {
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 58
+        "y": 101
       },
       "panels": []
     },
     {
       "type": "timeseries",
       "title": "Énergie de spawn",
-      "id": 27,
+      "id": 34,
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus"
@@ -1397,7 +1733,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 59
+        "y": 102
       },
       "targets": [
         {
@@ -1444,7 +1780,7 @@
     {
       "type": "timeseries",
       "title": "Creeps par salle",
-      "id": 28,
+      "id": 35,
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus"
@@ -1453,7 +1789,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 59
+        "y": 102
       },
       "targets": [
         {
@@ -1500,7 +1836,7 @@
     {
       "type": "timeseries",
       "title": "Progression du contrôleur (par 1000 ticks)",
-      "id": 29,
+      "id": 36,
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus"
@@ -1509,7 +1845,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 67
+        "y": 110
       },
       "targets": [
         {
@@ -1556,7 +1892,7 @@
     {
       "type": "timeseries",
       "title": "Énergie stockée (storage + terminal)",
-      "id": 30,
+      "id": 37,
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus"
@@ -1565,7 +1901,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 67
+        "y": 110
       },
       "targets": [
         {
@@ -1612,7 +1948,7 @@
     {
       "type": "timeseries",
       "title": "Chantiers",
-      "id": 31,
+      "id": 38,
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus"
@@ -1621,7 +1957,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 75
+        "y": 118
       },
       "targets": [
         {
@@ -1668,7 +2004,7 @@
     {
       "type": "timeseries",
       "title": "Creeps par rôle",
-      "id": 32,
+      "id": 39,
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus"
@@ -1677,7 +2013,7 @@
         "h": 9,
         "w": 12,
         "x": 0,
-        "y": 83
+        "y": 126
       },
       "targets": [
         {
@@ -1728,7 +2064,7 @@
     {
       "type": "table",
       "title": "Salles",
-      "id": 33,
+      "id": 40,
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus"
@@ -1737,7 +2073,7 @@
         "h": 9,
         "w": 12,
         "x": 12,
-        "y": 83
+        "y": 126
       },
       "targets": [
         {
@@ -1817,20 +2153,20 @@
     {
       "type": "row",
       "title": "Compte",
-      "id": 34,
+      "id": 41,
       "collapsed": false,
       "gridPos": {
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 92
+        "y": 135
       },
       "panels": []
     },
     {
       "type": "timeseries",
       "title": "Crédits",
-      "id": 35,
+      "id": 42,
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus"
@@ -1839,7 +2175,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 93
+        "y": 136
       },
       "targets": [
         {
@@ -1885,7 +2221,7 @@
     {
       "type": "timeseries",
       "title": "GCL (points par 1000 ticks)",
-      "id": 36,
+      "id": 43,
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus"
@@ -1894,7 +2230,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 93
+        "y": 136
       },
       "targets": [
         {
@@ -1943,6 +2279,34 @@
     "list": []
   },
   "templating": {
-    "list": []
+    "list": [
+      {
+        "name": "room",
+        "label": "Salle",
+        "type": "query",
+        "datasource": {
+          "type": "prometheus",
+          "uid": "prometheus"
+        },
+        "query": {
+          "query": "label_values(screeps_map_game_time, room)",
+          "refId": "rooms"
+        },
+        "definition": "label_values(screeps_map_game_time, room)",
+        "refresh": 2,
+        "multi": true,
+        "includeAll": true,
+        "current": {
+          "selected": true,
+          "text": [
+            "All"
+          ],
+          "value": [
+            "$__all"
+          ]
+        },
+        "sort": 1
+      }
+    ]
   }
 }
