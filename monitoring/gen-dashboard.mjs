@@ -141,6 +141,17 @@ y += 8;
 ts("Throttling", [[perKiloTick("throttled:.*"), "{{name}}"]], 0, 12, 8, "short", { min: 0 });
 ts("Remote", [[perKiloTick("remote:.*"), "{{name}}"]], 12, 12, 8, "short", { min: 0 });
 y += 8;
+ts("Budget remote (salles)", [["screeps_remote_max_rooms", "plafond"], ["screeps_remote_rooms", "minées"]], 0, 8, 8, "short", {
+  min: 0,
+  decimals: 0,
+  description: "remoteIncome.ts budgetRooms : le plafond baisse quand le bucket passe sous 8000 avec un CPU au-dessus de 95 %"
+});
+ts("CPU d'une salle remote", [["screeps_remote_room_cpu", "CPU/tick"]], 8, 8, 8, "none", { min: 0, decimals: 2 });
+ts("Creeps inactifs (ticks par 1000)", [[perKiloTick("idle:.*"), "{{name}}"], [perKiloTick("deliver:none"), "{{name}}"]], 16, 8, 8, "short", {
+  min: 0,
+  description: "idle:<rôle> : ticks passés à attendre une source ; deliver:none : transporter chargé sans destination"
+});
+y += 8;
 
 // --- Rooms
 row("Salles");
@@ -150,7 +161,9 @@ y += 8;
 ts("Progression du contrôleur (par 1000 ticks)", [[`1000 * deriv(screeps_room_controller_progress${W}) / ${TICK} >= 0`, "{{room}}"]], 0, 12, 8, "short", {
   min: 0
 });
-ts("Chantiers", [["screeps_room_construction_sites", "{{room}}"]], 12, 12, 8, "short", { min: 0 });
+ts("Énergie stockée (storage + terminal)", [["screeps_room_stored_energy", "{{room}}"]], 12, 12, 8, "short", { min: 0 });
+y += 8;
+ts("Chantiers", [["screeps_room_construction_sites", "{{room}}"]], 0, 12, 8, "short", { min: 0 });
 y += 8;
 ts("Creeps par rôle", [["sum by (role) (screeps_room_role_creeps)", "{{role}}"]], 0, 12, 9, "short", { min: 0, stack: true, table: true });
 panels.push({

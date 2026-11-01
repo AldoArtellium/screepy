@@ -75,7 +75,14 @@ export function recordTickStats(parseCpu?: number): void {
             creeps: creepsByRoom[roomName] ?? 0,
             roles,
             structures: room.find(FIND_MY_STRUCTURES).length,
-            constructionSites: room.find(FIND_MY_CONSTRUCTION_SITES).length
+            constructionSites: room.find(FIND_MY_CONSTRUCTION_SITES).length,
+            storedEnergy: (room.storage?.store.energy ?? 0) + (room.terminal?.store.energy ?? 0)
         };
     }
+
+    // Remote budget (src/remote/RemoteMining.ts), read from Memory to keep this module free of imports
+    const remote = Memory.remoteMining;
+    stats.remote = remote
+        ? { maxRooms: remote.maxRooms, rooms: new Set(Object.values(remote.sources).map(s => s.room)).size, roomCpu: remote.roomCpu }
+        : undefined;
 }
