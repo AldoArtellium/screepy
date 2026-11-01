@@ -110,6 +110,9 @@ jobs:
       - name: Deposit mining check
         run: node tests/deposits/run.mjs
 
+      - name: Power mining check
+        run: node tests/power/run.mjs
+
       - uses: actions/upload-artifact@v4
         with:
           name: bundle

@@ -354,6 +354,12 @@ function printHighway(memory, time) {
   section(`Highway since ${log.since} (${ticks} ticks): usable deposits ${rate("deposit")}, power banks ${rate("powerBank")} per 10000 ticks`);
   const op = memory.depositMining;
   if (op) console.log(`mining ${op.type} ${op.room} from ${op.home} since ${op.since}: roi ${fmt(op.roi)}, ${op.harvesters} harvesters, travel ${op.travel}`);
+  const power = memory.powerMining;
+  if (power)
+    console.log(
+      `power ${power.room} (${power.power}, ${fmt(power.hits)} hits) from ${power.homes.join(",")} since ${power.since}: ` +
+        `roi ${fmt(power.roi)}, ${power.attackers} attackers, ${power.healers} healers, ${power.haulers} haulers`
+    );
   if (objects.length === 0) return;
   table(
     ["room", "kind", "usable", "home", "dist", "cooldown/power", "first seen", "decays in"],

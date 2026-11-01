@@ -20,6 +20,7 @@ import { trafficManagerModule } from "modules/TrafficManager";
 import { roomPlannerModule } from "planner/RoomPlanner";
 import { remoteMiningModule } from "remote/RemoteMining";
 import { depositMiningModule } from "highway/DepositMining";
+import { powerMiningModule } from "highway/PowerMining";
 import { reportsModule } from "modules/Reports";
 import { historyModule } from "utils/history";
 import { log } from "utils/logger";
@@ -59,6 +60,8 @@ export const gameLoop = () => {
     { name: "RemoteMining", fn: remoteMiningModule, priority: "high" },
     // One highway deposit at a time (choice every 100 ticks, harvesters from an RCL 7+ room)
     { name: "DepositMining", fn: depositMiningModule, runEvery: 10, priority: "low" },
+    // One highway power bank at a time (choice every 100 ticks; the bank decays, so its creeps every 5)
+    { name: "PowerMining", fn: powerMiningModule, runEvery: 5 },
     // Claims and bootstraps new rooms, helps rooms without spawn
     { name: "Expansion", fn: expansionModule, runEvery: 5, priority: "high" },
     // Attacks (Memory.military.attack or automatic targets): duos and quads moving and fighting as one

@@ -14,6 +14,8 @@ import "../roles/harvester";
 import "../roles/helper";
 import "../roles/mineralHarvester";
 import "../roles/pioneer";
+import "../roles/powerHarvester";
+import "../roles/powerHauler";
 import "../roles/remoteBuilder";
 import "../roles/remoteDefender";
 import "../roles/remoteHarvester";

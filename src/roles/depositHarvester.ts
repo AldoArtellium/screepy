@@ -6,38 +6,12 @@
  */
 
 import { whenInRange } from "../core/movement";
-import { bestStorageTarget } from "../core/resources";
 import { DEPOSIT_HARVESTER } from "../highway/DepositMining";
-import { squadRoute } from "../military/route";
-import { trafficManager } from "../modules/TrafficManager";
+import { deliverHome, travelTo } from "../highway/travel";
 import { countStat } from "../utils/stats";
 import { fleeIfThreatened } from "./flee";
 import { performRecycle } from "./recycle";
 import { registerRole } from "./registry";
-
-/** Walk towards a room along the squad route, one room at a time; false once inside it */
-function travelTo(creep: Creep, room: string): boolean {
-    if (creep.room.name === room) return false;
-    const route = squadRoute(creep.room.name, room);
-    trafficManager.moveToRoom(creep, route?.[1] ?? room, { priority: 40 });
-    return true;
-}
-
-function deliver(creep: Creep, home: string): void {
-    if (travelTo(creep, home)) return;
-    const resources = Object.keys(creep.store) as ResourceConstant[];
-    const resource = resources.find(r => creep.store[r] > 0);
-    if (!resource) return;
-    const amount = creep.store[resource];
-    const target = bestStorageTarget(creep.room, amount, resource);
-    if (!target) {
-        creep.drop(resource);
-        return;
-    }
-    whenInRange(creep, 1, target, () => {
-        if (creep.transfer(target, resource) === OK) countStat("deposit:delivered", amount);
-    });
-}
 
 export function runDepositHarvester(creep: Creep): void {
     const op = Memory.depositMining;
@@ -65,7 +39,7 @@ export function runDepositHarvester(creep: Creep): void {
 
     if (fleeIfThreatened(creep)) return;
     if (creep.memory.delivering || !mine) {
-        deliver(creep, home);
+        deliverHome(creep, home, "deposit:delivered");
         return;
     }
 
