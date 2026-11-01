@@ -107,6 +107,9 @@ jobs:
       - name: Highway intel check
         run: node tests/highway/run.mjs
 
+      - name: Deposit mining check
+        run: node tests/deposits/run.mjs
+
       - uses: actions/upload-artifact@v4
         with:
           name: bundle

@@ -19,6 +19,7 @@ import { spawnManagerModule } from "modules/SpawnManager";
 import { trafficManagerModule } from "modules/TrafficManager";
 import { roomPlannerModule } from "planner/RoomPlanner";
 import { remoteMiningModule } from "remote/RemoteMining";
+import { depositMiningModule } from "highway/DepositMining";
 import { reportsModule } from "modules/Reports";
 import { historyModule } from "utils/history";
 import { log } from "utils/logger";
@@ -56,6 +57,8 @@ export const gameLoop = () => {
     { name: "ScoutManager", fn: scoutManagerModule, runEvery: 10, priority: "low" },
     // Remote sources each owned room mines (selection every 20 ticks)
     { name: "RemoteMining", fn: remoteMiningModule, priority: "high" },
+    // One highway deposit at a time (choice every 100 ticks, harvesters from an RCL 7+ room)
+    { name: "DepositMining", fn: depositMiningModule, runEvery: 10, priority: "low" },
     // Claims and bootstraps new rooms, helps rooms without spawn
     { name: "Expansion", fn: expansionModule, runEvery: 5, priority: "high" },
     // Attacks (Memory.military.attack or automatic targets): duos and quads moving and fighting as one

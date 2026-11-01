@@ -352,6 +352,8 @@ function printHighway(memory, time) {
   const ticks = time !== undefined ? time - log.since : 0;
   const rate = kind => fmt((objects.filter(o => o.kind === kind && o.usable).length * 10000) / Math.max(1, ticks));
   section(`Highway since ${log.since} (${ticks} ticks): usable deposits ${rate("deposit")}, power banks ${rate("powerBank")} per 10000 ticks`);
+  const op = memory.depositMining;
+  if (op) console.log(`mining ${op.type} ${op.room} from ${op.home} since ${op.since}: roi ${fmt(op.roi)}, ${op.harvesters} harvesters, travel ${op.travel}`);
   if (objects.length === 0) return;
   table(
     ["room", "kind", "usable", "home", "dist", "cooldown/power", "first seen", "decays in"],
