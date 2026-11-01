@@ -140,7 +140,18 @@ class ScoutManager {
                 return distA - distB;
             });
 
-            scout.memory.scoutTarget = sorted[0];
+            // The route is checked once per target, not every tick: a findRoute per tick was a quarter of the
+            // scout's CPU (mockup W7N3: 0.097 of 0.375 CPU per tick)
+            const target = sorted.find(room => {
+                if (Game.map.findRoute(scout.room.name, room) !== ERR_NO_PATH) return true;
+                this.unreachable.set(room, Game.time + UNREACHABLE_TTL);
+                return false;
+            });
+            if (!target) {
+                scout.suicide();
+                return;
+            }
+            scout.memory.scoutTarget = target;
             log.debug("ScoutManager", `Scout ${scout.name} assigned to ${scout.memory.scoutTarget}`);
         }
 
@@ -156,10 +167,7 @@ class ScoutManager {
 
         // Move towards target room
         // No path (walled area, blocked exits): drop the target instead of searching again every tick
-        if (
-            Game.map.findRoute(scout.room.name, targetRoom) === ERR_NO_PATH ||
-            trafficManager.moveToRoom(scout, targetRoom, { priority: 80 }) === ERR_NO_PATH
-        ) {
+        if (trafficManager.moveToRoom(scout, targetRoom, { priority: 80 }) === ERR_NO_PATH) {
             log.warn("ScoutManager", `Scout ${scout.name} cannot path to ${targetRoom}`);
             this.unreachable.set(targetRoom, Game.time + UNREACHABLE_TTL);
             delete scout.memory.scoutTarget;

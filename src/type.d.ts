@@ -25,6 +25,8 @@ declare global {
         memoryParse?: number;
         counters: { [name: string]: number };
         samples?: { [name: string]: string[] };
+        /** Remote mining CPU budget (every 10 ticks): cap on remote rooms (none = no cap), rooms mined, CPU of one room */
+        remote?: { maxRooms?: number; rooms: number; roomCpu?: number };
         rooms: {
             [roomName: string]: {
                 rcl: number;
@@ -36,6 +38,8 @@ declare global {
                 roles: { [role: string]: number };
                 structures: number;
                 constructionSites: number;
+                /** Energy in the storage and terminal */
+                storedEnergy?: number;
             };
         };
     }
