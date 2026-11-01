@@ -97,6 +97,12 @@ function buildHttp(r, stats, me, scrape) {
     r.add("screeps_heap_used_bytes", "gauge", "Isolate heap used", stats.heap.used, shard);
     r.add("screeps_heap_limit_bytes", "gauge", "Isolate heap limit", stats.heap.limit, shard);
   }
+  if (stats.remote) {
+    // No cap: report the rooms mined, so the cap line meets the rooms line
+    r.add("screeps_remote_max_rooms", "gauge", "Remote rooms the CPU budget allows (rooms mined when uncapped)", stats.remote.maxRooms ?? stats.remote.rooms, shard);
+    r.add("screeps_remote_rooms", "gauge", "Remote rooms mined", stats.remote.rooms, shard);
+    r.add("screeps_remote_room_cpu", "gauge", "Measured CPU per tick of one remote room", stats.remote.roomCpu, shard);
+  }
   for (const [name, value] of Object.entries(stats.counters ?? {})) {
     r.add("screeps_counter_total", "counter", "Memory.stats.counters (cumulative, reset with Memory)", value, { ...shard, name });
   }
@@ -109,6 +115,7 @@ function buildHttp(r, stats, me, scrape) {
     r.add("screeps_room_creeps", "gauge", "Creeps whose home is the room", s.creeps, l);
     r.add("screeps_room_structures", "gauge", "Own structures", s.structures, l);
     r.add("screeps_room_construction_sites", "gauge", "Own construction sites", s.constructionSites, l);
+    r.add("screeps_room_stored_energy", "gauge", "Energy in the storage and terminal", s.storedEnergy, l);
     for (const [role, n] of Object.entries(s.roles ?? {})) r.add("screeps_room_role_creeps", "gauge", "Creeps per role in the room", n, { ...l, role });
   }
   if (me) {

@@ -1,0 +1,86 @@
+/**
+ * Deposit harvester: walks the squad route (military/route.ts: no other player's room, no keeper room)
+ * to the deposit of `Memory.depositMining`, harvests until full, carries it home to the storage or
+ * terminal, and goes again while its life allows a round trip. Flees military hostiles.
+ * Ported from Hivemind (MIT), src/role/harvester.deposit.ts; recycles at home instead of suiciding.
+ */
+
+import { whenInRange } from "../core/movement";
+import { bestStorageTarget } from "../core/resources";
+import { DEPOSIT_HARVESTER } from "../highway/DepositMining";
+import { squadRoute } from "../military/route";
+import { trafficManager } from "../modules/TrafficManager";
+import { countStat } from "../utils/stats";
+import { fleeIfThreatened } from "./flee";
+import { performRecycle } from "./recycle";
+import { registerRole } from "./registry";
+
+/** Walk towards a room along the squad route, one room at a time; false once inside it */
+function travelTo(creep: Creep, room: string): boolean {
+    if (creep.room.name === room) return false;
+    const route = squadRoute(creep.room.name, room);
+    trafficManager.moveToRoom(creep, route?.[1] ?? room, { priority: 40 });
+    return true;
+}
+
+function deliver(creep: Creep, home: string): void {
+    if (travelTo(creep, home)) return;
+    const resources = Object.keys(creep.store) as ResourceConstant[];
+    const resource = resources.find(r => creep.store[r] > 0);
+    if (!resource) return;
+    const amount = creep.store[resource];
+    const target = bestStorageTarget(creep.room, amount, resource);
+    if (!target) {
+        creep.drop(resource);
+        return;
+    }
+    whenInRange(creep, 1, target, () => {
+        if (creep.transfer(target, resource) === OK) countStat("deposit:delivered", amount);
+    });
+}
+
+export function runDepositHarvester(creep: Creep): void {
+    const op = Memory.depositMining;
+    const mine = op && op.id === creep.memory.deposit ? op : undefined;
+    const home = creep.memory.room ?? op?.home ?? creep.room.name;
+    const used = creep.store.getUsedCapacity();
+    const ttl = creep.ticksToLive ?? CREEP_LIFE_TIME;
+
+    if (creep.memory.delivering && used === 0) {
+        // Hivemind: a round trip plus harvesting is not realistic with less than 2.5 trips of life
+        if (!mine || ttl <= 2.5 * mine.travel) {
+            performRecycle(creep);
+            return;
+        }
+        creep.memory.delivering = false;
+    } else if (!creep.memory.delivering) {
+        const full = used >= creep.store.getCapacity() * 0.95;
+        const late = ttl <= 1.1 * (mine?.travel ?? 0) + 10;
+        if (used > 0 && (full || late || !mine)) creep.memory.delivering = true;
+        else if (!mine) {
+            performRecycle(creep);
+            return;
+        }
+    }
+
+    if (fleeIfThreatened(creep)) return;
+    if (creep.memory.delivering || !mine) {
+        deliver(creep, home);
+        return;
+    }
+
+    if (travelTo(creep, mine.room)) return;
+    const deposit = Game.getObjectById(mine.id as Id<Deposit>);
+    if (!deposit) {
+        // Gone: DepositMining ends the operation on its next choice
+        if (used > 0) creep.memory.delivering = true;
+        return;
+    }
+    whenInRange(creep, 1, deposit, () => {
+        if (deposit.cooldown === 0 && creep.harvest(deposit) === OK) {
+            countStat("deposit:harvested", creep.getActiveBodyparts(WORK) * HARVEST_DEPOSIT_POWER);
+        }
+    });
+}
+
+registerRole(DEPOSIT_HARVESTER, runDepositHarvester);

@@ -9,6 +9,8 @@
  */
 
 import { intelManager } from "../modules/IntelManager";
+import { marketAverage } from "../modules/MarketManager";
+import { mineralScore } from "./mineralValue";
 import { isHighway, roomStatus } from "../utils/rooms";
 import { jitter } from "../utils/jitter";
 
@@ -64,7 +66,8 @@ function calculate(roomName: string): number {
     if (intel.mineralType) {
         // Our rooms are always visible: their mineral is read directly
         const owned = mine.filter(r => Game.rooms[r].find(FIND_MINERALS)[0]?.mineralType === intel.mineralType).length;
-        score += 1 / (owned + 1);
+        // Weighed by the mineral's market price (mineralValue.ts; Hivemind: 1 / (owned + 1))
+        score += mineralScore(intel.mineralType as MineralConstant, owned, marketAverage);
     }
 
     // Remote rooms around: 1 for neighbours, 0.5 two exits away (Hivemind overwrites a neighbour's 1

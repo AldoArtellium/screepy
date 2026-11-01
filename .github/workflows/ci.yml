@@ -86,6 +86,9 @@ jobs:
       - name: Market pricing check
         run: node tests/market/run.mjs
 
+      - name: Expansion mineral value check
+        run: node tests/mineralValue/run.mjs
+
       - name: Military CPU guard check
         run: node tests/militaryCpu/run.mjs
 
@@ -106,6 +109,9 @@ jobs:
 
       - name: Highway intel check
         run: node tests/highway/run.mjs
+
+      - name: Deposit mining check
+        run: node tests/deposits/run.mjs
 
       - name: Room map check
         run: node tests/roomMap/run.mjs

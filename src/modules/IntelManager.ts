@@ -138,8 +138,15 @@ class IntelManager {
         for (const s of room.find(FIND_STRUCTURES)) {
             if (s.structureType !== STRUCTURE_POWER_BANK) continue;
             const bank = s as StructurePowerBank;
+            let power: number;
+            try {
+                power = bank.power;
+            } catch {
+                // A bank without its store (mockup fixtures) throws in the getter: skipped, not the whole intel
+                continue;
+            }
             sightings.push({
-                id: bank.id, kind: "powerBank", x: bank.pos.x, y: bank.pos.y, power: bank.power, hits: bank.hits,
+                id: bank.id, kind: "powerBank", x: bank.pos.x, y: bank.pos.y, power, hits: bank.hits,
                 ticksToDecay: bank.ticksToDecay, free: freeTilesAround(terrain, bank.pos)
             });
         }
