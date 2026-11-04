@@ -107,17 +107,8 @@ jobs:
       - name: Scouting check
         run: node tests/scouting/run.mjs
 
-      - name: Highway intel check
-        run: node tests/highway/run.mjs
-
-      - name: Deposit mining check
-        run: node tests/deposits/run.mjs
-
       - name: Room map check
         run: node tests/roomMap/run.mjs
-
-      - name: Power mining check
-        run: node tests/power/run.mjs
 
       - uses: actions/upload-artifact@v4
         with:

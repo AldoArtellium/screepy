@@ -7,15 +7,12 @@
 import "../roles/brawler";
 import "../roles/builder";
 import "../roles/claimer";
-import "../roles/depositHarvester";
 import "../roles/dismantler";
 import "../roles/guardian";
 import "../roles/harvester";
 import "../roles/helper";
 import "../roles/mineralHarvester";
 import "../roles/pioneer";
-import "../roles/powerHarvester";
-import "../roles/powerHauler";
 import "../roles/remoteBuilder";
 import "../roles/remoteDefender";
 import "../roles/remoteHarvester";
