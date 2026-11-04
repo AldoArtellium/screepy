@@ -37,6 +37,7 @@ import { looterSpawnRole } from "../military/loot";
 import { militarySpawnRole } from "../military/military";
 import { REMOTE_HARVESTER, REMOTE_HAULER, remoteSpawnRole } from "../remote/remoteSpawnRole";
 import { remoteSources } from "../remote/RemoteMining";
+import { cpuPressure } from "../remote/remoteIncome";
 import { dismantlerSpawnRole } from "../remote/dismantle";
 import { ENEMY_STRENGTH_NORMAL, enemyStrength } from "../defense/RoomDefense";
 import { GUARDIAN } from "../roles/guardian";
@@ -113,6 +114,17 @@ function maxWorkParts(source: Source): number {
     return source.energyCapacity / ENERGY_REGEN_TIME / 2;
 }
 
+/**
+ * WORK parts of a local harvester body: twice the source's need at RCL 6+ with a storage while CPU binds
+ * (Hivemind spawn-role/harvester.ts getHarvesterSizeFactor, x2 from RCL 6 above 75% CPU). A harvest
+ * intent costs 0.2 official CPU whatever the WORK count: 10 WORK drain a 3000 source in 150 ticks with
+ * half the intents, then wait for the regeneration (docs/decisions/economy.md).
+ */
+function harvesterWorkLimit(room: Room, size: number): number {
+    if (!room.storage || (room.controller?.level ?? 0) < 6) return size;
+    return cpuPressure() ? size * 2 : size;
+}
+
 function sourceHarvesters(room: Room, source: Source): Creep[] {
     return creepsByRole(room.name, "harvester").filter(c => c.memory.fixedSource === source.id);
 }
@@ -168,7 +180,7 @@ const harvester: SpawnRole = {
         const fewExtensions = room.energyCapacityAvailable < SPAWN_ENERGY_CAPACITY * 2;
         return buildBody({
             weights: { [WORK]: 4, [CARRY]: 1 },
-            partLimits: { [WORK]: option.size },
+            partLimits: { [WORK]: option.size === undefined ? undefined : harvesterWorkLimit(room, option.size) },
             moveMode: hasSpawnAtSource || fewExtensions ? MoveMode.MINIMAL : MoveMode.ROAD,
             carryContentLevel: 0,
             energyLimit: energyLimit(room, option.force ? 300 : room.energyCapacityAvailable)
