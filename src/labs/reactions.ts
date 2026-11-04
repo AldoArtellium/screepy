@@ -32,7 +32,8 @@ declare global {
  * (room threat, infamy) and automatic attacks are on, before them during an attack mission or with
  * NORMAL+ enemies at home. Before (2026-10-25) the military list always came first: shard0 made UH2O,
  * LHO2, GHO2... that nothing used, 20000 ticks without a single boost. Before 2026-11-04 the threat
- * stock was made with `Memory.military.auto = false` too (no squad to use it).
+ * stock was made with `Memory.military.auto = false` too (no squad to use it); without it, the smaller
+ * defense stock (chain.ts DEFENSE_TARGETS: guardians, emergency builders, boosted remote defenders).
  */
 export function demandTargetsOf(room: Room): DemandTarget[] {
     const militaryFirst = currentTarget() !== undefined || enemyStrength(room) >= ENEMY_STRENGTH_NORMAL;

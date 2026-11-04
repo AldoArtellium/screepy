@@ -53,15 +53,16 @@ function memory(): NonNullable<Memory["boost"]> {
 
 /**
  * Our active labs (cached for the tick). isActive() walks every object of the room (engine
- * checkStructureAgainstController): with no more labs than the RCL allows they are all active, which
- * is what the engine finds too (mockup W7N3 RCL 8, 10 labs, no reaction: the Labs module took 0.69
- * CPU per tick, nearly all of it in isActive)
+ * checkStructureAgainstController): under our own controller, with no more labs than the RCL allows
+ * they are all active, which is what the engine finds too (mockup W7N3 RCL 8, 10 labs, no reaction:
+ * the Labs module took 0.69 CPU per tick, nearly all of it in isActive). Any other controller (lost,
+ * someone else's): the engine decides.
  */
 export function operationalLabs(room: Room): StructureLab[] {
     return tickCache(`labs:${room.name}`, () => {
         const labs = structuresOfType<StructureLab>(room, STRUCTURE_LAB).filter(l => l.my);
         const allowed = CONTROLLER_STRUCTURES[STRUCTURE_LAB][room.controller?.level ?? 0] ?? 0;
-        return labs.length <= allowed ? labs : labs.filter(l => l.isActive());
+        return room.controller?.my && labs.length <= allowed ? labs : labs.filter(l => l.isActive());
     });
 }
 

@@ -94,9 +94,13 @@ check("partial: more parts of the weaker tier win (20 x 0.5 > 6 x 1)", pickBoost
 
 // ---- reactionTargets: upgrade compounds by RCL, military only with a mission or a threat
 const names = targets => targets.map(([compound]) => compound);
-check("targets: RCL 6 without threat makes GH only", names(reactionTargets(6, false, false)), ["GH"]);
-check("targets: RCL 7 without threat makes GH2O only", names(reactionTargets(7, false, false)), ["GH2O"]);
-check("targets: RCL 8 nothing for upgrading", names(reactionTargets(8, false, false)), []);
+const DEFENSE = ["XUH2O", "XKHO2", "XLHO2", "XLH2O", "XGHO2"];
+check("targets: RCL 6 without threat makes GH, then the defense stock", names(reactionTargets(6, false, false)), ["GH", ...DEFENSE]);
+check("targets: RCL 7 without threat makes GH2O, then the defense stock", names(reactionTargets(7, false, false)), ["GH2O", ...DEFENSE]);
+check("targets: RCL 8 only the defense stock", names(reactionTargets(8, false, false)), DEFENSE);
+// One response at RCL 7-8 bodies: 33 ATTACK, 2 x 17 RANGED_ATTACK, 2 x 8 HEAL, 17 WORK, 2 x 4 TOUGH
+check("targets: defense stock amounts", reactionTargets(8, false, false).map(([, amount]) => amount), [990, 1020, 480, 510, 240]);
+check("targets: a threat replaces the defense stock by the 3000 stock", reactionTargets(8, false, true).map(([, amount]) => amount), [3000, 3000, 3000, 3000, 3000]);
 check("targets: a threat adds the military compounds after GH", names(reactionTargets(6, false, true)), ["GH", "XLHO2", "XGHO2", "XUH2O", "XKHO2", "XLH2O"]);
 check("targets: a mission puts them first", names(reactionTargets(6, true, true)), ["XLHO2", "XGHO2", "XUH2O", "XKHO2", "XLH2O", "GH"]);
 
@@ -132,7 +136,7 @@ check("deficits: GH 2000 missing, G 1500, ZK and UL 1500", [deficit.GH, deficit.
 
 // ---- demand targets: what the market may buy for
 const kinds = targets => targets.map(t => `${t.compound}:${t.kind}`);
-check("demand: no threat, upgrade only", kinds(demandTargets(7, false, false)), ["GH2O:upgrade"]);
+check("demand: no threat, upgrade then the defense stock", kinds(demandTargets(7, false, false)).slice(0, 2), ["GH2O:upgrade", "XUH2O:stock"]);
 check("demand: threat stock after upgrade, never bought", kinds(demandTargets(6, false, true)).slice(0, 2), ["GH:upgrade", "XLHO2:stock"]);
 check("demand: a mission puts military first", kinds(demandTargets(6, true, false)).slice(0, 2), ["XLHO2:military", "XGHO2:military"]);
 
@@ -144,7 +148,7 @@ check("upgrade value: GH 5 energy per base mineral", upgradeValuePerMineral("GH"
 check("upgrade value: not an upgrade compound -> 0", upgradeValuePerMineral("UH", work), 0);
 
 // ---- mineral needs: chain deficits of the demand pushed to base minerals, with their price cap
-const upgradeOnly = mineralNeeds(demandTargets(6, false, false), stock({ G: 3000 }), t => (t.kind === "upgrade" ? 40 : null));
+const upgradeOnly = mineralNeeds(demandTargets(6, false, false), stock({ G: 3000 }), t => (t.kind === "upgrade" ? 40 : t.kind === "stock" ? 0 : null));
 check("needs: GH 3000 with G there -> only H, capped at the upgrade worth", upgradeOnly, { H: { amount: 3000, maxPrice: 40 } });
 const stockOnly = mineralNeeds(demandTargets(6, false, true), stock({ GH: 3000 }), t => (t.kind === "stock" ? 0 : 40));
 check("needs: a threat stock buys nothing", stockOnly, {});
@@ -154,7 +158,12 @@ const military = mineralNeeds(
     t => (t.kind === "military" ? null : 40)
 );
 check("needs: military uncapped, H shared with the upgrade target", military, { U: { amount: 1500, maxPrice: null }, H: { amount: 3000, maxPrice: null } });
-check("needs: everything in stock -> nothing", mineralNeeds(demandTargets(6, false, false), stock({ GH: 3000 }), () => 40), {});
+check("needs: everything in stock -> nothing", mineralNeeds(demandTargets(6, false, false), stock({ GH: 3000 }), t => (t.kind === "stock" ? 0 : 40)), {});
+check("needs: the defense stock buys nothing", mineralNeeds(demandTargets(8, false, false), none, t => (t.kind === "stock" ? 0 : 40)), {});
+// The price (the upgrade worth reads the energy price) is only asked for a target that lacks something
+const asked = [];
+mineralNeeds(demandTargets(6, false, false), stock({ GH: 3000 }), t => (asked.push(t.compound), t.kind === "stock" ? 0 : 40));
+check("needs: no price asked for a target in stock", asked.includes("GH"), false);
 
 console.log(failures === 0 ? "\nall checks passed" : `\n${failures} check(s) failed`);
 process.exit(failures === 0 ? 0 : 1);

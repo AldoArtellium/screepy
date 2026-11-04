@@ -30,6 +30,23 @@ const UPGRADE_TARGETS: { [rcl: number]: ResourceConstant[] } = {
     7: [RESOURCE_GHODIUM_ACID]
 };
 
+/**
+ * Defense stock, kept whatever `Memory.military.auto` says and never bought: one response's worth of
+ * each compound defense draws, at the largest bodies (RCL 7-8, core/bodyBuilder): ATTACK for a melee
+ * guardian (33 parts) or a mini brawler (5), RANGED_ATTACK for a ranged guardian (33) or a blinky pair
+ * (2 x 17), HEAL for a blinky pair (2 x 8), WORK repair for an emergency builder (17), TOUGH for a
+ * TOUGH blinky pair (2 x 4, RCL 6-7). Users: spawnRoles.ts roomDefense (guardians, builders against
+ * NORMAL+ enemies at home), remoteDefense.ts boostedDefense (boostedResponse needs one compound covering
+ * every part of an effect). The tier 3 target stops at tier 2 without catalyst (X), which boosts too.
+ */
+const DEFENSE_TARGETS: [ResourceConstant, number][] = [
+    [RESOURCE_CATALYZED_UTRIUM_ACID, 33 * LAB_BOOST_MINERAL],
+    [RESOURCE_CATALYZED_KEANIUM_ALKALIDE, 34 * LAB_BOOST_MINERAL],
+    [RESOURCE_CATALYZED_LEMERGIUM_ALKALIDE, 16 * LAB_BOOST_MINERAL],
+    [RESOURCE_CATALYZED_LEMERGIUM_ACID, 17 * LAB_BOOST_MINERAL],
+    [RESOURCE_CATALYZED_GHODIUM_ALKALIDE, 8 * LAB_BOOST_MINERAL]
+];
+
 /** What we want in stock, in priority order: upgrading, the military compounds with a threat */
 export function reactionTargets(rcl: number, militaryFirst: boolean, militaryWanted: boolean): [ResourceConstant, number][] {
     return demandTargets(rcl, militaryFirst, militaryWanted).map(t => [t.compound, t.amount]);
@@ -37,7 +54,7 @@ export function reactionTargets(rcl: number, militaryFirst: boolean, militaryWan
 
 /**
  * A reaction target and whether the market may buy base minerals for it: `military` compounds only
- * for a demand (a mission, enemies at home), never for a stock kept against a threat; upgrade compounds
+ * for a demand (a mission, enemies at home), never for a stock (threat or defense); upgrade compounds
  * only below the value of what they upgrade (upgradeValuePerMineral)
  */
 export interface DemandTarget {
@@ -48,13 +65,14 @@ export interface DemandTarget {
 
 /**
  * Targets by priority. `militaryFirst`: a mission or enemies at home use military boosts now;
- * `militaryWanted`: a stock against a threat, made from what the rooms hold (no market buy)
+ * `militaryWanted`: a stock against a threat for squads; otherwise the smaller defense stock. Both
+ * stocks are made from what the rooms hold (no market buy).
  */
 export function demandTargets(rcl: number, militaryFirst: boolean, militaryWanted: boolean): DemandTarget[] {
     const upgrade: DemandTarget[] = (UPGRADE_TARGETS[rcl] ?? []).map(compound => ({ compound, amount: TARGET_AMOUNT, kind: "upgrade" }));
     if (militaryFirst) return [...MILITARY_TARGETS.map(compound => ({ compound, amount: TARGET_AMOUNT, kind: "military" as const })), ...upgrade];
     if (militaryWanted) return [...upgrade, ...MILITARY_TARGETS.map(compound => ({ compound, amount: TARGET_AMOUNT, kind: "stock" as const }))];
-    return upgrade;
+    return [...upgrade, ...DEFENSE_TARGETS.map(([compound, amount]) => ({ compound, amount, kind: "stock" as const }))];
 }
 
 /** Base minerals in one unit of a compound (GH: H + Z, K, U, L = 5) */
@@ -94,11 +112,14 @@ export function mineralNeeds(
             targets.slice(0, i + 1).map(t => [t.compound, t.amount]),
             have
         );
-        const price = maxPrice(targets[i]);
+        // Asked only once the target adds a need (the upgrade worth reads the energy price)
+        let price: number | null | undefined;
         for (const resourceType in after) {
             if (REAGENTS[resourceType]) continue;
             const added = Math.max(0, after[resourceType]) - Math.max(0, before[resourceType] ?? 0);
-            if (added <= 0 || price === 0) continue;
+            if (added <= 0) continue;
+            if (price === undefined) price = maxPrice(targets[i]);
+            if (price === 0) continue;
             const need = result[resourceType] ?? { amount: 0, maxPrice: 0 };
             need.amount += added;
             need.maxPrice = need.maxPrice === null || price === null ? null : Math.max(need.maxPrice, price);

@@ -5,7 +5,7 @@
  * Base minerals (H, O, U, L, K, Z, X), per room with a terminal: above 50k instant sell, above 20k a
  * sell order; bought only for what the labs' demand needs (not in Hivemind, which buys below 10k / 5k:
  * labs/chain.ts mineralNeeds, a forced buy for a military demand, a buy order below the worth of an
- * upgrade compound, never for a threat stock; our buy orders above that worth are cancelled).
+ * upgrade compound, never for a threat or defense stock; our buy orders above that worth are cancelled).
  * Compounds are sold above 5k when the market
  * pays more than their reagents. Power above 20k / 10k, ops above 10k / 5k. A terminal with less than
  * 5% free while the storage is 90% full sells its most valuable resource. Prices come from the market
@@ -358,12 +358,17 @@ type MineralNeeds = ReturnType<typeof mineralNeeds>;
 /**
  * Base minerals the labs need for their demand targets (labs/reactions.ts demandTargetsOf), against
  * what every room holds (labs and carriers included in reaction rooms): military demand first, then
- * upgrade compounds (worth upgradeValuePerMineral x the energy price), threat stocks never bought
+ * upgrade compounds (worth upgradeValuePerMineral x the energy price), threat and defense stocks never bought
  */
 function labMineralNeeds(rooms: Room[]): MineralNeeds {
-    const energy = marketAverage(RESOURCE_ENERGY) ?? 0;
     const work = (BOOSTS as unknown as Record<string, Record<string, Record<string, number>>>)[WORK];
-    const maxPrice = (t: DemandTarget) => (t.kind === "military" ? null : t.kind === "upgrade" ? upgradeValuePerMineral(t.compound, work) * energy : 0);
+    // The energy price only once an upgrade target lacks base minerals (mineralNeeds asks lazily)
+    let energy: number | undefined;
+    const upgradePrice = (compound: ResourceConstant) => {
+        energy ??= marketAverage(RESOURCE_ENERGY) ?? 0;
+        return upgradeValuePerMineral(compound, work) * energy;
+    };
+    const maxPrice = (t: DemandTarget) => (t.kind === "military" ? null : t.kind === "upgrade" ? upgradePrice(t.compound) : 0);
     const reactionRooms: Room[] = [];
     const military: DemandTarget[] = [];
     const upgrade: DemandTarget[] = [];
@@ -372,10 +377,10 @@ function labMineralNeeds(rooms: Room[]): MineralNeeds {
         // A layout means 3+ labs (manageReactions drops it below)
         if (!room.controller?.my || !room.memory.labs) continue;
         reactionRooms.push(room);
-        // Threat stocks are never bought (price 0): left out
+        // Threat and defense stocks are never bought (price 0): left out
         for (const target of demandTargetsOf(room)) {
-            if (maxPrice(target) === 0) continue;
-            (target.kind === "military" ? military : upgrade).push(target);
+            if (target.kind === "military") military.push(target);
+            else if (target.kind === "upgrade") upgrade.push(target);
         }
     }
     if (military.length + upgrade.length === 0) return {};
