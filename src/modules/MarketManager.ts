@@ -5,7 +5,8 @@
  * Base minerals (H, O, U, L, K, Z, X), per room with a terminal: above 50k instant sell, above 20k a
  * sell order; bought only for what the labs' demand needs (not in Hivemind, which buys below 10k / 5k:
  * labs/chain.ts mineralNeeds, a forced buy for a military demand, a buy order below the worth of an
- * upgrade compound, never for a threat stock). Compounds are sold above 5k when the market
+ * upgrade compound, never for a threat stock; our buy orders above that worth are cancelled).
+ * Compounds are sold above 5k when the market
  * pays more than their reagents. Power above 20k / 10k, ops above 10k / 5k. A terminal with less than
  * 5% free while the storage is 90% full sells its most valuable resource. Prices come from the market
  * history and the order book (average and deviation, outlier days left out), 10 000 credits are kept.
@@ -24,7 +25,7 @@ import { getBestOption } from "../core/options";
 import { isFullOn, myRoomsWithTerminal, prepareForTrading, resourceAmount, totalResources } from "../core/resources";
 import { DemandTarget, mineralNeeds, upgradeValuePerMineral } from "../labs/chain";
 import { demandTargetsOf, labResources } from "../labs/reactions";
-import { buyOrdersToCancel, forcedBuyPays, instantSellPays, PriceData, prefersInstantSell, repricedSellPrice, sellOrderPrice, spendableCredits } from "../market/pricing";
+import { buyOrdersAbovePrice, buyOrdersToCancel, forcedBuyPays, instantSellPays, PriceData, prefersInstantSell, repricedSellPrice, sellOrderPrice, spendableCredits } from "../market/pricing";
 import { log } from "../utils/logger";
 
 /** Lowest buy price (Hivemind minTradeValue) */
@@ -341,6 +342,11 @@ function manageBaseMineral(resourceType: ResourceConstant, states: ResourceState
         // Buy orders of an earlier demand (or of the 10k-per-room rule before 2026-11-04)
         for (const order of ownOrders(ORDER_BUY, resourceType)) Game.market.cancelOrder(order.id);
         return;
+    }
+    if (need.maxPrice !== null) {
+        // Orders above what the product pays (e.g. left by the 10k-per-room rule): tryBuy makes a new one next run
+        const overpriced = buyOrdersAbovePrice(ownOrders(ORDER_BUY, resourceType), need.maxPrice);
+        for (const id of overpriced) Game.market.cancelOrder(id);
     }
     if (availableCredits <= 0) return;
     if (need.maxPrice === null) instaBuy(resourceType, states.rooms, need.amount);

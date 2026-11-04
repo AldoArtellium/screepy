@@ -85,6 +85,16 @@ export function spendableCredits(credits: number, reserve: number, orders: BuyOr
     return Math.max(0, credits - reserve - committedCredits(orders));
 }
 
+/**
+ * Our open buy orders priced above what the demand they serve pays (labs/chain.ts mineralNeeds
+ * maxPrice): cancelled, a new order is made at the capped price. Not in Hivemind: orders made by the
+ * 10k-per-room rule before 2026-11-04 sat near the market average (O ~560, X ~886) while an upgrade
+ * compound pays ~50 per base mineral; without this they kept filling until they were 100k ticks old.
+ */
+export function buyOrdersAbovePrice(orders: BuyOrder[], maxPrice: number): string[] {
+    return orders.filter(o => o.remainingAmount > 0 && o.price > maxPrice).map(o => o.id);
+}
+
 /** Our open buy orders to cancel, most valuable first, until the rest fits in the credits above the reserve */
 export function buyOrdersToCancel(credits: number, reserve: number, orders: BuyOrder[]): string[] {
     const open = orders.filter(o => o.remainingAmount > 0).sort((a, b) => b.price * b.remainingAmount - a.price * a.remainingAmount);

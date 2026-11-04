@@ -1,6 +1,7 @@
 /**
  * Offline check of market/pricing: sell order price, repricing of our own sell orders undercut by a
- * competitor, instant sells while credits are low and the price cap of forced buys. Cases from shard0
+ * competitor, instant sells while credits are low, the price cap of forced buys and the cancel of our
+ * buy orders above the worth cap of an upgrade compound. Cases from shard0
  * on 2026-10-25 (H: our order at 627.86, competitors at 620.30, best buy 562.74, history 256.72).
  *
  *   node tests/market/run.mjs
@@ -31,7 +32,7 @@ try {
     // Type errors outside this file (global declarations) don't prevent emitting
 }
 
-const { sellOrderPrice, repricedSellPrice, instantSellPays, prefersInstantSell, forcedBuyPays, FORCED_BUY_MAX_RATIO, spendableCredits, buyOrdersToCancel } = require(join(OUT, "market", "pricing.js"));
+const { sellOrderPrice, repricedSellPrice, instantSellPays, prefersInstantSell, forcedBuyPays, FORCED_BUY_MAX_RATIO, spendableCredits, buyOrdersToCancel, buyOrdersAbovePrice } = require(join(OUT, "market", "pricing.js"));
 
 let failures = 0;
 const check = (name, ok, detail) => {
@@ -97,6 +98,18 @@ const cancelled = buyOrdersToCancel(120622, 10000, orders);
 check("most valuable buy order cancelled first until the rest fits", cancelled.join() === "u", cancelled.join());
 check("every buy order cancelled below the reserve", buyOrdersToCancel(60, 10000, orders).join() === "u,k");
 check("filled orders are never cancelled", !buyOrdersToCancel(60, 10000, orders).includes("o"));
+
+// Buy orders above what the upgrade compound they serve pays (labs/chain.ts mineralNeeds maxPrice):
+// an O order at the market average (~560, the 10k-per-room rule before 2026-11-04) against a ~50 cap
+const legacy = [
+    { id: "old", price: 560, remainingAmount: 8000 },
+    { id: "capped", price: 48, remainingAmount: 1000 },
+    { id: "done", price: 900, remainingAmount: 0 }
+];
+const above = buyOrdersAbovePrice(legacy, 50);
+check("buy order above the worth cap is cancelled", above.join() === "old", above.join());
+check("buy order at the worth cap is kept", buyOrdersAbovePrice(legacy, 48).join() === "old");
+check("no buy order cancelled when all pay", buyOrdersAbovePrice(legacy, 1000).length === 0);
 
 console.log(failures === 0 ? "\nall checks passed" : `\n${failures} check(s) failed`);
 process.exit(failures === 0 ? 0 : 1);
