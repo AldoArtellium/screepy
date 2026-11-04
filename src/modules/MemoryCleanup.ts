@@ -18,6 +18,25 @@ const ROOM_INTERVAL = 1000;
  */
 let lastCreepCleanup = 0;
 let lastRoomCleanup = 0;
+let removedFeaturesDropped = false;
+
+/**
+ * Highway intel, deposit and power bank mining were removed on 2026-11-04 (docs/decisions/removed.md):
+ * their Memory keys, module state and creeps go once per global reset. Can go once shard0 ran it.
+ */
+const REMOVED_MEMORY_KEYS = ["highwayIntel", "highwayMining", "depositMining", "powerMining"];
+const REMOVED_MODULES = ["DepositMining", "PowerMining"];
+const REMOVED_ROLES = new Set(["depositHarvester", "powerHarvester", "powerHauler"]);
+
+function dropRemovedFeatures(): void {
+    const memory = Memory as unknown as Record<string, unknown>;
+    for (const key of REMOVED_MEMORY_KEYS) delete memory[key];
+    for (const name of REMOVED_MODULES) delete Memory.moduleState?.[name];
+    for (const name in Game.creeps) {
+        const creep = Game.creeps[name];
+        if (REMOVED_ROLES.has(creep.memory.role ?? "")) creep.suicide();
+    }
+}
 
 function usedRooms(): Set<string> {
     const used = new Set<string>();
@@ -34,6 +53,10 @@ function usedRooms(): Set<string> {
 }
 
 export const memoryCleanupModule = (): void => {
+    if (!removedFeaturesDropped) {
+        removedFeaturesDropped = true;
+        dropRemovedFeatures();
+    }
     if (Game.time - lastCreepCleanup >= CREEP_INTERVAL) {
         lastCreepCleanup = Game.time;
         for (const name in Memory.creeps) {

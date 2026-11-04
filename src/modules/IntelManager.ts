@@ -5,12 +5,9 @@
  * (`Memory.rooms[r].enemies`, refreshed every tick), never here.
  */
 
-import {
-    HIGHWAY_MAX_DISTANCE, HighwayHome, HighwayLog, HighwaySighting, pruneHighwayLog, recordSightings
-} from "../highway/highwayIntel";
 import { cpuPressure } from "../remote/remoteIncome";
 import { log } from "../utils/logger";
-import { isHighway, roomsInRange } from "../utils/rooms";
+import { roomsInRange } from "../utils/rooms";
 import { ownershipRescoutAge } from "../utils/scouting";
 import { segmentStore } from "../utils/segments";
 
@@ -19,12 +16,7 @@ const INTEL_EXPIRY = {
     /** Room structure data (sources, controller) */
     STRUCTURE: 50000,
     /** Owner/reservation data of a room with a controller: rescouted after that */
-    OWNERSHIP: 10000,
-    /**
-     * Highway rooms within HIGHWAY_MAX_DISTANCE: deposits and power banks (highway/highwayIntel.ts). A power
-     * bank lives 5000 ticks, so one seen within 2000 still has the 3000 a squad needs
-     */
-    HIGHWAY: 2000
+    OWNERSHIP: 10000
 };
 
 /** Ticks between two intel records of a visible room */
@@ -122,44 +114,6 @@ class IntelManager {
             hasSourceKeepers,
             mineralType: mineral?.mineralType
         };
-
-        if (isHighway(room.name)) this.recordHighwayObjects(room, terrain);
-    }
-
-    /** Deposits and power banks of a visible highway room, with the closest owned room */
-    private recordHighwayObjects(room: Room, terrain: RoomTerrain): void {
-        const sightings: HighwaySighting[] = [];
-        for (const d of room.find(FIND_DEPOSITS)) {
-            sightings.push({
-                id: d.id, kind: "deposit", x: d.pos.x, y: d.pos.y, type: d.depositType, cooldown: d.lastCooldown,
-                ticksToDecay: d.ticksToDecay, free: freeTilesAround(terrain, d.pos)
-            });
-        }
-        for (const s of room.find(FIND_STRUCTURES)) {
-            if (s.structureType !== STRUCTURE_POWER_BANK) continue;
-            const bank = s as StructurePowerBank;
-            let power: number;
-            try {
-                power = bank.power;
-            } catch {
-                // A bank without its store (mockup fixtures) throws in the getter: skipped, not the whole intel
-                continue;
-            }
-            sightings.push({
-                id: bank.id, kind: "powerBank", x: bank.pos.x, y: bank.pos.y, power, hits: bank.hits,
-                ticksToDecay: bank.ticksToDecay, free: freeTilesAround(terrain, bank.pos)
-            });
-        }
-        if (sightings.length === 0) return;
-
-        let home: HighwayHome | undefined;
-        for (const name in Game.rooms) {
-            if (!Game.rooms[name].controller?.my) continue;
-            const distance = Game.map.getRoomLinearDistance(name, room.name);
-            if (!home || distance < home.distance) home = { name, distance };
-        }
-        if (!Memory.highwayIntel) Memory.highwayIntel = { since: Game.time, objects: {} };
-        recordSightings(Memory.highwayIntel, room.name, sightings, Game.time, home);
     }
 
     /** Drop intel not refreshed for a long time, and fields of older versions */
@@ -176,29 +130,21 @@ class IntelManager {
             for (const field of LEGACY_FIELDS) delete intel[field];
         }
         store.touch();
-        if (Memory.highwayIntel) pruneHighwayLog(Memory.highwayIntel, Game.time);
         if (cleaned > 0) log.debug("IntelManager", `Cleaned up ${cleaned} stale intel entries`);
     }
 
     /**
      * Rooms within range that need a scout: never seen, without a source list (old entries), older
      * than STRUCTURE, or with a controller whose owner/reservation is older than OWNERSHIP (x3 under
-     * CPU pressure, utils/scouting.ts), or a highway within HIGHWAY_MAX_DISTANCE older than HIGHWAY (same x3)
+     * CPU pressure, utils/scouting.ts)
      */
     getRoomsNeedingScouting(baseRoomName: string, maxDistance: number): string[] {
-        const pressure = cpuPressure();
-        const ownershipAge = ownershipRescoutAge(INTEL_EXPIRY.OWNERSHIP, pressure);
-        const highwayAge = ownershipRescoutAge(INTEL_EXPIRY.HIGHWAY, pressure);
+        const ownershipAge = ownershipRescoutAge(INTEL_EXPIRY.OWNERSHIP, cpuPressure());
         return roomsInRange(baseRoomName, maxDistance).filter(roomName => {
             const intel = this.getIntel(roomName);
             if (!intel?.sources) return true;
             const age = Game.time - intel.lastScouted;
-            if (age >= INTEL_EXPIRY.STRUCTURE || (!!intel.controllerPos && age >= ownershipAge)) return true;
-            return (
-                age >= highwayAge &&
-                isHighway(roomName) &&
-                Game.map.getRoomLinearDistance(baseRoomName, roomName) <= HIGHWAY_MAX_DISTANCE
-            );
+            return age >= INTEL_EXPIRY.STRUCTURE || (!!intel.controllerPos && age >= ownershipAge);
         });
     }
 }
@@ -208,8 +154,6 @@ declare global {
         /** Legacy: intel now lives in segments, this copy is migrated then deleted */
         intel?: { [roomName: string]: RoomIntel };
         username?: string;
-        /** Deposits and power banks seen in highway rooms (measurement, highway/highwayIntel.ts) */
-        highwayIntel?: HighwayLog;
     }
 }
 
