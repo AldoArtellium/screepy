@@ -3,7 +3,9 @@
  * Ported from Hivemind (MIT), src/process/trade.ts. Rules: docs/hivemind/hivemind-endgame.md §5.
  *
  * Base minerals (H, O, U, L, K, Z, X), per room with a terminal: above 50k instant sell, above 20k a
- * sell order, below 10k a buy order, below 5k instant buy. Compounds are sold above 5k when the market
+ * sell order; bought only for what the labs' demand needs (not in Hivemind, which buys below 10k / 5k:
+ * labs/chain.ts mineralNeeds, a forced buy for a military demand, a buy order below the worth of an
+ * upgrade compound, never for a threat stock). Compounds are sold above 5k when the market
  * pays more than their reagents. Power above 20k / 10k, ops above 10k / 5k. A terminal with less than
  * 5% free while the storage is 90% full sells its most valuable resource. Prices come from the market
  * history and the order book (average and deviation, outlier days left out), 10 000 credits are kept.
@@ -20,11 +22,15 @@
 
 import { getBestOption } from "../core/options";
 import { isFullOn, myRoomsWithTerminal, prepareForTrading, resourceAmount, totalResources } from "../core/resources";
+import { DemandTarget, mineralNeeds, upgradeValuePerMineral } from "../labs/chain";
+import { demandTargetsOf, labResources } from "../labs/reactions";
 import { buyOrdersToCancel, forcedBuyPays, instantSellPays, PriceData, prefersInstantSell, repricedSellPrice, sellOrderPrice, spendableCredits } from "../market/pricing";
 import { log } from "../utils/logger";
 
 /** Lowest buy price (Hivemind minTradeValue) */
 const MIN_TRADE_VALUE = 0.001;
+/** Smallest lab need worth a purchase */
+const MIN_BUY = 500;
 /** Credits kept for creating orders */
 const CREDIT_RESERVE = 10000;
 /** Own orders older than this are cancelled */
@@ -224,26 +230,24 @@ function instaSell(resourceType: ResourceConstant, rooms: string[]): void {
 }
 
 /**
- * Buys from the best sell order if it costs at most average - min(dev / 5, 10%); `force` pays up to
- * FORCED_BUY_MAX_RATIO x the average or the best buy order (Hivemind: any price)
+ * Forced buy of what a military demand needs (labs/chain.ts mineralNeeds): from the best sell order,
+ * at most FORCED_BUY_MAX_RATIO x the average or the best buy order (Hivemind: any price)
  */
-function instaBuy(resourceType: ResourceConstant, rooms: string[], force: boolean): void {
+function instaBuy(resourceType: ResourceConstant, rooms: string[], need: number): void {
     const room = roomLowestOn(resourceType, rooms);
     if (!room?.terminal) return;
     const order = findBestOrder(ORDER_SELL, resourceType, room.name);
     const history = priceData(resourceType);
     if (!order || !history) return;
-    if (force && !forcedBuyPays(order.price, history, findBestOrder(ORDER_BUY, resourceType, room.name)?.price)) {
+    if (!forcedBuyPays(order.price, history, findBestOrder(ORDER_BUY, resourceType, room.name)?.price)) {
         log.info("Market", `${room.name}: forced buy of ${resourceType} skipped, ${order.price} above the price cap`);
         return;
     }
-    if (!force && order.price > history.average - Math.min(history.stdDev / 5, history.average * 0.1)) return;
-    let amount = Math.min(force ? 10000 : maxOrderAmount(resourceType), order.amount);
+    let amount = Math.min(10000, order.amount, need);
     const terminal = room.terminal;
     let cost = order.roomName ? Game.market.calcTransactionCost(amount, room.name, order.roomName) : 0;
     if (cost > terminal.store.energy) {
         if (!room.memory.fillTerminal) prepareForTrading(room, RESOURCE_ENERGY, cost);
-        if (!force) return;
         amount = Math.floor((amount * terminal.store.energy) / cost);
         cost = order.roomName ? Game.market.calcTransactionCost(amount, room.name, order.roomName) : 0;
     }
@@ -255,19 +259,22 @@ function ownOrders(type: ORDER_BUY | ORDER_SELL, resourceType: ResourceConstant)
     return _.filter(Game.market.orders, o => o.type === type && o.resourceType === resourceType);
 }
 
-/** Buy order a bit above the best competitor, at most average - min(dev / 2, 20%) */
-function tryBuy(resourceType: ResourceConstant, rooms: string[]): void {
+/**
+ * Buy order for what a demand needs, a bit above the best competitor, at most average - min(dev / 2,
+ * 20%) and `maxPrice` (what the product is worth, labs/chain.ts upgradeValuePerMineral)
+ */
+function tryBuy(resourceType: ResourceConstant, rooms: string[], need: number, maxPrice: number): void {
     if (ownOrders(ORDER_BUY, resourceType).length > 0) return;
     const room = roomLowestOn(resourceType, rooms);
     const history = priceData(resourceType);
     if (!room || !history) return;
-    const maxPrice = history.average - Math.min(history.stdDev / 2, history.average * 0.2);
+    const cap = Math.min(maxPrice, history.average - Math.min(history.stdDev / 2, history.average * 0.2));
     const competitor = Game.market.getAllOrders({ type: ORDER_BUY, resourceType }).filter(o => o.amount >= 100);
     let offer = history.average - Math.min(history.stdDev, history.average * 0.8);
-    if (competitor.length > 0) offer = Math.min(maxPrice, _.max(competitor, o => o.price).price * 1.01);
-    if (offer > maxPrice) return;
+    if (competitor.length > 0) offer = Math.min(cap, _.max(competitor, o => o.price).price * 1.01);
+    if (offer > cap) return;
     offer = Math.max(offer, MIN_TRADE_VALUE);
-    const amount = maxOrderAmount(resourceType);
+    const amount = Math.min(maxOrderAmount(resourceType), need);
     if (amount <= 0 || availableCredits < amount * offer) return;
     const result = Game.market.createOrder({ type: ORDER_BUY, resourceType, price: offer, totalAmount: amount, roomName: room.name });
     if (result === OK) availableCredits -= amount * offer;
@@ -319,14 +326,60 @@ function trySell(resourceType: ResourceConstant, rooms: string[]): void {
     log.info("Market", `${room.name}: sell order ${amount} ${resourceType} at ${offer.toFixed(3)}: ${result}`);
 }
 
-/** Base minerals: 50k / 20k / 10k / 5k per room with a terminal */
-function manageBaseMineral(resourceType: ResourceConstant, states: ResourceStates): void {
+/**
+ * Base minerals: sold above 50k / 20k per room with a terminal (Hivemind); bought only for what the
+ * labs' demand needs (not in Hivemind, which keeps 10k / 5k per room whatever the labs make): a military
+ * demand (mission, enemies at home) by a forced buy, an upgrade compound by a buy order below its worth
+ */
+function manageBaseMineral(resourceType: ResourceConstant, states: ResourceStates, needs: MineralNeeds): void {
     const n = states.rooms.length;
     const total = states.total[resourceType] ?? 0;
     if (total > (n * STORAGE_CAPACITY) / 20) instaSell(resourceType, states.rooms);
     if (total > (n * STORAGE_CAPACITY) / 50) trySell(resourceType, states.rooms);
-    if (total < n * Math.min(STORAGE_CAPACITY / 100, 20000) && availableCredits > 0) tryBuy(resourceType, states.rooms);
-    if (total < n * Math.min(STORAGE_CAPACITY / 200, 10000) && availableCredits > 0) instaBuy(resourceType, states.rooms, true);
+    const need = needs[resourceType];
+    if (!need || need.amount < MIN_BUY) {
+        // Buy orders of an earlier demand (or of the 10k-per-room rule before 2026-11-04)
+        for (const order of ownOrders(ORDER_BUY, resourceType)) Game.market.cancelOrder(order.id);
+        return;
+    }
+    if (availableCredits <= 0) return;
+    if (need.maxPrice === null) instaBuy(resourceType, states.rooms, need.amount);
+    else tryBuy(resourceType, states.rooms, need.amount, need.maxPrice);
+}
+
+type MineralNeeds = ReturnType<typeof mineralNeeds>;
+
+/**
+ * Base minerals the labs need for their demand targets (labs/reactions.ts demandTargetsOf), against
+ * what every room holds (labs and carriers included in reaction rooms): military demand first, then
+ * upgrade compounds (worth upgradeValuePerMineral x the energy price), threat stocks never bought
+ */
+function labMineralNeeds(rooms: Room[]): MineralNeeds {
+    const energy = marketAverage(RESOURCE_ENERGY) ?? 0;
+    const work = (BOOSTS as unknown as Record<string, Record<string, Record<string, number>>>)[WORK];
+    const maxPrice = (t: DemandTarget) => (t.kind === "military" ? null : t.kind === "upgrade" ? upgradeValuePerMineral(t.compound, work) * energy : 0);
+    const reactionRooms: Room[] = [];
+    const military: DemandTarget[] = [];
+    const upgrade: DemandTarget[] = [];
+    for (const name in Game.rooms) {
+        const room = Game.rooms[name];
+        // A layout means 3+ labs (manageReactions drops it below)
+        if (!room.controller?.my || !room.memory.labs) continue;
+        reactionRooms.push(room);
+        // Threat stocks are never bought (price 0): left out
+        for (const target of demandTargetsOf(room)) {
+            if (maxPrice(target) === 0) continue;
+            (target.kind === "military" ? military : upgrade).push(target);
+        }
+    }
+    if (military.length + upgrade.length === 0) return {};
+    const have: { [resourceType: string]: number } = {};
+    const add = (resources: { [resourceType: string]: number }) => {
+        for (const key in resources) have[key] = (have[key] ?? 0) + resources[key];
+    };
+    for (const room of reactionRooms) add(labResources(room));
+    for (const room of rooms) if (!reactionRooms.includes(room)) add(totalResources(room));
+    return mineralNeeds([...military, ...upgrade], r => have[r] ?? 0, maxPrice);
 }
 
 /** Compounds above 5k per room, sold when the market pays more than the reagents */
@@ -398,9 +451,10 @@ export const marketManagerModule = (): void => {
         const resources = totalResources(room);
         for (const resourceType in resources) states.total[resourceType] = (states.total[resourceType] ?? 0) + resources[resourceType];
     }
+    const needs = labMineralNeeds(rooms);
 
     for (const resourceType of RESOURCES_ALL) {
-        if (resourceTier(resourceType) === 1) manageBaseMineral(resourceType, states);
+        if (resourceTier(resourceType) === 1) manageBaseMineral(resourceType, states, needs);
         else if (recipes[resourceType]) manageCompound(resourceType, states);
         else if (isCommodity(resourceType)) manageSurplus(resourceType, states, 0, 0);
     }

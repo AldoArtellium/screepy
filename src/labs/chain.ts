@@ -32,10 +32,81 @@ const UPGRADE_TARGETS: { [rcl: number]: ResourceConstant[] } = {
 
 /** What we want in stock, in priority order: upgrading, the military compounds with a threat */
 export function reactionTargets(rcl: number, militaryFirst: boolean, militaryWanted: boolean): [ResourceConstant, number][] {
-    const upgrade = UPGRADE_TARGETS[rcl] ?? [];
-    const military = militaryFirst || militaryWanted ? MILITARY_TARGETS : [];
-    const targets = militaryFirst ? [...military, ...upgrade] : [...upgrade, ...military];
-    return targets.map(compound => [compound, TARGET_AMOUNT]);
+    return demandTargets(rcl, militaryFirst, militaryWanted).map(t => [t.compound, t.amount]);
+}
+
+/**
+ * A reaction target and whether the market may buy base minerals for it: `military` compounds only
+ * for a demand (a mission, enemies at home), never for a stock kept against a threat; upgrade compounds
+ * only below the value of what they upgrade (upgradeValuePerMineral)
+ */
+export interface DemandTarget {
+    compound: ResourceConstant;
+    amount: number;
+    kind: "upgrade" | "military" | "stock";
+}
+
+/**
+ * Targets by priority. `militaryFirst`: a mission or enemies at home use military boosts now;
+ * `militaryWanted`: a stock against a threat, made from what the rooms hold (no market buy)
+ */
+export function demandTargets(rcl: number, militaryFirst: boolean, militaryWanted: boolean): DemandTarget[] {
+    const upgrade: DemandTarget[] = (UPGRADE_TARGETS[rcl] ?? []).map(compound => ({ compound, amount: TARGET_AMOUNT, kind: "upgrade" }));
+    if (militaryFirst) return [...MILITARY_TARGETS.map(compound => ({ compound, amount: TARGET_AMOUNT, kind: "military" as const })), ...upgrade];
+    if (militaryWanted) return [...upgrade, ...MILITARY_TARGETS.map(compound => ({ compound, amount: TARGET_AMOUNT, kind: "stock" as const }))];
+    return upgrade;
+}
+
+/** Base minerals in one unit of a compound (GH: H + Z, K, U, L = 5) */
+export function baseMineralsIn(compound: ResourceConstant): number {
+    const reagents = REAGENTS[compound];
+    return reagents ? baseMineralsIn(reagents[0]) + baseMineralsIn(reagents[1]) : 1;
+}
+
+/**
+ * Energy of upgrade progress one base mineral of an upgrade compound brings at most: the extra
+ * progress of a boosted WORK over a whole creep life, per compound unit, over its base minerals
+ * (GH 5, GH2O 5.7, XGH2O 6.25). shard0 2026-11-04: base minerals cost 560-886 credits and energy ~8.7,
+ * so ~65-100 energy each: buying them for upgrade boosts never pays.
+ */
+export function upgradeValuePerMineral(compound: ResourceConstant, boosts: Record<string, Record<string, number>>): number {
+    const multiplier = boosts[compound]?.upgradeController;
+    if (!multiplier) return 0;
+    return ((multiplier - 1) * UPGRADE_CONTROLLER_POWER * CREEP_LIFE_TIME) / LAB_BOOST_MINERAL / baseMineralsIn(compound);
+}
+
+/**
+ * Base minerals the market may buy for the targets: each target's chain deficit pushed down to base
+ * minerals (chainDeficits, in priority order) with the highest price per unit a target it serves
+ * pays: `maxPrice(target)`, null for no cap beyond the market rules, 0 for nothing (a stock).
+ * Before (2026-11-04) the market kept every base mineral above 10k per room whatever the labs made:
+ * shard0 spent 37M credits in 21k ticks on O, X, U, L, Z, K for compounds nothing used.
+ */
+export function mineralNeeds(
+    targets: DemandTarget[],
+    have: (r: ResourceConstant) => number,
+    maxPrice: (target: DemandTarget) => number | null
+): { [mineral: string]: { amount: number; maxPrice: number | null } } {
+    const result: { [mineral: string]: { amount: number; maxPrice: number | null } } = {};
+    let before: { [resourceType: string]: number } = {};
+    for (let i = 0; i < targets.length; i++) {
+        const after = chainDeficits(
+            targets.slice(0, i + 1).map(t => [t.compound, t.amount]),
+            have
+        );
+        const price = maxPrice(targets[i]);
+        for (const resourceType in after) {
+            if (REAGENTS[resourceType]) continue;
+            const added = Math.max(0, after[resourceType]) - Math.max(0, before[resourceType] ?? 0);
+            if (added <= 0 || price === 0) continue;
+            const need = result[resourceType] ?? { amount: 0, maxPrice: 0 };
+            need.amount += added;
+            need.maxPrice = need.maxPrice === null || price === null ? null : Math.max(need.maxPrice, price);
+            result[resourceType] = need;
+        }
+        before = after;
+    }
+    return result;
 }
 
 /** Compound -> its two reagents */

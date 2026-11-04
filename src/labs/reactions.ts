@@ -11,7 +11,7 @@ import { currentTarget } from "../military/military";
 import { log } from "../utils/logger";
 import { countStat } from "../utils/stats";
 import { isLabUsedForBoosting, operationalLabs } from "./boosts";
-import { chainDeficits, findChainReaction, importableFrom, productOf, reactionTargets, reagentsOf } from "./chain";
+import { chainDeficits, DemandTarget, demandTargets, findChainReaction, importableFrom, productOf, reagentsOf } from "./chain";
 
 export { productOf, reagentsOf };
 
@@ -29,13 +29,19 @@ declare global {
 
 /**
  * Targets of a room: upgrade compounds first; military ones after them while a player threatened us
- * (room threat, infamy), before them during an attack mission or with NORMAL+ enemies at home.
- * Before (2026-10-25) the military list always came first: shard0 made UH2O, LHO2, GHO2... that
- * nothing used, 20000 ticks without a single boost.
+ * (room threat, infamy) and automatic attacks are on, before them during an attack mission or with
+ * NORMAL+ enemies at home. Before (2026-10-25) the military list always came first: shard0 made UH2O,
+ * LHO2, GHO2... that nothing used, 20000 ticks without a single boost. Before 2026-11-04 the threat
+ * stock was made with `Memory.military.auto = false` too (no squad to use it).
  */
-function targetsOf(room: Room): [ResourceConstant, number][] {
+export function demandTargetsOf(room: Room): DemandTarget[] {
     const militaryFirst = currentTarget() !== undefined || enemyStrength(room) >= ENEMY_STRENGTH_NORMAL;
-    return reactionTargets(room.controller?.level ?? 0, militaryFirst, roomThreat(room) > 0);
+    const militaryWanted = Memory.military?.auto !== false && roomThreat(room) > 0;
+    return demandTargets(room.controller?.level ?? 0, militaryFirst, militaryWanted);
+}
+
+function targetsOf(room: Room): [ResourceConstant, number][] {
+    return demandTargetsOf(room).map(t => [t.compound, t.amount]);
 }
 
 /** At most this much of a product per reaction cycle (TI reactionCycleAmount: 5000) */
@@ -152,39 +158,60 @@ function updateReaction(room: Room): void {
     if (next.product !== previous) log.info("Labs", `${room.name}: now producing ${next.amount} ${next.product}`);
 }
 
-/** Hivemind runReactions: every free reactor reacts once the source labs hold the reagents */
-function runReactions(room: Room): void {
+/** Ticks before looking again at labs with nothing to do, or source labs still waiting for their reagents */
+export const IDLE_WAIT = CHECK_EVERY;
+const REAGENT_WAIT = 5;
+
+/**
+ * Hivemind runReactions: every free reactor reacts once the source labs hold the reagents. Returns the
+ * ticks until a reactor can act again: the shortest cooldown, REAGENT_WAIT while reagents are missing,
+ * at most the next finished-reaction check.
+ */
+function runReactions(room: Room): number {
     const memory = room.memory;
     const layout = memory.labs;
     const reaction = memory.currentReaction;
-    if (!layout || !reaction) return;
+    const nextCheck = Math.max(1, CHECK_EVERY - (Game.time - (checkedAt.get(room.name) ?? Game.time)));
+    if (!layout || !reaction) return nextCheck;
     const source1 = Game.getObjectById(layout.source1);
     const source2 = Game.getObjectById(layout.source2);
-    if (!source1 || !source2) return;
+    if (!source1 || !source2) return nextCheck;
     if (source1.mineralType !== reaction[0] || source2.mineralType !== reaction[1]) {
-        countStat("lab:waiting");
-        return;
+        const wait = Math.min(REAGENT_WAIT, nextCheck);
+        countStat("lab:waiting", wait);
+        return wait;
     }
+    const product = productOf(reaction);
+    let wait = nextCheck;
     for (const id of layout.reactor) {
         if (isLabUsedForBoosting(id)) continue;
         const reactor = Game.getObjectById(id);
-        if (!reactor || reactor.cooldown) continue;
+        if (!reactor) continue;
+        if (reactor.cooldown) {
+            wait = Math.min(wait, reactor.cooldown);
+            continue;
+        }
         const result = reactor.runReaction(source1, source2);
-        if (result === OK) countStat(`reaction:${productOf(reaction)}`, LAB_REACTION_AMOUNT);
+        if (result === OK) {
+            countStat(`reaction:${product}`, LAB_REACTION_AMOUNT);
+            wait = Math.min(wait, (REACTION_TIME as Record<string, number>)[product] ?? 1);
+        } else wait = Math.min(wait, REAGENT_WAIT);
     }
+    return Math.max(1, wait);
 }
 
-export function manageReactions(room: Room): void {
+/** Reactions of a room; returns the ticks until there is something to do again (labsModule skips the room meanwhile) */
+export function manageReactions(room: Room): number {
     const labs = operationalLabs(room);
     if (labs.length < 3) {
         delete room.memory.labs;
         delete room.memory.currentReaction;
-        return;
+        return IDLE_WAIT;
     }
     const layout = room.memory.labs;
     if (!layout || layout.n !== labs.length || Game.time - layout.at >= LAYOUT_EVERY) updateLayout(room, labs);
-    if (!room.memory.labs) return;
-    if (!room.storage && !room.terminal) return;
+    if (!room.memory.labs) return IDLE_WAIT;
+    if (!room.storage && !room.terminal) return IDLE_WAIT;
     updateReaction(room);
-    runReactions(room);
+    return runReactions(room);
 }

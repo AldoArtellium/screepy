@@ -64,10 +64,10 @@ const BOOSTS = {
     tough: { GO: { damage: 0.7 }, GHO2: { damage: 0.5 }, XGHO2: { damage: 0.3 } },
     attack: { UH: { attack: 2 }, UH2O: { attack: 3 }, XUH2O: { attack: 4 } },
 };
-Object.assign(globalThis, RESOURCES, { REACTIONS: reactions, BOOSTS, LAB_REACTION_AMOUNT: 5, LAB_BOOST_MINERAL: 30 });
+Object.assign(globalThis, RESOURCES, { REACTIONS: reactions, BOOSTS, LAB_REACTION_AMOUNT: 5, LAB_BOOST_MINERAL: 30, UPGRADE_CONTROLLER_POWER: 1, CREEP_LIFE_TIME: 1500 });
 
 const { pickBoost } = require(join(OUT, "boostChoice.js"));
-const { findChainReaction, chainDeficits, reactionTargets, importableFrom } = require(join(OUT, "chain.js"));
+const { findChainReaction, chainDeficits, reactionTargets, importableFrom, demandTargets, mineralNeeds, baseMineralsIn, upgradeValuePerMineral } = require(join(OUT, "chain.js"));
 
 let failures = 0;
 function check(name, actual, expected) {
@@ -129,6 +129,32 @@ check("chain: G waits for ZK in use elsewhere -> ZK from imported Z and K instea
 // ---- deficits: reagents pushed down the chain, stock deducted
 const deficit = chainDeficits([["GH", 3000]], stock({ GH: 1000, G: 500 }));
 check("deficits: GH 2000 missing, G 1500, ZK and UL 1500", [deficit.GH, deficit.G, deficit.ZK, deficit.UL, deficit.Z], [2000, 1500, 1500, 1500, 1500]);
+
+// ---- demand targets: what the market may buy for
+const kinds = targets => targets.map(t => `${t.compound}:${t.kind}`);
+check("demand: no threat, upgrade only", kinds(demandTargets(7, false, false)), ["GH2O:upgrade"]);
+check("demand: threat stock after upgrade, never bought", kinds(demandTargets(6, false, true)).slice(0, 2), ["GH:upgrade", "XLHO2:stock"]);
+check("demand: a mission puts military first", kinds(demandTargets(6, true, false)).slice(0, 2), ["XLHO2:military", "XGHO2:military"]);
+
+// ---- base minerals per compound and the worth of upgrade compounds
+check("base minerals: GH 5, GH2O 7, XGH2O 8, H 1", [baseMineralsIn("GH"), baseMineralsIn("GH2O"), baseMineralsIn("XGH2O"), baseMineralsIn("H")], [5, 7, 8, 1]);
+const work = { GH: { upgradeController: 1.5 }, GH2O: { upgradeController: 1.8 }, XGH2O: { upgradeController: 2 } };
+// 0.5 x 1500 / 30 = 25 energy per GH, over 5 base minerals
+check("upgrade value: GH 5 energy per base mineral", upgradeValuePerMineral("GH", work), 5);
+check("upgrade value: not an upgrade compound -> 0", upgradeValuePerMineral("UH", work), 0);
+
+// ---- mineral needs: chain deficits of the demand pushed to base minerals, with their price cap
+const upgradeOnly = mineralNeeds(demandTargets(6, false, false), stock({ G: 3000 }), t => (t.kind === "upgrade" ? 40 : null));
+check("needs: GH 3000 with G there -> only H, capped at the upgrade worth", upgradeOnly, { H: { amount: 3000, maxPrice: 40 } });
+const stockOnly = mineralNeeds(demandTargets(6, false, true), stock({ GH: 3000 }), t => (t.kind === "stock" ? 0 : 40));
+check("needs: a threat stock buys nothing", stockOnly, {});
+const military = mineralNeeds(
+    [{ compound: "UH", amount: 2000, kind: "military" }, { compound: "GH", amount: 1000, kind: "upgrade" }],
+    stock({ U: 500, G: 1000 }),
+    t => (t.kind === "military" ? null : 40)
+);
+check("needs: military uncapped, H shared with the upgrade target", military, { U: { amount: 1500, maxPrice: null }, H: { amount: 3000, maxPrice: null } });
+check("needs: everything in stock -> nothing", mineralNeeds(demandTargets(6, false, false), stock({ GH: 3000 }), () => 40), {});
 
 console.log(failures === 0 ? "\nall checks passed" : `\n${failures} check(s) failed`);
 process.exit(failures === 0 ? 0 : 1);
