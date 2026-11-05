@@ -95,7 +95,8 @@ export function updateSeizes(mined: Set<string>): void {
         }
         delete released[room];
         countStat(`remote:seize:${status}`);
-        if (status === "lost") {
+        // Lost (they fought back) or unused (the selection can't mine it): left alone, else it takes a slot again
+        if (status === "lost" || (status === "unused" && !off)) {
             Memory.remoteSeizeFailed ??= {};
             Memory.remoteSeizeFailed[room] = Game.time;
         }

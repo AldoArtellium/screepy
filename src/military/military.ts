@@ -126,10 +126,11 @@ function findHelpers(spawnRoom: string, busy: Set<string>): string[] {
         Game.rooms,
         r => !!r.controller?.my && r.controller.level >= minRcl && r.find(FIND_MY_SPAWNS).length > 0
     ).map(r => {
-        const route = r.name === spawnRoom ? 0 : Game.map.findRoute(r.name, spawnRoom);
+        // The squad's own route (route.ts): members never walk through another player's or a keeper room
+        const rooms = r.name === spawnRoom ? [r.name] : squadRoute(r.name, spawnRoom);
         return {
             room: r.name,
-            route: route === ERR_NO_PATH ? Infinity : typeof route === "number" ? route : route.length,
+            route: rooms ? rooms.length - 1 : Infinity,
             capacity: r.energyCapacityAvailable,
             busy: busy.has(r.name)
         };
@@ -285,7 +286,8 @@ function updateAutoTargets(): void {
     const max = Math.max(0, (memory.maxMissions ?? DEFAULT_MAX_MISSIONS) - (memory.attack ? 1 : 0));
     const entries = (memory.targets ?? []).filter(t => t.room !== memory.attack);
     const current = entries.map(t => t.room);
-    const engaged = current.filter(isEngaged);
+    // A mission still forming (no creep yet) counts as engaged: a better target must not recycle it
+    const engaged = current.filter(r => isEngaged(r) || hasMission(r));
     const picked = chooseAutoTargets(current, engaged, max);
     const next: AutoTargetEntry[] = [];
     for (const auto of picked) {

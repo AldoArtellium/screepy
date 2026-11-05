@@ -44,7 +44,7 @@ import { canBoost } from "../labs/boosts";
 import { baseMineralsIn } from "../labs/chain";
 import { marketAverage } from "../modules/MarketManager";
 import { countStat } from "../utils/stats";
-import { demandAffordable, demandAmounts, demandState } from "./boostDemand";
+import { DEMAND_TTL, demandAffordable, demandAmounts, demandState } from "./boostDemand";
 import { describeBoosts, planSquad, SquadPlan, squadMemberCosts } from "./sizing";
 import { blocksExpansion, isEncroacher, playerReason, spareRemoteRooms, StrategicReason, usableSources } from "./strategy";
 
@@ -280,6 +280,9 @@ export function rankTargets(engaged: string[] = []): AutoTarget[] {
     return targets;
 }
 
+/** Tick each target's demand expired (heap: lost on a global reset, then asked again at most once) */
+const demandEnded: Map<string, number> = new Map();
+
 /** Estimated credits of a compound: its market average, else ~700 per base mineral in it (shard0 O, X, L) */
 function compoundCredits(compound: string): number {
     return marketAverage(compound as ResourceConstant) ?? baseMineralsIn(compound as ResourceConstant) * 700;
@@ -300,11 +303,18 @@ function updateBoostDemand(from: Origin[], blocked: { room: string; value: numbe
         delete memory.boostDemand;
         countStat(`military:boostDemand:${state}`);
         log.info("Military", `Boost demand for ${current.target} ${state}`);
+        // An expired demand's target is not asked for again before DEMAND_TTL more ticks
+        if (state === "expired") demandEnded.set(current.target, Game.time);
+        // A new demand waits for the next search: ending one never re-creates it in the same call
+        return;
     }
     if (memory.boosts === "none") return;
     const best = _.max([0, ...targets.map(t => t.roi)]);
     const labRooms = from.filter(o => canBoost(o.room));
+    // A target with a mission is armed by the mission's own boosts (reactions.ts)
+    const armed = new Set([...(memory.attack ? [memory.attack] : []), ...(memory.targets ?? []).map(t => t.room)]);
     for (const { room: target, value } of _.sortBy(blocked, b => -b.value)) {
+        if (armed.has(target) || Game.time - (demandEnded.get(target) ?? -Infinity) < DEMAND_TTL) continue;
         const origin = _.sortBy(
             labRooms.filter(o => linearDistance(o.room.name, target) <= MAX_DISTANCE),
             o => linearDistance(o.room.name, target)

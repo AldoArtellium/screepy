@@ -143,6 +143,8 @@ function bestTarget(): { roomName: string; spawnRoom: string; score: number; mod
 
 /** Next GCL slot's target, chosen ahead (remoteIncome.ts preparesNextExpansion) */
 const NEXT_REFRESH = 1000;
+/** The next target only changes for one scoring this much more */
+const NEXT_SWITCH = 1.1;
 /** Last search of the next target (heap: a search without result is not repeated every run) */
 let nextSearched = -Infinity;
 
@@ -160,7 +162,10 @@ function prepareNext(): void {
     nextSearched = Game.time;
     const best = bestTarget();
     const before = memory.next?.roomName;
+    // Kept unless taken or clearly beaten (NEXT_SWITCH): a new target retargets the military `expansion` reason
+    const kept = before && !intelManager.getIntel(before)?.owner ? modifiedScore(before, expansionScore(before)) : 0;
     if (!best) delete memory.next;
+    else if (before && kept > 0 && best.roomName !== before && best.modified < kept * NEXT_SWITCH) memory.next!.chosen = Game.time;
     else memory.next = { roomName: best.roomName, score: best.score, chosen: Game.time };
     if (memory.next?.roomName !== before) log.info("Expansion", `Next expansion target: ${memory.next?.roomName ?? "none"}`);
 }

@@ -350,8 +350,20 @@ function manageBaseMineral(resourceType: ResourceConstant, states: ResourceState
         for (const id of overpriced) Game.market.cancelOrder(id);
     }
     if (availableCredits <= 0) return;
-    if (need.maxPrice === null) instaBuy(resourceType, states.rooms, need.amount);
-    else tryBuy(resourceType, states.rooms, need.amount, need.maxPrice);
+    // A mineral only offensive demands need spends the credits above the offensive floor (military/boostDemand.ts)
+    const capped = offenseOnlyMinerals.has(resourceType);
+    const saved = availableCredits;
+    if (capped) availableCredits = Math.min(saved, offenseBudget);
+    const before = availableCredits;
+    if (availableCredits > 0) {
+        if (need.maxPrice === null) instaBuy(resourceType, states.rooms, need.amount);
+        else tryBuy(resourceType, states.rooms, need.amount, need.maxPrice);
+    }
+    if (capped) {
+        const spent = before - availableCredits;
+        offenseBudget -= spent;
+        availableCredits = saved - spent;
+    }
 }
 
 type MineralNeeds = ReturnType<typeof mineralNeeds>;
@@ -361,8 +373,13 @@ type MineralNeeds = ReturnType<typeof mineralNeeds>;
  * what every room holds (labs and carriers included in reaction rooms): military demand first, then
  * upgrade compounds (worth upgradeValuePerMineral x the energy price), threat and defense stocks never bought
  */
-/** A lab room makes military compounds against enemies at home: its base minerals are bought whatever the credits */
-let homeDefenseDemand = false;
+/**
+ * Base minerals only offensive demands (a mission's compounds, a boost demand) need: their buys stay above
+ * OFFENSE_CREDIT_FLOOR (offenseBudget, the credits above it at the start of the run). Energy, upgrade
+ * compounds and enemies at home keep the whole spendable credits.
+ */
+let offenseOnlyMinerals: Set<string> = new Set();
+let offenseBudget = 0;
 
 function labMineralNeeds(rooms: Room[]): MineralNeeds {
     const work = (BOOSTS as unknown as Record<string, Record<string, Record<string, number>>>)[WORK];
@@ -388,7 +405,7 @@ function labMineralNeeds(rooms: Room[]): MineralNeeds {
             else if (target.kind === "upgrade") upgrade.push(target);
         }
     }
-    homeDefenseDemand = military.some(t => t.kind === "military");
+    offenseOnlyMinerals = new Set();
     if (military.length + upgrade.length === 0) return {};
     const have: { [resourceType: string]: number } = {};
     const add = (resources: { [resourceType: string]: number }) => {
@@ -396,7 +413,13 @@ function labMineralNeeds(rooms: Room[]): MineralNeeds {
     };
     for (const room of reactionRooms) add(labResources(room));
     for (const room of rooms) if (!reactionRooms.includes(room)) add(totalResources(room));
-    return mineralNeeds([...military, ...upgrade], r => have[r] ?? 0, maxPrice);
+    const amount = (r: ResourceConstant) => have[r] ?? 0;
+    const offense = military.filter(t => t.kind === "offense");
+    if (offense.length > 0) {
+        const others = mineralNeeds([...military.filter(t => t.kind !== "offense"), ...upgrade], amount, maxPrice);
+        for (const mineral in mineralNeeds(offense, amount, maxPrice)) if (!others[mineral]) offenseOnlyMinerals.add(mineral);
+    }
+    return mineralNeeds([...military, ...upgrade], amount, maxPrice);
 }
 
 /** Compounds above 5k per room, sold when the market pays more than the reagents */
@@ -469,8 +492,8 @@ export const marketManagerModule = (): void => {
         for (const resourceType in resources) states.total[resourceType] = (states.total[resourceType] ?? 0) + resources[resourceType];
     }
     const needs = labMineralNeeds(rooms);
-    // Without enemies at home, base mineral buys keep the offensive credit floor (military/boostDemand.ts)
-    if (!homeDefenseDemand) availableCredits = Math.min(availableCredits, Math.max(0, Game.market.credits - OFFENSE_CREDIT_FLOOR));
+    // Offensive-only minerals spend the credits above the offensive floor (manageBaseMineral)
+    offenseBudget = Math.max(0, Game.market.credits - OFFENSE_CREDIT_FLOOR);
 
     for (const resourceType of RESOURCES_ALL) {
         if (resourceTier(resourceType) === 1) manageBaseMineral(resourceType, states, needs);
