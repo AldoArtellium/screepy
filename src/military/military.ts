@@ -273,6 +273,14 @@ function startMission(target: string): void {
     );
 }
 
+/** An engaged target still worth its squad: no safe mode on, a spawn still seen there */
+function targetStillHeld(roomName: string): boolean {
+    const intel = hostileRoom(roomName);
+    if (!intel) return true;
+    if ((intel.safeMode ?? 0) > Game.time) return false;
+    return intel.spawns > 0 || (intel.coreLevel ?? 0) > 0;
+}
+
 /** Missions at once by default, the manual attack included */
 const DEFAULT_MAX_MISSIONS = 2;
 
@@ -288,9 +296,15 @@ function updateAutoTargets(): void {
     const current = entries.map(t => t.room);
     // A mission still forming (no creep yet) counts as engaged: a better target must not recycle it
     const engaged = current.filter(r => isEngaged(r) || hasMission(r));
-    const picked = chooseAutoTargets(current, engaged, max);
-    const next: AutoTargetEntry[] = [];
+    // A mission with creeps keeps its target even when it stops being a candidate: its squad spent the boosts
+    // in stock, so the target looks infeasible again (shard0 2026-11-05: quads on W26N3, then W28N3,
+    // retargeted ~1000 ticks in without a loss and recycled). It ends by success, losses or the CPU guard;
+    // a safe mode or a room left without spawn releases it.
+    const held = entries.filter(t => isEngaged(t.room) && targetStillHeld(t.room)).slice(0, max);
+    const picked = chooseAutoTargets(current, engaged, max).filter(auto => !held.some(t => t.room === auto.room));
+    const next: AutoTargetEntry[] = [...held];
     for (const auto of picked) {
+        if (next.length >= max) break;
         const known = entries.find(t => t.room === auto.room);
         if (known) {
             next.push(known);
