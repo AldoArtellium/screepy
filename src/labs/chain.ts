@@ -55,12 +55,13 @@ export function reactionTargets(rcl: number, militaryFirst: boolean, militaryWan
 /**
  * A reaction target and whether the market may buy base minerals for it: `military` compounds only
  * for a demand (a mission, enemies at home), never for a stock (threat or defense); upgrade compounds
- * only below the value of what they upgrade (upgradeValuePerMineral)
+ * only below the value of what they upgrade (upgradeValuePerMineral); `offense` for a target blocked only
+ * by the stock (military/boostDemand.ts), bought while the credits stay above the offensive floor
  */
 export interface DemandTarget {
     compound: ResourceConstant;
     amount: number;
-    kind: "upgrade" | "military" | "stock";
+    kind: "upgrade" | "military" | "offense" | "stock";
 }
 
 /**

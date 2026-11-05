@@ -41,7 +41,7 @@ Object.assign(globalThis, {
 
 const {
     sourceCreeps, sourceNet, roomEnergyPerCreep, cpuAverage, budgetRooms,
-    reserverCost, cpuPressure, expansionCpuFits,
+    reserverCost, cpuPressure, expansionCpuFits, preparesNextExpansion, NEXT_EXPANSION_PROGRESS,
 } = require(join(OUT, "remote", "remoteIncome.js"));
 
 let failures = 0;
@@ -125,5 +125,12 @@ check("expansion: few remotes, over 80%", !expansionCpuFits(16.1, 20, 4));
 check("expansion: 8 remotes at 18/20 (shard0)", expansionCpuFits(18, 20, 8));
 check("expansion: 5 remotes, over the limit", !expansionCpuFits(20.5, 20, 5));
 check("expansion: no CPU average yet", !expansionCpuFits(undefined, 20, 8));
+
+// Next expansion prepared before the GCL slot (2026-11-05, shard0: 6 rooms for GCL 6, 52M of 73.7M points)
+const gcl6 = { rooms: 6, level: 6, progress: 0, total: 1 };
+check("next: GCL slots full, 80% of the way", preparesNextExpansion({ ...gcl6, progress: NEXT_EXPANSION_PROGRESS, total: 1 }));
+check("next: not yet at 70%", !preparesNextExpansion({ ...gcl6, progress: 0.7, total: 1 }));
+check("next: a free slot is the current expansion's job", !preparesNextExpansion({ ...gcl6, rooms: 5, progress: 0.9, total: 1 }));
+check("next: no progress total", !preparesNextExpansion({ ...gcl6, progress: 5, total: 0 }));
 
 process.exit(failures ? 1 : 0);

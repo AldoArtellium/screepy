@@ -18,7 +18,7 @@
 import { effectiveEnergy } from "../core/roomState";
 import { intelManager } from "../modules/IntelManager";
 import { hasInvaderCore, isRoomUnderAttack } from "../modules/RoomIntel";
-import { expansionCpuFits } from "../remote/remoteIncome";
+import { expansionCpuFits, preparesNextExpansion } from "../remote/remoteIncome";
 import { log } from "../utils/logger";
 import { expansionScore } from "./expansionScore";
 
@@ -38,6 +38,11 @@ declare global {
             squads: { [name: string]: Squad };
             /** No target found: next search */
             nextTry?: number;
+            /**
+             * Target of the next GCL slot, chosen ahead once the GCL is 80% of the way (not claimed: the
+             * military `expansion` reason clears the players on it; refreshed every 1000 ticks)
+             */
+            next?: { roomName: string; score: number; chosen: number };
         };
     }
     interface CreepMemory {
@@ -119,7 +124,8 @@ function modifiedScore(roomName: string, score: number): number {
     return score;
 }
 
-function chooseTarget(): void {
+/** Best expansion target with its origin (Hivemind expand.ts chooseNewTarget) */
+function bestTarget(): { roomName: string; spawnRoom: string; score: number; modified: number } | null {
     let best: { roomName: string; spawnRoom: string; score: number; modified: number } | null = null;
     for (const roomName in intelManager.allIntel()) {
         const intel = intelManager.getIntel(roomName)!;
@@ -132,8 +138,38 @@ function chooseTarget(): void {
         if (!spawnRoom) continue;
         best = { roomName, spawnRoom, score, modified };
     }
+    return best;
+}
+
+/** Next GCL slot's target, chosen ahead (remoteIncome.ts preparesNextExpansion) */
+const NEXT_REFRESH = 1000;
+/** Last search of the next target (heap: a search without result is not repeated every run) */
+let nextSearched = -Infinity;
+
+function prepareNext(): void {
+    const memory = expansionMemory();
+    const rooms = myRooms();
+    const prepare =
+        rooms.some(r => r.controller!.level >= 5) &&
+        preparesNextExpansion({ rooms: rooms.length, level: Game.gcl.level, progress: Game.gcl.progress, total: Game.gcl.progressTotal });
+    if (!prepare) {
+        delete memory.next;
+        return;
+    }
+    if (Game.time - Math.max(memory.next?.chosen ?? -Infinity, nextSearched) < NEXT_REFRESH) return;
+    nextSearched = Game.time;
+    const best = bestTarget();
+    const before = memory.next?.roomName;
+    if (!best) delete memory.next;
+    else memory.next = { roomName: best.roomName, score: best.score, chosen: Game.time };
+    if (memory.next?.roomName !== before) log.info("Expansion", `Next expansion target: ${memory.next?.roomName ?? "none"}`);
+}
+
+function chooseTarget(): void {
+    const best = bestTarget();
     if (!best) return;
     const memory = expansionMemory();
+    delete memory.next;
     memory.current = { roomName: best.roomName, spawnRoom: best.spawnRoom, score: best.score, started: Game.time };
     memory.squads.expand = { spawnRoom: best.spawnRoom, targetRoom: best.roomName, composition: { claimer: 1, pioneer: 2 } };
     log.info("Expansion", `Expanding to ${best.roomName} from ${best.spawnRoom} (score ${best.score.toFixed(2)})`);
@@ -245,4 +281,5 @@ export const expansionModule = (): void => {
         if (!memory.current) memory.nextTry = Game.time + NO_TARGET_RETRY;
     }
     if (memory.current) manageCurrent();
+    else prepareNext();
 };

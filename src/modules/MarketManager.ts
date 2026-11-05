@@ -24,6 +24,7 @@
 import { getBestOption } from "../core/options";
 import { isFullOn, myRoomsWithTerminal, prepareForTrading, resourceAmount, totalResources } from "../core/resources";
 import { DemandTarget, mineralNeeds, upgradeValuePerMineral } from "../labs/chain";
+import { offenseMaxPrice } from "../military/boostDemand";
 import { demandTargetsOf, labResources } from "../labs/reactions";
 import { buyOrdersAbovePrice, buyOrdersToCancel, forcedBuyPays, instantSellPays, PriceData, prefersInstantSell, repricedSellPrice, sellOrderPrice, spendableCredits } from "../market/pricing";
 import { log } from "../utils/logger";
@@ -368,7 +369,8 @@ function labMineralNeeds(rooms: Room[]): MineralNeeds {
         energy ??= marketAverage(RESOURCE_ENERGY) ?? 0;
         return upgradeValuePerMineral(compound, work) * energy;
     };
-    const maxPrice = (t: DemandTarget) => (t.kind === "military" ? null : t.kind === "upgrade" ? upgradePrice(t.compound) : 0);
+    const maxPrice = (t: DemandTarget) =>
+        t.kind === "military" ? null : t.kind === "offense" ? offenseMaxPrice(Game.market.credits) : t.kind === "upgrade" ? upgradePrice(t.compound) : 0;
     const reactionRooms: Room[] = [];
     const military: DemandTarget[] = [];
     const upgrade: DemandTarget[] = [];
@@ -379,7 +381,7 @@ function labMineralNeeds(rooms: Room[]): MineralNeeds {
         reactionRooms.push(room);
         // Threat and defense stocks are never bought (price 0): left out
         for (const target of demandTargetsOf(room)) {
-            if (target.kind === "military") military.push(target);
+            if (target.kind === "military" || target.kind === "offense") military.push(target);
             else if (target.kind === "upgrade") upgrade.push(target);
         }
     }

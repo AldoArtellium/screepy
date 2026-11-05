@@ -236,6 +236,21 @@ export function expansionCpuFits(cpuAvg: number | undefined, limit: number, remo
     return cpuAvg < limit * (remoteRooms < EXPANSION_REMOTE_ROOMS ? EXPANSION_CPU_SHARE : 1);
 }
 
+/** Share of the way to the next GCL level from which the next expansion target is prepared */
+export const NEXT_EXPANSION_PROGRESS = 0.8;
+
+/**
+ * The next expansion target is chosen ahead (expansion/Expansion.ts `Memory.expand.next`, our design,
+ * 2026-11-05) once every room the GCL allows is owned and the GCL is NEXT_EXPANSION_PROGRESS of the way
+ * to its next level: the military `expansion` reason (strategy.ts blocksExpansion) then clears the
+ * players reserving or holding it before the claim. shard0: GCL 6 for 6 rooms, the target only existed
+ * once the slot was free, so a player on it was found by the claimer.
+ */
+export function preparesNextExpansion(state: { rooms: number; level: number; progress: number; total: number }): boolean {
+    if (state.rooms < state.level || state.total <= 0) return false;
+    return state.progress / state.total >= NEXT_EXPANSION_PROGRESS;
+}
+
 /** CPU counted for one more remote room: the measurement, at least BUDGET_ROOM_CPU_MIN */
 export function budgetRoomCpu(measured: number | undefined): number {
     return Math.max(BUDGET_ROOM_CPU_MIN, measured ?? 0);

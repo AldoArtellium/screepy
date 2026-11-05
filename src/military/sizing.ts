@@ -103,6 +103,8 @@ export interface SquadPlan {
     compounds: Record<BoostedEffect, string | null>;
     /** Energy of one squad's boosts (compounds at market price + lab energy) */
     boostCost: number;
+    /** Parts of each boosted type over the chosen squad */
+    parts: Record<BoostedEffect, number>;
 }
 
 /** Part type and boost effect of each boosted effect of a squad */
@@ -117,14 +119,15 @@ export const SQUAD_BOOST_PARTS: Record<BoostedEffect, [BodyPartConstant, BoostEf
  * of them. The stock is read without the pending requests (boostableParts countRequested), so a squad
  * being boosted doesn't make its own target infeasible.
  */
-function boostOptions(room: Room | undefined, effect: BoostedEffect, parts: number): BoostOption[] {
+function boostOptions(room: Room | undefined, effect: BoostedEffect, parts: number, anyCompound = false): BoostOption[] {
     const options: BoostOption[] = [{ compound: null, multiplier: 1, cost: 0, tier: 0 }];
     if (!room || parts === 0 || !canBoost(room)) return options;
     const [part, name] = SQUAD_BOOST_PARTS[effect];
     const table = (BOOSTS as unknown as Record<string, Record<string, Record<string, number>>>)[part] ?? {};
     for (const compound in table) {
         const multiplier = table[compound][name];
-        if (multiplier === undefined || boostableParts(room, compound as ResourceConstant, false) < parts) continue;
+        if (multiplier === undefined) continue;
+        if (!anyCompound && boostableParts(room, compound as ResourceConstant, false) < parts) continue;
         const cost = LAB_BOOST_MINERAL * energyPrice(compound as ResourceConstant) + LAB_BOOST_ENERGY;
         options.push({ compound, multiplier, cost, tier: tierOf(compound) });
     }
@@ -137,7 +140,8 @@ function shape(
     type: SquadType,
     bodies: BodyPartConstant[][],
     healers: BodyPartConstant[][],
-    soak: boolean
+    soak: boolean,
+    anyCompound = false
 ): SquadShape {
     const all = bodies.flat();
     const front = bodies[0];
@@ -152,9 +156,9 @@ function shape(
         soak,
         parts,
         options: {
-            heal: boostOptions(room, "heal", parts.heal),
-            tough: boostOptions(room, "tough", parts.tough),
-            attack: boostOptions(room, "attack", parts.attack)
+            heal: boostOptions(room, "heal", parts.heal, anyCompound),
+            tough: boostOptions(room, "tough", parts.tough, anyCompound),
+            attack: boostOptions(room, "attack", parts.attack, anyCompound)
         }
     };
 }
@@ -163,7 +167,8 @@ function shape(
  * Squad type and boosts against a target (boostNeed.ts chooseSquad): the cheapest duo or quad, with
  * the fewest boosts from `boostRoom`'s stock, that holds against the threat with a margin; the
  * strongest boosts when none does. `Memory.military.boosts` ("auto", "max", "none") changes the rule;
- * `escalation` (floor and margin): after losses (military.ts).
+ * `escalation` (floor and margin): after losses (military.ts). `anyCompound`: every compound counts as in
+ * stock, at its market price (targets.ts offensive boost demand: what the labs would have to make).
  */
 export function planSquad(
     targetRoom: string,
@@ -171,18 +176,19 @@ export function planSquad(
     forced?: SquadType,
     refills = false,
     boostRoom?: Room,
-    escalation: { floor?: SquadCompounds; margin?: number } = {}
+    escalation: { floor?: SquadCompounds; margin?: number } = {},
+    anyCompound = false
 ): SquadPlan {
     const threat = threatOf(targetRoom);
     const shapes: SquadShape[] = [];
     if (forced !== "quad") {
         const duo = [duoAttackerBody(energy), duoHealerBody(energy)];
-        shapes.push(shape(boostRoom, "duo", duo, [duo[1]], forced === "duo"));
+        shapes.push(shape(boostRoom, "duo", duo, [duo[1]], forced === "duo", anyCompound));
     }
     if (forced !== "duo") {
         const healer = quadHealerBody(energy);
         const quad = [quadAttackerBody(energy), quadAttackerBody(energy), healer, healer];
-        shapes.push(shape(boostRoom, "quad", quad, [healer, healer], forced === "quad"));
+        shapes.push(shape(boostRoom, "quad", quad, [healer, healer], forced === "quad", anyCompound));
     }
     const choice = chooseSquad(shapes, threat, refills, {
         mode: militaryMemory().boosts,
@@ -196,7 +202,8 @@ export function planSquad(
         heal: choice.heal,
         threat,
         compounds: choice.compounds,
-        boostCost: choice.boostCost
+        boostCost: choice.boostCost,
+        parts: shapes.find(s => s.type === choice.type)!.parts
     };
 }
 

@@ -24,6 +24,7 @@ try {
             "--outDir", OUT, "--rootDir", join(ROOT, "src"), "--module", "commonjs", "--target", "es2019", "--skipLibCheck",
             "--types", "screeps,lodash",
             join(ROOT, "src", "military", "boostNeed.ts"),
+            join(ROOT, "src", "military", "boostDemand.ts"),
         ],
         { stdio: "pipe" }
     );
@@ -184,6 +185,31 @@ const threat = (towers, creeps = 0, heal = 0) => ({
 {
     const c = chooseSquad(shapes({}), threat(1), false);
     check("no stock: unboosted and feasible", c.feasible && c.boostCost === 0, JSON.stringify(c));
+}
+
+// Offensive boost demand (2026-11-05): a target blocked only by the stock asks the labs for its compounds
+{
+    const { DEMAND_TTL, OFFENSE_CREDIT_FLOOR, demandAmounts, demandAffordable, demandState, offenseMaxPrice } = require(
+        join(OUT, "military", "boostDemand.js")
+    );
+    const amounts = demandAmounts({ heal: "XLHO2", tough: "XGHO2", attack: null }, { heal: 24, tough: 10, attack: 30 }, 2);
+    check("amounts: parts x 30 x attrition per compound", amounts.XLHO2 === 24 * 30 * 2 && amounts.XGHO2 === 10 * 30 * 2, JSON.stringify(amounts));
+    check("amounts: no plain effect", Object.keys(amounts).length === 2);
+    const shared = demandAmounts({ heal: "LO", tough: null, attack: "LO" }, { heal: 2, tough: 0, attack: 3 }, 1);
+    check("amounts: one compound for two effects adds up", shared.LO === 5 * 30, JSON.stringify(shared));
+
+    check("affordable within half of the credits above the floor", demandAffordable(200000, OFFENSE_CREDIT_FLOOR + 400000));
+    check("not above half of them", !demandAffordable(200001, OFFENSE_CREDIT_FLOOR + 400000));
+    check("not below the floor", !demandAffordable(1, OFFENSE_CREDIT_FLOOR - 1));
+
+    check("market buys for it above the floor", offenseMaxPrice(OFFENSE_CREDIT_FLOOR + 1) === null);
+    check("no buy at or below the floor", offenseMaxPrice(OFFENSE_CREDIT_FLOOR) === 0);
+
+    const demand = { home: "W29N7", target: "W28N8", compounds: { XLHO2: 1440 }, since: 1000, credits: 50000 };
+    check("kept while blocked", demandState(demand, 1000 + DEMAND_TTL - 1, { mission: false, blocked: true }) === "keep");
+    check("expired after DEMAND_TTL", demandState(demand, 1000 + DEMAND_TTL, { mission: false, blocked: true }) === "expired");
+    check("served once a mission targets the room", demandState(demand, 2000, { mission: true, blocked: true }) === "served");
+    check("gone once the room is no longer a blocked candidate", demandState(demand, 2000, { mission: false, blocked: false }) === "gone");
 }
 
 if (failures > 0) {

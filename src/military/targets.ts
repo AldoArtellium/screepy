@@ -40,7 +40,12 @@ import {
     squadCost,
     targetValue
 } from "./roi";
-import { planSquad, SquadPlan, squadMemberCosts } from "./sizing";
+import { canBoost } from "../labs/boosts";
+import { baseMineralsIn } from "../labs/chain";
+import { marketAverage } from "../modules/MarketManager";
+import { countStat } from "../utils/stats";
+import { demandAffordable, demandAmounts, demandState } from "./boostDemand";
+import { describeBoosts, planSquad, SquadPlan, squadMemberCosts } from "./sizing";
 import { blocksExpansion, isEncroacher, playerReason, spareRemoteRooms, StrategicReason, usableSources } from "./strategy";
 
 const MAX_DISTANCE = 10;
@@ -186,7 +191,8 @@ function playerCandidate(
     const stronger = looksStronger(theirRooms, context.ours.length);
     const freed = freedSources(roomName, owner, context.holdings, context.ours, linearDistance, Game.time);
     const usable = usableSources(freed, context.spare);
-    const expansion = Memory.expand?.current?.roomName;
+    // The current expansion target, else the next one prepared ahead of the GCL slot (Expansion.ts prepareNext)
+    const expansion = Memory.expand?.current?.roomName ?? Memory.expand?.next?.roomName;
     const blocking = blocksExpansion(roomName, owner, expansion, context.holdings, linearDistance, Game.time);
     const distance = _.min(context.ours.map(o => linearDistance(o, roomName)));
     const encroacher = isEncroacher({ distance, rcl: intel.rcl, towers: intel.towers, damage: intel.damage });
@@ -238,6 +244,8 @@ export function rankTargets(engaged = false): AutoTarget[] {
         holdings: holdings()
     };
     const skipped: { [room: string]: string } = {};
+    /** Candidates no origin can fight with its stock (offensive boost demand) */
+    const blocked: { room: string; value: number }[] = [];
     for (const [roomName, intel] of Object.entries(memory.rooms ?? {})) {
         if (recentlyFailed(roomName)) continue;
         const kept = engaged && memory.target?.room === roomName ? memory.target.reason : undefined;
@@ -247,13 +255,6 @@ export function rankTargets(engaged = false): AutoTarget[] {
         if (!candidate) continue;
         unskip(skipped, roomName);
         const { reason } = candidate;
-        const near = feasibleOrigin(from, roomName);
-        if (!near) continue;
-        const { plan } = near;
-        const energy = near.origin.room.energyCapacityAvailable;
-        const members = squadMemberCosts(plan.type, energy);
-        // The compounds the squad needs against this target (sizing.ts planSquad) are spent too
-        const cost = squadCost(members, ATTRITION, plan.boostCost);
         const ticksLeft = (intel.collapse ?? Infinity) - Game.time;
         const remote = remoteValue(candidate.sources, reason === "stronghold" ? ticksLeft : REMOTE_HORIZON);
         const value = targetValue({
@@ -262,10 +263,74 @@ export function rankTargets(engaged = false): AutoTarget[] {
             // The energy a player's creeps made us lose only counts once they fought us
             infamy: reason === "aggressor" ? (memory.infamy?.[intel.owner!] ?? 0) : 0
         });
+        const near = feasibleOrigin(from, roomName);
+        if (!near) {
+            blocked.push({ room: roomName, value });
+            continue;
+        }
+        const { plan } = near;
+        const energy = near.origin.room.energyCapacityAvailable;
+        const members = squadMemberCosts(plan.type, energy);
+        // The compounds the squad needs against this target (sizing.ts planSquad) are spent too
+        const cost = squadCost(members, ATTRITION, plan.boostCost);
         targets.push({ room: roomName, reason, roi: value / cost, value: Math.round(value), cost });
     }
     memory.skipped = skipped;
+    updateBoostDemand(from, blocked, targets);
     return targets;
+}
+
+/** Estimated credits of a compound: its market average, else ~700 per base mineral in it (shard0 O, X, L) */
+function compoundCredits(compound: string): number {
+    return marketAverage(compound as ResourceConstant) ?? baseMineralsIn(compound as ResourceConstant) * 700;
+}
+
+/**
+ * Offensive boost demand (boostDemand.ts): ends the current one when served, expired or gone, then asks
+ * the labs of the closest origin with labs for the compounds of the best target blocked only by the
+ * stock, if its return (compounds at market price) is at least 1 and beats every feasible target
+ */
+function updateBoostDemand(from: Origin[], blocked: { room: string; value: number }[], targets: AutoTarget[]): void {
+    const memory = militaryMemory();
+    const current = memory.boostDemand;
+    if (current) {
+        const mission = memory.attack === current.target || memory.target?.room === current.target;
+        const state = demandState(current, Game.time, { mission, blocked: blocked.some(b => b.room === current.target) });
+        if (state === "keep") return;
+        delete memory.boostDemand;
+        countStat(`military:boostDemand:${state}`);
+        log.info("Military", `Boost demand for ${current.target} ${state}`);
+    }
+    if (memory.boosts === "none") return;
+    const best = _.max([0, ...targets.map(t => t.roi)]);
+    const labRooms = from.filter(o => canBoost(o.room));
+    for (const { room: target, value } of _.sortBy(blocked, b => -b.value)) {
+        const origin = _.sortBy(
+            labRooms.filter(o => linearDistance(o.room.name, target) <= MAX_DISTANCE),
+            o => linearDistance(o.room.name, target)
+        )[0];
+        if (!origin) continue;
+        const energy = origin.room.energyCapacityAvailable;
+        const plan = planSquad(target, energy, memory.squad, true, origin.room, {}, true);
+        if (!plan.feasible) continue;
+        const cost = squadCost(squadMemberCosts(plan.type, energy), ATTRITION, plan.boostCost);
+        const roi = value / cost;
+        if (roi < 1 || roi <= best) continue;
+        const compounds = demandAmounts(plan.compounds, plan.parts, ATTRITION);
+        const credits = Math.round(_.sum(Object.entries(compounds), ([c, amount]) => amount * compoundCredits(c)));
+        if (!demandAffordable(credits, Game.market.credits)) {
+            log.info("Military", `Boost demand for ${target} left out: ~${credits} credits of ${Math.round(Game.market.credits)}`);
+            continue;
+        }
+        memory.boostDemand = { home: origin.room.name, target, compounds, since: Game.time, credits };
+        countStat("military:boostDemand");
+        log.info(
+            "Military",
+            `Boost demand for ${target} from ${origin.room.name}: ${describeBoosts(plan.compounds)} ` +
+                `(${JSON.stringify(compounds)}, ~${credits} credits, return ${roi.toFixed(2)})`
+        );
+        return;
+    }
 }
 
 /**

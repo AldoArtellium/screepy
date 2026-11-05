@@ -38,7 +38,16 @@ declare global {
 export function demandTargetsOf(room: Room): DemandTarget[] {
     const militaryFirst = currentTarget() !== undefined || enemyStrength(room) >= ENEMY_STRENGTH_NORMAL;
     const militaryWanted = Memory.military?.auto !== false && roomThreat(room) > 0;
-    return demandTargets(room.controller?.level ?? 0, militaryFirst, militaryWanted);
+    const targets = demandTargets(room.controller?.level ?? 0, militaryFirst, militaryWanted);
+    // The compounds a target blocked only by the stock needs (military/boostDemand.ts), in its origin first
+    const demand = Memory.military?.boostDemand;
+    if (demand?.home !== room.name) return targets;
+    const offense = Object.entries(demand.compounds).map(([compound, amount]) => ({
+        compound: compound as ResourceConstant,
+        amount,
+        kind: "offense" as const
+    }));
+    return [...offense, ...targets.filter(t => !(t.compound in demand.compounds))];
 }
 
 function targetsOf(room: Room): [ResourceConstant, number][] {
