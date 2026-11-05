@@ -259,5 +259,34 @@ check("not another player's reservation", !releasedRooms("W25N7", "Blindfold", b
 check("not a room closer to another of their rooms", !releasedRooms("W25N7", "Blindfold", blindfoldRooms, dist, T0).includes("W24N4"));
 check("a stale reservation is not released", releasedRooms("W25N7", "Blindfold", blindfoldRooms.map(r => (r.room === "W24N7" ? { ...r, scouted: T0 - 6000 } : r)), dist, T0).join() === "W25N7");
 
+// Simultaneous missions (2026-11-05): up to `max` targets, engaged ones kept, the rest by return
+const { pickTargets } = require(join(OUT, "military", "roi.js"));
+const rooms = list => list.map(t => t.room).join();
+check("two best by return", rooms(pickTargets([a, b, c], [], [], 2)) === "C,B");
+check("one slot: same as pickTarget", rooms(pickTargets([a, b, c], [], [], 1)) === "C");
+check("no slot", pickTargets([a, b, c], [], [], 0).length === 0);
+check("below MIN_ROI left out", rooms(pickTargets([{ room: "X", roi: 0.4 }, a], [], [], 2)) === "A");
+check("engaged kept whatever its return", rooms(pickTargets([{ room: "X", roi: 0.4 }, b, c], ["X"], ["X"], 2)) === "X,C");
+check("current bonus between the others", rooms(pickTargets([a, b, c], ["A"], [], 2)) === "C,A");
+check("engaged first, never above the cap", rooms(pickTargets([a, b, c], ["A", "B"], ["A", "B"], 2)) === "A,B");
+check("an engaged room no longer a candidate is dropped", rooms(pickTargets([b, c], ["A"], ["A"], 2)) === "C,B");
+
+// Shared missions: other bases spawn members of the same squad (shard0: W29N7 and W28N7 next to each other)
+const { helperRooms, SHARE_RANGE } = require(join(OUT, "military", "roi.js"));
+const base = { capacity: 5600, busy: false };
+const helpers = helperRooms(
+    "W28N7",
+    5600,
+    [
+        { room: "W28N7", route: 0, ...base },
+        { room: "W29N7", route: 1, ...base },
+        { room: "W27N6", route: 2, ...base, capacity: 2300 },
+        { room: "W27N5", route: 2, ...base, busy: true },
+        { room: "W24N8", route: SHARE_RANGE + 1, ...base }
+    ]
+);
+check("helpers: close, big enough, free, not the spawn room", helpers.join() === "W29N7", helpers.join());
+check("helpers: none without candidates", helperRooms("W28N7", 5600, []).length === 0);
+
 console.log(failures === 0 ? "\nall checks passed" : `\n${failures} check(s) failed`);
 process.exit(failures === 0 ? 0 : 1);

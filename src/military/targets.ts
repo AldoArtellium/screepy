@@ -32,7 +32,7 @@ import { looksStronger, OwnedRoomSeen, playerRoomCounts } from "./playerThreat";
 import {
     ATTRITION,
     freedSources,
-    pickTarget,
+    pickTargets,
     REMOTE_HORIZON,
     releasedRooms,
     remoteValue,
@@ -228,8 +228,8 @@ function strongholdCandidate(
     return null;
 }
 
-/** Every feasible target with its return (value / cost in energy); `engaged`: the current target's squad has creeps */
-export function rankTargets(engaged = false): AutoTarget[] {
+/** Every feasible target with its return (value / cost in energy); `engaged`: current targets whose squad has creeps */
+export function rankTargets(engaged: string[] = []): AutoTarget[] {
     const memory = militaryMemory();
     const from = origins();
     const targets: AutoTarget[] = [];
@@ -248,7 +248,7 @@ export function rankTargets(engaged = false): AutoTarget[] {
     const blocked: { room: string; value: number }[] = [];
     for (const [roomName, intel] of Object.entries(memory.rooms ?? {})) {
         if (recentlyFailed(roomName)) continue;
-        const kept = engaged && memory.target?.room === roomName ? memory.target.reason : undefined;
+        const kept = engaged.includes(roomName) ? memory.targets?.find(t => t.room === roomName)?.reason : undefined;
         const candidate =
             strongholdCandidate(roomName, intel, context.spare, skipped, kept) ??
             playerCandidate(roomName, intel, context, skipped, kept);
@@ -294,7 +294,7 @@ function updateBoostDemand(from: Origin[], blocked: { room: string; value: numbe
     const memory = militaryMemory();
     const current = memory.boostDemand;
     if (current) {
-        const mission = memory.attack === current.target || memory.target?.room === current.target;
+        const mission = memory.attack === current.target || !!memory.targets?.some(t => t.room === current.target);
         const state = demandState(current, Game.time, { mission, blocked: blocked.some(b => b.room === current.target) });
         if (state === "keep") return;
         delete memory.boostDemand;
@@ -344,7 +344,10 @@ export function releaseFallen(roomName: string): void {
     if (rooms.length > 0) releaseRooms(rooms, owner);
 }
 
-/** Best automatic target (null: nothing pays for its squad); `engaged`: the current target's squad has creeps */
-export function chooseAutoTarget(engaged = false): AutoTarget | null {
-    return pickTarget(rankTargets(engaged), militaryMemory().target?.room, engaged);
+/**
+ * Automatic targets of the simultaneous missions (roi.ts pickTargets), at most `max`; `current`: the
+ * targets now, `engaged`: those whose squad has creeps
+ */
+export function chooseAutoTargets(current: string[], engaged: string[], max: number): AutoTarget[] {
+    return pickTargets(rankTargets(engaged), current, engaged, max);
 }

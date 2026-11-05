@@ -7,7 +7,7 @@
 
 import { tickCache } from "../core/roomState";
 import { ENEMY_STRENGTH_NORMAL, enemyStrength, roomThreat } from "../defense/RoomDefense";
-import { currentTarget } from "../military/military";
+import { currentTargets } from "../military/military";
 import { log } from "../utils/logger";
 import { countStat } from "../utils/stats";
 import { isLabUsedForBoosting, operationalLabs } from "./boosts";
@@ -40,7 +40,7 @@ declare global {
  */
 export function demandTargetsOf(room: Room): DemandTarget[] {
     const homeThreat = enemyStrength(room) >= ENEMY_STRENGTH_NORMAL;
-    const mission = currentTarget() !== undefined;
+    const mission = currentTargets().length > 0;
     const militaryWanted = Memory.military?.auto !== false && roomThreat(room) > 0;
     const targets = demandTargets(room.controller?.level ?? 0, homeThreat || mission, militaryWanted).map(t =>
         t.kind === "military" && !homeThreat ? { ...t, kind: "offense" as const } : t

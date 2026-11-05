@@ -333,7 +333,10 @@ function printExcluded(memory, time) {
 
 function printMilitary(memory, time) {
   const military = memory.military ?? {};
-  const target = military.attack ? `${military.attack} (manual)` : military.target ? `${military.target.room} (${military.target.reason}, roi ${military.target.roi ?? "?"}, since ${military.target.since})` : "none";
+  const autos = [...(military.target ? [military.target] : []), ...(military.targets ?? [])].map(
+    (t) => `${t.room} (${t.reason}, roi ${t.roi ?? "?"}, since ${t.since})`
+  );
+  const target = [...(military.attack ? [`${military.attack} (manual)`] : []), ...autos].join("; ") || "none";
   section(`Military: target ${target}`);
   const aggression = Object.entries(military.aggression ?? {}).map(([p, v]) => `${p} ${Math.round(v)}`);
   console.log(`aggression: ${aggression.join(", ") || "none"}`);

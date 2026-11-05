@@ -93,19 +93,19 @@ function drawExpansion(visual: MapVisual, labels: MapLabels, rows?: Cell[][]): v
     labels.add(`expand · ${state}`, [pos(14), pos(40), pos(44)], labelStyle(EXPAND, FONT), LABEL_PRIORITY.owned, true);
 }
 
-function drawAttack(visual: MapVisual, labels: MapLabels, rows?: Cell[][]): void {
+function drawAttack(visual: MapVisual, labels: MapLabels, targetRoom: string, rows?: Cell[][]): void {
     const military = Memory.military;
-    const targetRoom = military?.attack ?? military?.target?.room;
-    if (!military || !targetRoom) return;
+    if (!military) return;
     const target = center(targetRoom);
     const squads = [...Object.values(military.duos ?? {}), ...Object.values(military.quads ?? {})].filter(
         s => s.targetRoom === targetRoom
     );
-    const homes = new Set(squads.map(s => s.spawnRoom));
+    // Shared missions: a line from each base spawning members
+    const homes = new Set(squads.flatMap(s => [s.spawnRoom, ...(s.helpers ?? [])]));
     const states = new Set<string>(squads.map(s => s.state));
     for (const home of homes) visual.line(center(home), target, { color: BAD, width: 1, opacity: 0.6 });
     visual.circle(target, { radius: 6, fill: "transparent", stroke: BAD, strokeWidth: 1, opacity: 0.8 });
-    const reason = military.attack ? "manual" : (military.target?.reason ?? "");
+    const reason = military.attack === targetRoom ? "manual" : (military.targets?.find(t => t.room === targetRoom)?.reason ?? "");
     if (rows) {
         rows.push([
             { text: "attack", color: BAD },
@@ -126,5 +126,7 @@ export function drawMapStrategy(visual: MapVisual, labels: MapLabels, panel?: Ma
     drawOwnedRooms(labels);
     const rows = panel?.section([]);
     drawExpansion(visual, labels, rows);
-    drawAttack(visual, labels, rows);
+    const military = Memory.military;
+    const targets = [...(military?.attack ? [military.attack] : []), ...(military?.targets ?? []).map(t => t.room)];
+    for (const target of _.uniq(targets)) drawAttack(visual, labels, target, rows);
 }

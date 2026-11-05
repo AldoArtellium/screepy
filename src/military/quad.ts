@@ -51,6 +51,8 @@ export type QuadState = "forming" | "travel" | "drain" | "engage" | "retreat";
 
 export interface QuadMemory {
     spawnRoom: string;
+    /** Other bases spawning members, who walk to the spawn room to form (roi.ts helperRooms) */
+    helpers?: string[];
     targetRoom: string;
     /** Room just before the target on the route: where the quad heals up */
     stagingRoom: string;

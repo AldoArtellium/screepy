@@ -322,8 +322,8 @@ export function buildReport(state: ReportState): string {
     const military = Memory.military;
     if (military) {
         const parts: string[] = [];
-        const target = military.attack ?? military.target?.room;
-        if (target) parts.push(`${target} (${military.attack ? "manual" : military.target?.reason})`);
+        if (military.attack) parts.push(`${military.attack} (manual)`);
+        for (const target of military.targets ?? []) if (target.room !== military.attack) parts.push(`${target.room} (${target.reason})`);
         for (const entry of (military.log ?? []).filter(e => e.time > state.time)) {
             parts.push(`${entry.room} ${entry.result}, ${entry.losses} lost`);
         }

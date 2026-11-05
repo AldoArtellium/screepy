@@ -47,6 +47,7 @@ function usedRooms(): Set<string> {
     for (const squad of Object.values(Memory.expand?.squads ?? {})) used.add(squad.targetRoom);
     if (Memory.military?.attack) used.add(Memory.military.attack);
     if (Memory.military?.target) used.add(Memory.military.target.room);
+    for (const target of Memory.military?.targets ?? []) used.add(target.room);
     for (const duo of Object.values(Memory.military?.duos ?? {})) used.add(duo.targetRoom);
     for (const quad of Object.values(Memory.military?.quads ?? {})) used.add(quad.targetRoom);
     return used;

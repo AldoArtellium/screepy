@@ -295,8 +295,8 @@ function infoRows(room: Room): Entry[] {
     if (expansion?.spawnRoom === room.name) {
         rows.push({ label: "Expansion", text: `${expansion.roomName}${expansion.claimed ? " · claimed" : ""}` });
     }
-    const attack = Memory.military?.attack ?? Memory.military?.target?.room;
-    if (attack) rows.push({ label: "Attack", text: attack, color: BAD });
+    const attacks = _.uniq([...(Memory.military?.attack ? [Memory.military.attack] : []), ...(Memory.military?.targets ?? []).map(t => t.room)]);
+    if (attacks.length > 0) rows.push({ label: "Attack", text: attacks.join(" "), color: BAD });
     return rows;
 }
 

@@ -29,6 +29,8 @@ export type DuoState = "forming" | "advance" | "retreat";
 
 export interface DuoMemory {
     spawnRoom: string;
+    /** Other bases spawning members, who walk to the spawn room (roi.ts helperRooms) */
+    helpers?: string[];
     targetRoom: string;
     state: DuoState;
     /** Room just before the target on the route: where the duo heals up */

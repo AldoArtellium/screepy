@@ -143,6 +143,48 @@ export function pickTarget<T extends { room: string; roi: number }>(
     return best;
 }
 
+/**
+ * Targets of the simultaneous missions (our design, 2026-11-05: the CPU unlock left ~40 CPU idle while one
+ * mission at a time ran): the current targets whose squad has creeps (`engaged`) and are still candidates
+ * first, whatever their return, then the others by return (at least MIN_ROI, CURRENT_BONUS for a current
+ * one), at most `max`
+ */
+export function pickTargets<T extends { room: string; roi: number }>(
+    candidates: T[],
+    current: string[],
+    engaged: string[],
+    max: number
+): T[] {
+    if (max <= 0) return [];
+    const kept = candidates.filter(c => current.includes(c.room) && engaged.includes(c.room));
+    const rest = candidates
+        .filter(c => !kept.includes(c) && c.roi >= MIN_ROI)
+        .map(c => ({ c, score: current.includes(c.room) ? c.roi * CURRENT_BONUS : c.roi }))
+        .sort((x, y) => y.score - x.score)
+        .map(x => x.c);
+    return [...kept, ...rest].slice(0, max);
+}
+
+/** Route length in rooms between a mission's spawn room and the bases that spawn members for it */
+export const SHARE_RANGE = 2;
+
+/**
+ * Bases sharing a mission (our design, 2026-11-05): other rooms within SHARE_RANGE of the spawn room
+ * whose energy capacity builds the same bodies and that arm no other mission spawn some of its members,
+ * who walk to the spawn room to form (quad.ts, duo.ts): a quad's 4 members (~200 parts) took one spawn
+ * ~600 ticks, its first members waiting for the last ones
+ */
+export function helperRooms(
+    spawnRoom: string,
+    capacity: number,
+    bases: { room: string; route: number; capacity: number; busy: boolean }[]
+): string[] {
+    return bases
+        .filter(b => b.room !== spawnRoom && !b.busy && b.capacity >= capacity && b.route <= SHARE_RANGE)
+        .sort((x, y) => x.route - y.route)
+        .map(b => b.room);
+}
+
 const MAX_LOOTERS = 3;
 const TILES_PER_ROOM = 50;
 /** CREEP_LIFE_TIME (a constant here: the module stays pure for the offline check) */
