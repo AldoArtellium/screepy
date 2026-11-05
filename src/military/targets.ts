@@ -41,7 +41,8 @@ import {
     targetValue
 } from "./roi";
 import { canBoost } from "../labs/boosts";
-import { baseMineralsIn } from "../labs/chain";
+import { baseMineralsIn, chainDeficits } from "../labs/chain";
+import { labResources } from "../labs/reactions";
 import { marketAverage } from "../modules/MarketManager";
 import { countStat } from "../utils/stats";
 import { DEMAND_TTL, demandAffordable, demandAmounts, demandState } from "./boostDemand";
@@ -283,10 +284,30 @@ export function rankTargets(engaged: string[] = []): AutoTarget[] {
 /** Tick each target's demand expired (heap: lost on a global reset, then asked again at most once) */
 const demandEnded: Map<string, number> = new Map();
 
-/** Estimated credits of a compound: its market average, else ~700 per base mineral in it (shard0 O, X, L) */
-function compoundCredits(compound: string): number {
-    return marketAverage(compound as ResourceConstant) ?? baseMineralsIn(compound as ResourceConstant) * 700;
+/** Credits of a base mineral when the market has no history for it (shard0 7-day averages of O, X, L: 550-690) */
+const MINERAL_CREDITS = 700;
+
+/**
+ * Estimated credits of the base minerals the origin lacks for the compounds (labs/chain.ts chainDeficits
+ * against its storage, terminal and labs). Before (same day) every compound was priced whole at the
+ * market: the mockup, 20000 of every base mineral in stock, asked ~4.4M credits for nothing to buy.
+ */
+function demandCredits(origin: Room, compounds: { [compound: string]: number }): number {
+    const have = labResources(origin);
+    const deficits = chainDeficits(
+        Object.entries(compounds).map(([c, amount]) => [c as ResourceConstant, amount]),
+        r => have[r] ?? 0
+    );
+    let credits = 0;
+    for (const [resource, amount] of Object.entries(deficits)) {
+        if (amount <= 0 || baseMineralsIn(resource as ResourceConstant) > 1) continue;
+        credits += amount * (marketAverage(resource as ResourceConstant) ?? MINERAL_CREDITS);
+    }
+    return Math.round(credits);
 }
+
+/** Last logged reason a target's demand was left out (heap: logged once per change) */
+const demandSkipLogged: Map<string, number> = new Map();
 
 /**
  * Offensive boost demand (boostDemand.ts): ends the current one when served, expired or gone, then asks
@@ -327,9 +348,12 @@ function updateBoostDemand(from: Origin[], blocked: { room: string; value: numbe
         const roi = value / cost;
         if (roi < 1 || roi <= best) continue;
         const compounds = demandAmounts(plan.compounds, plan.parts, ATTRITION);
-        const credits = Math.round(_.sum(Object.entries(compounds), ([c, amount]) => amount * compoundCredits(c)));
+        const credits = demandCredits(origin.room, compounds);
         if (!demandAffordable(credits, Game.market.credits)) {
-            log.info("Military", `Boost demand for ${target} left out: ~${credits} credits of ${Math.round(Game.market.credits)}`);
+            if (demandSkipLogged.get(target) !== credits) {
+                demandSkipLogged.set(target, credits);
+                log.info("Military", `Boost demand for ${target} left out: ~${credits} credits of ${Math.round(Game.market.credits)}`);
+            }
             continue;
         }
         memory.boostDemand = { home: origin.room.name, target, compounds, since: Game.time, credits };
