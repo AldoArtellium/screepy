@@ -102,5 +102,40 @@ check("their reservation does not block the room", !isRemoteBlocked("W24N7", { r
 check("another player's reservation still blocks", isRemoteBlocked("W24N7", { reserver: "asdpof" }, ME, false, "Blindfold"));
 check("their owned room still blocks", isRemoteBlocked("W25N7", { owner: "Blindfold" }, ME, false, "Blindfold"));
 
+// Remote seizes (2026-11-05): another player's remote taken while they don't fight back
+const { SEIZE_SELECT_GRACE, SEIZE_TTL, pickSeizes, seizeCandidate, seizeStatus } = require(join(OUT, "remote", "remoteRooms.js"));
+const seized = { player: "doorknobnob", since: 20000, until: 20000 + SEIZE_TTL, seize: true };
+check("a seize ignores their creeps after the release grace", releaseFrom(seized, 20000 + RELEASE_CREEP_GRACE + 500)?.creeps === true);
+check("a seize is a release of their reservation", !isRemoteBlocked("W27N8", { reserver: "doorknobnob" }, ME, false, releaseFrom(seized, 20001)?.player));
+check("their creeps don't contest a seized room", contestingPlayer(
+    { reserver: "doorknobnob", creeps: [{ owner: "doorknobnob", harvests: true, claims: false }] }, ME, releaseFrom(seized, 20000 + 2000)) === undefined);
+
+const facts = { room: "W27N8", player: "doorknobnob", aggression: 0, sources: 2, distance: 1, keeper: false, owned: false };
+check("doorknobnob's remote next to ours is a seize candidate", seizeCandidate(facts, 30000, 300));
+check("a stronger player's remote too (Blindfold)", seizeCandidate({ ...facts, room: "W24N7", player: "Blindfold" }, 30000, 300));
+check("not once they fought back", !seizeCandidate({ ...facts, aggression: 300 }, 30000, 300));
+check("not an owned room", !seizeCandidate({ ...facts, owned: true }, 30000, 300));
+check("not a keeper room", !seizeCandidate({ ...facts, keeper: true }, 30000, 300));
+check("not without source", !seizeCandidate({ ...facts, sources: 0 }, 30000, 300));
+check("not out of reach", !seizeCandidate({ ...facts, distance: 3 }, 30000, 300));
+check("not an invader reservation", !seizeCandidate({ ...facts, player: "Invader" }, 30000, 300));
+check("not soon after a lost seize", !seizeCandidate({ ...facts, failedAt: 25000 }, 30000, 300));
+check("again long after a lost seize", seizeCandidate({ ...facts, failedAt: 1000 }, 30000, 300));
+
+const cands = [
+    { ...facts, room: "W27N7", sources: 1, distance: 1 },
+    { ...facts, room: "W28N4", player: "Blindfold", sources: 2, distance: 2 },
+    { ...facts, room: "W27N8", sources: 2, distance: 1 }
+];
+check("most sources first, then closest", JSON.stringify(pickSeizes(cands, [], 2)) === JSON.stringify(["W27N8", "W28N4"]));
+check("active seizes count against the cap", JSON.stringify(pickSeizes(cands, ["W24N7"], 2)) === JSON.stringify(["W27N8"]));
+check("an active seize is not picked again", JSON.stringify(pickSeizes(cands, ["W27N8"], 3)) === JSON.stringify(["W28N4", "W27N7"]));
+check("cap reached", pickSeizes(cands, ["A", "B"], 2).length === 0);
+
+check("held while mined and quiet", seizeStatus({ aggression: 0, threshold: 300, since: 1000, now: 9000, mined: true }) === "hold");
+check("held while the selection may still pick it", seizeStatus({ aggression: 0, threshold: 300, since: 1000, now: 1000 + SEIZE_SELECT_GRACE - 1, mined: false }) === "hold");
+check("unused once the selection left it out", seizeStatus({ aggression: 0, threshold: 300, since: 1000, now: 1000 + SEIZE_SELECT_GRACE, mined: false }) === "unused");
+check("lost once they fight back", seizeStatus({ aggression: 300, threshold: 300, since: 1000, now: 2000, mined: true }) === "lost");
+
 console.log(failures === 0 ? "\nall checks passed" : `\n${failures} check(s) failed`);
 process.exit(failures === 0 ? 0 : 1);

@@ -37,6 +37,7 @@ import {
 import { blockerCost } from "./blockers";
 import { isRemoteExcluded } from "./remoteBalance";
 import { isRemoteBlocked } from "./remoteRooms";
+import { updateSeizes } from "./remoteSeize";
 import { Hits, onRoomEdge, PathNeed, pathNeed, repairsDue, Tile, upkeepWork } from "./repairs";
 
 export interface RemoteSource {
@@ -820,7 +821,12 @@ export function remoteSources(homeRoom: string): RemoteSource[] {
 
 /** Remote rooms mined by every home (the CPU budget's `maxRooms` counts them) */
 export function minedRemoteRooms(): number {
-    return new Set(Object.values(memory().sources).map(s => s.room)).size;
+    return minedRemoteRoomNames().size;
+}
+
+/** Remote rooms mined by every home */
+export function minedRemoteRoomNames(): Set<string> {
+    return new Set(Object.values(memory().sources).map(s => s.room));
 }
 
 /** "home>room" of every selected source, rebuilt once per tick (heap) */
@@ -1069,6 +1075,8 @@ export const remoteMiningModule = () => {
     const mem = memory();
     if (Game.time - mem.lastSelect < SELECT_INTERVAL) return;
     mem.lastSelect = Game.time;
+    // Other players' remotes taken or given up before the selection sees them (remoteSeize.ts)
+    updateSeizes(minedRemoteRoomNames());
     selectRemotes();
     // Forget paths of sources no longer around (selected ones are refreshed within PATH_TTL)
     const all = paths();

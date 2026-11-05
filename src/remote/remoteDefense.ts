@@ -18,6 +18,8 @@ import { tierOf } from "../military/boostNeed";
 import { energyPrice } from "../modules/MarketManager";
 import type { SpawnOption } from "../spawning/spawnRoles";
 import { log } from "../utils/logger";
+import { countStat } from "../utils/stats";
+import { seizedFrom } from "./remoteSeize";
 import {
     isRemoteUnderAttack,
     remoteEnemyData,
@@ -126,9 +128,47 @@ function groupOptions(home: Room): DefenseOption[] {
     return options;
 }
 
+const NPC_OWNERS = ["Invader", "Source Keeper"];
+
+/**
+ * A mini brawler against the unarmed creeps (harvesters, reservers, haulers) of the player whose remote
+ * we seized (remoteSeize.ts): RoomIntel leaves WORK / CARRY creeps out of the room's threat abroad and
+ * `unarmedPlayers` skips reservers, so the normal defense never fights them, and their reservation
+ * blocks our harvesters and their reserver our remote spawns. Armed creeps go through the normal response.
+ */
+function seizeDefenseOptions(home: Room): DefenseOption[] {
+    const options: DefenseOption[] = [];
+    const seen = new Set<string>();
+    for (const source of remoteSources(home.name)) {
+        const roomName = source.room;
+        if (seen.has(roomName)) continue;
+        seen.add(roomName);
+        if (!seizedFrom(roomName)) continue;
+        const room = Game.rooms[roomName];
+        if (!room) continue;
+        const players = room.find(FIND_HOSTILE_CREEPS, { filter: c => !NPC_OWNERS.includes(c.owner.username) });
+        if (players.length === 0) continue;
+        if (players.some(c => c.getActiveBodyparts(ATTACK) > 0 || c.getActiveBodyparts(RANGED_ATTACK) > 0)) continue;
+        const recent = home.memory.recentDefender?.[roomName] ?? -Infinity;
+        if (Game.time - recent < DEFENDER_DELAY) continue;
+        if (creepsByRole(home.name, REMOTE_DEFENDER).some(c => c.memory.targetRoom === roomName)) continue;
+        countStat("remoteDefense:seize");
+        options.push({
+            role: REMOTE_DEFENDER,
+            priority: 3,
+            weight: 1,
+            targetRoom: roomName,
+            response: DefenseResponse.MINI_BRAWLER,
+            reason: `seize ${roomName}: ${players.length} creep(s) of ${players[0].owner.username}`
+        });
+    }
+    return options;
+}
+
 export function remoteDefenseOptions(home: Room): DefenseOption[] {
     const options = groupOptions(home);
     if (options.length > 0) return options;
+    options.push(...seizeDefenseOptions(home));
     const seen = new Set<string>();
     for (const source of remoteSources(home.name)) {
         const room = remoteThreatRoom(source);

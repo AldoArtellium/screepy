@@ -71,6 +71,8 @@ export interface ReleaseEntry {
     player: string;
     since: number;
     until: number;
+    /** A seize (remoteSeize.ts): their creeps are ignored for as long as it lasts, renewed while held */
+    seize?: boolean;
 }
 
 export const RELEASE_TTL = 20000;
@@ -80,7 +82,75 @@ export const RELEASE_CREEP_GRACE = 1500;
 /** The released player, and whether their creeps are still ignored; undefined once over */
 export function releaseFrom(entry: ReleaseEntry | undefined, time: number): { player: string; creeps: boolean } | undefined {
     if (!entry || time >= entry.until) return undefined;
-    return { player: entry.player, creeps: time - entry.since < RELEASE_CREEP_GRACE };
+    return { player: entry.player, creeps: !!entry.seize || time - entry.since < RELEASE_CREEP_GRACE };
+}
+
+/**
+ * Remote seizes (our design, 2026-11-05; not in TI or Hivemind, which never mine another player's
+ * remote). shard0 after the CPU unlock: the CPU budget was lifted and the remotes stayed at 7 sources in
+ * 5 rooms, every other room within reach being another player's remote (Blindfold W24N7, W27N4, W28N4;
+ * doorknobnob W27N7, W27N8) or a keeper room. A seize releases such a room without razing the base it is
+ * mined from: their reservation and creeps stop contesting it, remote defense kills their creeps there
+ * (remoteDefense.ts), our reserver attacks their reservation, the selection mines it. Any player, a
+ * stronger one included, while their aggression stays under the hostile threshold; once they fight
+ * back the seize is lost and the room left alone for SEIZE_FAILURE_MEMORY ticks.
+ */
+/** Ticks a seize lasts without renewal (renewed every check while held) */
+export const SEIZE_TTL = 3000;
+/** Ticks the remote selection gets to mine a seized room before the seize is dropped as unused */
+export const SEIZE_SELECT_GRACE = 3000;
+/** A lost seize is not tried again for this long */
+export const SEIZE_FAILURE_MEMORY = 20000;
+/** Linear distance of a seized room from our closest owned room that can spawn its defense */
+export const SEIZE_RANGE = 2;
+
+export interface SeizeFacts {
+    room: string;
+    /** The player reserving or mining it */
+    player: string;
+    /** That player's aggression (military intel, hits dealt to us, decaying) */
+    aggression: number;
+    sources: number;
+    /** Linear distance to our closest owned room that can defend it */
+    distance: number;
+    keeper: boolean;
+    /** The controller has an owner */
+    owned: boolean;
+    /** Tick of the last lost seize of the room */
+    failedAt?: number;
+}
+
+/** Another player's remote we may take: a player, not fighting us, a minable room within reach */
+export function seizeCandidate(facts: SeizeFacts, now: number, hostileThreshold: number): boolean {
+    if (NPCS.includes(facts.player)) return false;
+    if (facts.owned || facts.keeper || facts.sources <= 0) return false;
+    if (facts.distance > SEIZE_RANGE) return false;
+    if (facts.aggression >= hostileThreshold) return false;
+    return facts.failedAt === undefined || now - facts.failedAt >= SEIZE_FAILURE_MEMORY;
+}
+
+/** New seizes within the cap: most sources first, then the closest (candidates already filtered) */
+export function pickSeizes(candidates: SeizeFacts[], active: string[], max: number): string[] {
+    const free = max - active.length;
+    if (free <= 0) return [];
+    return candidates
+        .filter(c => !active.includes(c.room))
+        .sort((a, b) => b.sources - a.sources || a.distance - b.distance)
+        .slice(0, free)
+        .map(c => c.room);
+}
+
+/** hold: renew it; lost: they fought back; unused: the remote selection left the room out */
+export function seizeStatus(state: {
+    aggression: number;
+    threshold: number;
+    since: number;
+    now: number;
+    mined: boolean;
+}): "hold" | "lost" | "unused" {
+    if (state.aggression >= state.threshold) return "lost";
+    if (!state.mined && state.now - state.since >= SEIZE_SELECT_GRACE) return "unused";
+    return "hold";
 }
 
 /** What RoomIntel sees in a room it doesn't own */

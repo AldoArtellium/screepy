@@ -106,6 +106,42 @@ async function refillEnemyTowers(server, enemy, tick) {
   }
 }
 /**
+ * Remote of the enemy player (needs --enemy): "ROOM[:fromTick]", e.g. --enemy-remote W7N4. From fromTick
+ * (default 1) the enemy keeps a harvester (2 WORK) on ROOM's first source and a reserver parked next to
+ * its controller (a MOVE creep: the spawn has 300 energy; while it stands there this script adds the
+ * reservation 2 CLAIM parts would, every 10 ticks), like doorknobnob's W27N8 on shard0.
+ * The report adds `enemy.remote`: creeps spawned / alive in ROOM, ticks the room was reserved by the
+ * enemy and by us, the reservation at the end.
+ */
+const ENEMY_REMOTE = opt("enemy-remote", null);
+const remoteTrack = { enemyTicks: 0, ourTicks: 0 };
+
+async function reserveEnemyRemote(server, enemy, tick) {
+  const { db } = server.common.storage;
+  const room = ENEMY_REMOTE.split(":")[0];
+  const controller = await db["rooms.objects"].findOne({ room, type: "controller" });
+  if (!controller) return;
+  const time = Number(await server.world.gameTime);
+  const reservation = controller.reservation;
+  if (reservation && reservation.endTime > time) {
+    if (reservation.user === enemy.id) remoteTrack.enemyTicks++;
+    else remoteTrack.ourTicks++;
+  }
+  if (tick % 10 !== 0) return;
+  const reservers = await db["rooms.objects"].find({ room, type: "creep", user: enemy.id });
+  const parked = reservers.some(
+    (c) => /^rres/.test(c.name) && Math.abs(c.x - controller.x) <= 1 && Math.abs(c.y - controller.y) <= 1
+  );
+  if (!parked) return;
+  // Their reserver only reserves a free or already theirs controller (ours: it would attack it first)
+  if (reservation && reservation.user !== enemy.id && reservation.endTime > time) return;
+  // Like reserveController with 2 CLAIM parts: +2 ticks per tick, capped at CONTROLLER_RESERVE_MAX
+  const current = reservation && reservation.user === enemy.id && reservation.endTime > time ? reservation.endTime : time;
+  const endTime = Math.min(current + 20, time + 5000);
+  await db["rooms.objects"].update({ _id: controller._id }, { $set: { reservation: { user: enemy.id, endTime } } });
+}
+
+/**
  * Siege by the enemy player (needs --enemy at RCL 5+): "ROOM:fromTick", e.g. --siege W7N3:1500. Replays
  * doorknobnob's attack on shard0 W28N7 (2026-10-24, bodies from the room history): 2 drainers (4 HEAL
  * 4 MOVE) at the room edge, then 2 dismantlers (8 WORK 8 MOVE) and a medic (4 HEAL 4 MOVE) on the main
@@ -238,6 +274,10 @@ async function setupEnemy(server, fixture, spec) {
   const blockers = BLOCKERS && BLOCKERS.split(":");
   const memory = { defenders: Number(defendersText || 0) };
   if (blockers) memory.blockers = { room: blockers[0], count: Number(blockers[1]), from: Number(blockers[2] || 1), spawned: 0 };
+  if (ENEMY_REMOTE) {
+    const [remoteRoom, fromText] = ENEMY_REMOTE.split(":");
+    memory.remote = { room: remoteRoom, from: Number(fromText || 1), spawned: 0 };
+  }
   if (SIEGE) {
     if (rcl < 5) throw new Error("--siege needs an enemy at RCL 5+ (--enemy ROOM:5)");
     const [siegeRoom, fromText] = SIEGE.split(":");
@@ -598,6 +638,22 @@ async function enemyStatus(server, enemy) {
   const status = { spawns: count("spawn"), towers: count("tower"), towerEnergy, ramparts: count("rampart"), creeps: count("creep") };
   if (ENEMY_REFILL) status.refill = { ...refillTrack };
   if (SIEGE) status.siege = await siegeStatus(server, enemy);
+  if (ENEMY_REMOTE) {
+    const { db, env } = server.common.storage;
+    const room = ENEMY_REMOTE.split(":")[0];
+    const memory = JSON.parse((await env.get(env.keys.MEMORY + enemy.id)) || "{}");
+    const creeps = await db["rooms.objects"].find({ type: "creep", user: enemy.id, room });
+    const controller = await db["rooms.objects"].findOne({ room, type: "controller" });
+    const time = Number(await server.world.gameTime);
+    const reservation = controller && controller.reservation && controller.reservation.endTime > time ? controller.reservation : null;
+    status.remote = {
+      spawned: (memory.remote && memory.remote.spawned) || 0,
+      alive: creeps.filter((c) => /^r(harv|res)/.test(c.name)).length,
+      enemyReservedTicks: remoteTrack.enemyTicks,
+      ourReservedTicks: remoteTrack.ourTicks,
+      reservationAtEnd: reservation ? `${reservation.user === enemy.id ? "enemy" : "us"} ${reservation.endTime - time}` : "none"
+    };
+  }
   if (BLOCKERS) {
     const { db, env } = server.common.storage;
     const blockers = await db["rooms.objects"].find({ type: "creep", user: enemy.id });
@@ -1017,6 +1073,7 @@ async function main() {
       }
     }
     if (ENEMY_REFILL && enemy) await refillEnemyTowers(server, enemy, tick);
+    if (ENEMY_REMOTE && enemy) await reserveEnemyRemote(server, enemy, tick);
     if (SIEGE && !siegeTrack.safeModeCleared && tick >= Number(SIEGE.split(":")[1] || 1) - 10) {
       siegeTrack.safeModeCleared = true;
       // A new room's 20000-tick safe mode turns every hostile action into ERR_NO_BODYPART: the siege

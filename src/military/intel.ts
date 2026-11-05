@@ -68,6 +68,8 @@ declare global {
             minRcl?: number;
             /** Highest stronghold level attacked automatically (default 1) */
             maxStrongholdLevel?: number;
+            /** Other players' remotes seized at once (remote/remoteSeize.ts, default 2; 0 turns seizes off) */
+            maxSeizes?: number;
             /** Finished missions ("retargeted": the target changed, not a failure) */
             log?: {
                 room: string;

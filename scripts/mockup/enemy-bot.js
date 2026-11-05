@@ -38,7 +38,46 @@ module.exports.loop = function () {
   }
   runSiege();
   runBlockers();
+  runRemote();
 };
+
+/**
+ * Memory.remote (sim.cjs --enemy-remote): a harvester (2 WORK, drops on the ground) on the room's first
+ * source and a reserver (MOVE; sim.cjs reserves the controller while it stands next to it)
+ */
+function runRemote() {
+  const r = Memory.remote;
+  if (!r || Game.time < r.from) return;
+  const mine = Object.values(Game.creeps);
+  const wanted = [
+    { prefix: "rharv", body: [WORK, WORK, MOVE, MOVE] },
+    { prefix: "rres", body: [MOVE] }
+  ];
+  for (const w of wanted) {
+    if (mine.some((c) => c.name.startsWith(w.prefix)) || Memory.spawnedAt === Game.time) continue;
+    const spawn = Object.values(Game.spawns).find((s) => !s.spawning);
+    if (spawn && spawn.spawnCreep(w.body, w.prefix + Game.time) === OK) {
+      r.spawned++;
+      Memory.spawnedAt = Game.time;
+    }
+  }
+  for (const creep of mine) {
+    if (creep.spawning) continue;
+    if (creep.name.startsWith("rharv")) {
+      if (creep.room.name !== r.room) {
+        creep.moveTo(new RoomPosition(25, 25, r.room), { reusePath: 10, range: 20 });
+        continue;
+      }
+      const source = creep.room.find(FIND_SOURCES)[0];
+      if (creep.harvest(source) === ERR_NOT_IN_RANGE) creep.moveTo(source, { reusePath: 10 });
+      if (creep.store.getFreeCapacity() === 0) creep.drop(RESOURCE_ENERGY);
+    } else if (creep.name.startsWith("rres")) {
+      const room = Game.rooms[r.room];
+      const target = room && room.controller ? room.controller.pos : new RoomPosition(25, 25, r.room);
+      if (!creep.pos.isNearTo(target)) creep.moveTo(target, { reusePath: 10, range: 1 });
+    }
+  }
+}
 
 /** Siege bodies and counts, from doorknobnob's creeps in shard0 W28N7's history (2026-10-24) */
 const SIEGE_ROLES = [
