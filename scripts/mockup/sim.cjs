@@ -191,6 +191,8 @@ const STRUCTURES = (() => {
 })();
 /** CPU limit of the bot (default: the mockup's, 100), e.g. 8 to drain the bucket and test throttling */
 const CPU_LIMIT = opt("cpu-limit", null);
+/** Market credits of our player, e.g. --credits 1000000 (no market in the mockup: only what the bot reads) */
+const CREDITS = opt("credits", null);
 /**
  * Plan-based fast-forward (--preset rcl6, rcl8, or planN for any level 5-8): once the bot stored its room
  * plan, the controller jumps to that level and the plan's storage (300k energy), extensions, towers,
@@ -973,6 +975,11 @@ async function main() {
   if (CPU_LIMIT !== null) {
     await server.common.storage.db.users.update({ _id: user.id }, { $set: { cpu: Number(CPU_LIMIT), cpuAvailable: 10000 } });
     log(`CPU limit ${CPU_LIMIT}, bucket 10000`);
+  }
+  if (CREDITS !== null) {
+    // users.money is in thousandths of a credit (Game.market.credits = money / 1000)
+    await server.common.storage.db.users.update({ _id: user.id }, { $set: { money: Number(CREDITS) * 1000 } });
+    log(`Credits ${CREDITS}`);
   }
   log(`Bundle ${CODE} (${(main.length / 1024).toFixed(0)} KB), spawn in ${ROOM} at ${spot.x},${spot.y}`);
 
