@@ -45,7 +45,7 @@ import { baseMineralsIn, chainDeficits } from "../labs/chain";
 import { labResources } from "../labs/reactions";
 import { marketAverage } from "../modules/MarketManager";
 import { countStat } from "../utils/stats";
-import { DEMAND_TTL, demandAffordable, demandAmounts, demandState } from "./boostDemand";
+import { BoostDemand, DEMAND_TTL, demandAffordable, demandAmounts, demandState } from "./boostDemand";
 import { describeBoosts, planSquad, SquadPlan, squadMemberCosts } from "./sizing";
 import { blocksExpansion, isEncroacher, playerReason, spareRemoteRooms, StrategicReason, usableSources } from "./strategy";
 
@@ -264,7 +264,11 @@ export function rankTargets(engaged: string[] = []): AutoTarget[] {
             // The energy a player's creeps made us lose only counts once they fought us
             infamy: reason === "aggressor" ? (memory.infamy?.[intel.owner!] ?? 0) : 0
         });
-        const near = feasibleOrigin(from, roomName);
+        // A target waiting for its boost demand stays blocked until every compound is in stock: feasibility is
+        // the looser old rule, so a part of the compounds made it "feasible" (mockup W8N3 with a refilled tower:
+        // LO in stock, XGHO2 not yet, the quad went with HEAL boosts only and lost 10 creeps)
+        const waiting = memory.boostDemand?.target === roomName && !demandReady(memory.boostDemand);
+        const near = waiting ? null : feasibleOrigin(from, roomName);
         if (!near) {
             blocked.push({ room: roomName, value });
             continue;
@@ -304,6 +308,14 @@ function demandCredits(origin: Room, compounds: { [compound: string]: number }):
         credits += amount * (marketAverage(resource as ResourceConstant) ?? MINERAL_CREDITS);
     }
     return Math.round(credits);
+}
+
+/** One squad's worth of every compound of the demand is in its origin (labs, storage, terminal, carriers) */
+function demandReady(demand: BoostDemand): boolean {
+    const home = Game.rooms[demand.home];
+    if (!home) return false;
+    const have = labResources(home);
+    return Object.entries(demand.compounds).every(([c, amount]) => (have[c] ?? 0) >= amount / ATTRITION);
 }
 
 /** Last logged reason a target's demand was left out (heap: logged once per change) */
