@@ -24,7 +24,7 @@
 import { getBestOption } from "../core/options";
 import { isFullOn, myRoomsWithTerminal, prepareForTrading, resourceAmount, totalResources } from "../core/resources";
 import { DemandTarget, mineralNeeds, upgradeValuePerMineral } from "../labs/chain";
-import { offenseMaxPrice } from "../military/boostDemand";
+import { OFFENSE_CREDIT_FLOOR, offenseMaxPrice } from "../military/boostDemand";
 import { demandTargetsOf, labResources } from "../labs/reactions";
 import { buyOrdersAbovePrice, buyOrdersToCancel, forcedBuyPays, instantSellPays, PriceData, prefersInstantSell, repricedSellPrice, sellOrderPrice, spendableCredits } from "../market/pricing";
 import { log } from "../utils/logger";
@@ -361,6 +361,9 @@ type MineralNeeds = ReturnType<typeof mineralNeeds>;
  * what every room holds (labs and carriers included in reaction rooms): military demand first, then
  * upgrade compounds (worth upgradeValuePerMineral x the energy price), threat and defense stocks never bought
  */
+/** A lab room makes military compounds against enemies at home: its base minerals are bought whatever the credits */
+let homeDefenseDemand = false;
+
 function labMineralNeeds(rooms: Room[]): MineralNeeds {
     const work = (BOOSTS as unknown as Record<string, Record<string, Record<string, number>>>)[WORK];
     // The energy price only once an upgrade target lacks base minerals (mineralNeeds asks lazily)
@@ -385,6 +388,7 @@ function labMineralNeeds(rooms: Room[]): MineralNeeds {
             else if (target.kind === "upgrade") upgrade.push(target);
         }
     }
+    homeDefenseDemand = military.some(t => t.kind === "military");
     if (military.length + upgrade.length === 0) return {};
     const have: { [resourceType: string]: number } = {};
     const add = (resources: { [resourceType: string]: number }) => {
@@ -465,6 +469,8 @@ export const marketManagerModule = (): void => {
         for (const resourceType in resources) states.total[resourceType] = (states.total[resourceType] ?? 0) + resources[resourceType];
     }
     const needs = labMineralNeeds(rooms);
+    // Without enemies at home, base mineral buys keep the offensive credit floor (military/boostDemand.ts)
+    if (!homeDefenseDemand) availableCredits = Math.min(availableCredits, Math.max(0, Game.market.credits - OFFENSE_CREDIT_FLOOR));
 
     for (const resourceType of RESOURCES_ALL) {
         if (resourceTier(resourceType) === 1) manageBaseMineral(resourceType, states, needs);

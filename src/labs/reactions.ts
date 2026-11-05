@@ -34,11 +34,17 @@ declare global {
  * LHO2, GHO2... that nothing used, 20000 ticks without a single boost. Before 2026-11-04 the threat
  * stock was made with `Memory.military.auto = false` too (no squad to use it); without it, the smaller
  * defense stock (chain.ts DEFENSE_TARGETS: guardians, emergency builders, boosted remote defenders).
+ * An attack mission's compounds are `offense` (bought above the offensive credit floor only, boostDemand.ts),
+ * enemies at home keep `military` (bought whatever the credits): shard0 2026-11-05, the quads on W26N3 and
+ * W28N3 took the credits from 271k to 174k in 1300 ticks with forced buys in every lab room.
  */
 export function demandTargetsOf(room: Room): DemandTarget[] {
-    const militaryFirst = currentTarget() !== undefined || enemyStrength(room) >= ENEMY_STRENGTH_NORMAL;
+    const homeThreat = enemyStrength(room) >= ENEMY_STRENGTH_NORMAL;
+    const mission = currentTarget() !== undefined;
     const militaryWanted = Memory.military?.auto !== false && roomThreat(room) > 0;
-    const targets = demandTargets(room.controller?.level ?? 0, militaryFirst, militaryWanted);
+    const targets = demandTargets(room.controller?.level ?? 0, homeThreat || mission, militaryWanted).map(t =>
+        t.kind === "military" && !homeThreat ? { ...t, kind: "offense" as const } : t
+    );
     // The compounds a target blocked only by the stock needs (military/boostDemand.ts), in its origin first
     const demand = Memory.military?.boostDemand;
     if (demand?.home !== room.name) return targets;
