@@ -25,7 +25,7 @@ import {
     remoteSources,
     sourceEnergyCapacity
 } from "./RemoteMining";
-import { isKeeperOrCenter, killerNeeded, killerParts } from "./keepers";
+import { isKeeperOrCenter, keeperRoomHeld, killerNeeded, killerParts } from "./keepers";
 
 import { builderWork } from "./repairs";
 import { pathTerrain, recordSpawnLateness, spawnLeadObserved, travelObserved, walkTicks } from "./travel";
@@ -260,6 +260,12 @@ function killerBody(home: Room): BodyPartConstant[] {
     ];
 }
 
+/** A killer of the home is in the keeper room (not spawning, not on its way) */
+function killerHolds(home: Room, roomName: string): boolean {
+    const killers = creepsByRole(home.name, KEEPER_KILLER).filter(c => c.memory.keeperRoom === roomName);
+    return keeperRoomHeld(killers.map(c => ({ spawning: c.spawning, inRoom: c.room.name === roomName })));
+}
+
 /** A keeper room's killer, before its harvesters: a successor once none outlives its spawn and travel */
 function killerOption(home: Room, source: RemoteSource): RemoteOption | null {
     const body = killerBody(home);
@@ -338,8 +344,8 @@ export const remoteSpawnRole: SpawnRole = {
                 const killer = killerOption(home, source);
                 if (killer) return [killer];
             }
-            // No harvester walks into live keepers: its killer spawning or alive first
-            if (keeperRoom && !creepsByRole(home.name, KEEPER_KILLER).some(c => c.memory.keeperRoom === source.room)) continue;
+            // No harvester walks into live keepers: its killer in the room first (keepers.ts keeperRoomHeld)
+            if (keeperRoom && !killerHolds(home, source.room)) continue;
             const harvester = harvesterOption(home, source);
             if (!harvester) harvesterWanted.delete(source.key);
             else if (!harvesterWanted.has(source.key)) {

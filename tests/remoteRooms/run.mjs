@@ -212,5 +212,15 @@ check("an old killer arriving later than its end: successor", killerNeeded([{ sp
 check("a young killer: none", !killerNeeded([{ spawning: false, ticksToLive: 900 }], 150));
 check("an old one and its successor: none", !killerNeeded([{ spawning: false, ticksToLive: 100 }, { spawning: true }], 150));
 
+// Harvesters only once a killer holds the room. shard0 2026-11-14 (deploy 16:35): with "spawning or alive"
+// W27N5 sent 4 harvesters (spawned in 69 ticks) to W26N4:6:37 ahead of its killer (150 ticks): 24 remote
+// harvesters in 700 ticks, storage 49k -> 21k
+const { keeperRoomHeld } = keepers;
+check("no killer: not held", !keeperRoomHeld([]));
+check("a spawning killer does not hold the room", !keeperRoomHeld([{ spawning: true, inRoom: false }]));
+check("a killer on its way does not", !keeperRoomHeld([{ spawning: false, inRoom: false }]));
+check("a killer in the room holds it", keeperRoomHeld([{ spawning: false, inRoom: true }]));
+check("the old killer still there holds it while its successor spawns", keeperRoomHeld([{ spawning: false, inRoom: true }, { spawning: true, inRoom: false }]));
+
 console.log(failures === 0 ? "\nall checks passed" : `\n${failures} check(s) failed`);
 process.exit(failures === 0 ? 0 : 1);

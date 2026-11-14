@@ -158,6 +158,15 @@ export function inKeeperDanger(pos: Point, dangers: Point[]): boolean {
 }
 
 /**
+ * A keeper room's harvesters are spawned only while a killer is in the room. shard0 2026-11-14: with
+ * "spawning or alive", harvesters (69 ticks to spawn) reached W26N4 before their killer (150 ticks):
+ * W27N5 spawned 24 remote harvesters in 700 ticks and its storage fell from 49k to 21k.
+ */
+export function keeperRoomHeld(killers: { spawning?: boolean; inRoom: boolean }[]): boolean {
+    return killers.some(k => !k.spawning && k.inRoom);
+}
+
+/**
  * A new killer is due once none spawning or alive outlives `lead` ticks (its spawn time and travel):
  * the successor reaches the room as the old one dies
  */
