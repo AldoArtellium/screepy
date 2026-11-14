@@ -25,9 +25,11 @@ import { openSiege, runSieges, siegePlan } from "./siege";
 import { hostileRoom, militaryMemory, updateMilitaryIntel } from "./intel";
 import { lootRamparts, startLooting, updateLootMissions } from "./loot";
 import { QUAD_ATTACKER, QUAD_HEALER, QUAD_ROSTER, QuadMemory, runQuad } from "./quad";
+import { DRAINER, drainerCreeps, runDrainers } from "./drainer";
 import { squadRoute } from "./route";
 import {
     describeBoosts,
+    drainerBody,
     duoAttackerBody,
     duoHealerBody,
     planSquad,
@@ -89,7 +91,7 @@ function minRcl(): number {
  * (startMission): shard0 W28N8, W28N7 (RCL 5, no labs) next to it rallies, W29N7 (RCL 6, labs, XLHO2 and
  * GHO2) one more room spawns the boosted members.
  */
-function findOrigin(target: string): { spawnRoom: string; stagingRoom: string } | null {
+function findOrigin(target: string): { spawnRoom: string; stagingRoom: string; length: number } | null {
     let best: { spawnRoom: string; stagingRoom: string; length: number } | null = null;
     for (const room of _.filter(Game.rooms, r => !!r.controller?.my && r.controller.level >= minRcl())) {
         if (room.find(FIND_MY_SPAWNS).length === 0) continue;
@@ -339,7 +341,14 @@ function startMission(target: string): void {
         ...(takeover !== undefined && { takeover })
     };
     if (plan.type === "duo") memory.duos[`duo.${target}`] = { ...base, state: "forming" };
-    else memory.quads = { ...memory.quads, [`quad.${target}`]: { ...base, state: "forming" } };
+    else {
+        // Towers the quad doesn't tank: a drainer first, the quad once they are predicted empty (drainer.ts)
+        const probe = !plan.tanks && (hostileRoom(target)?.towers ?? 1) > 0;
+        memory.quads = {
+            ...memory.quads,
+            [`quad.${target}`]: { ...base, state: probe ? "probe" : "forming", ...(probe && { probeSince: Game.time }) }
+        };
+    }
     log.info(
         "Military",
         `${plan.type} rallying in ${origin.spawnRoom} from ${bases.join("+")}`,
@@ -456,7 +465,16 @@ function runMilitary(): void {
         if (upgrade) {
             // The duo was sized on stale intel: the threat seen in the fight calls for a quad
             delete memory.duos[name];
-            const quad: QuadMemory = { ...duo, members: [], state: "forming", boosts: upgrade.compounds, boostLosses: duo.losses };
+            // A quad that doesn't tank the towers probes them with a drainer first, like a new mission
+            const probe = !upgrade.tanks && (hostileRoom(duo.targetRoom)?.towers ?? 1) > 0;
+            const quad: QuadMemory = {
+                ...duo,
+                members: [],
+                state: probe ? "probe" : "forming",
+                ...(probe && { probeSince: Game.time }),
+                boosts: upgrade.compounds,
+                boostLosses: duo.losses
+            };
             memory.quads = { ...memory.quads, [`quad.${duo.targetRoom}`]: quad };
             log.info("Military", `${name} lost ${duo.losses} creeps: a quad takes over (boosts ${describeBoosts(upgrade.compounds)})`);
             continue;
@@ -476,13 +494,44 @@ function runMilitary(): void {
             : quad.drainStalled
               ? "abandoned"
               : endReason(quad);
-        if (quadEnd) finish("quad", name, quad, quadEnd);
-        else {
-            escalateBoosts("quad", name, quad);
-            runQuad(name, quad);
+        if (quadEnd) {
+            finish("quad", name, quad, quadEnd);
+            continue;
         }
+        trackDrainer(name, quad);
+        const decision = runDrainers(name, quad);
+        if (decision === "noFire" || decision === "noProgress") {
+            countStat(`military:drain:${decision}`);
+            const why = decision === "noFire" ? "the towers never fire at the exit tile" : "the refills keep up";
+            log.info("Military", `${name}: ${why}, abandoned before spawning the quad`);
+            finish("quad", name, quad, "abandoned");
+            continue;
+        }
+        if (decision === "spawn") {
+            quad.state = "forming";
+            countStat("military:drainSpawn");
+            const eta = quad.probe?.rate ? Math.round((quad.probeEnergy ?? 0) / quad.probe.rate) : 0;
+            log.info("Military", `${name}: towers at ${quad.probeEnergy ?? 0} energy, empty in ~${eta} ticks: spawning the quad`);
+        }
+        escalateBoosts("quad", name, quad);
+        if (quad.state !== "probe") runQuad(name, quad);
     }
     runSieges();
+}
+
+/** A drainer gone before its time is a loss of the mission (MAX_LOSSES, escalation) */
+function trackDrainer(name: string, quad: QuadMemory): void {
+    const tracked = quad.drainer;
+    if (tracked && !Game.creeps[tracked.name]) {
+        if (Game.time < tracked.dies - 5) {
+            quad.losses++;
+            countStat("military:drainerLost");
+            log.info("Military", `${name}: lost drainer ${tracked.name}`);
+        }
+        delete quad.drainer;
+    }
+    const alive = drainerCreeps(name).find(c => !c.spawning && c.ticksToLive !== undefined);
+    if (alive) quad.drainer = { name: alive.name, dies: Game.time + alive.ticksToLive! };
 }
 
 /** A squad member to spawn; `started`: another member is already alive or spawning */
@@ -510,6 +559,7 @@ function memberEnergy(room: Room, mission: Mission | undefined): number {
 }
 
 function memberBody(role: string, energy: number): BodyPartConstant[] {
+    if (role === DRAINER) return drainerBody(energy);
     if (role === DUO_HEALER) return duoHealerBody(energy);
     if (role === QUAD_HEALER) return quadHealerBody(energy);
     if (role === QUAD_ATTACKER) return quadAttackerBody(energy);
@@ -542,6 +592,14 @@ function offersBoosted(room: Room, mission: Mission, role: string): boolean {
 function missingMember(room: Room): MissingMember | null {
     for (const { kind, name, mission } of missionsInOrder()) {
         if (!mission.bases.includes(room.name)) continue;
+        // One drainer at a time: alone while probing, and replaced while the quad forms (one that dies of
+        // age before the quad gets there would leave the towers to refill)
+        const probing = kind === "quad" && (mission.state === "probe" || (mission.state === "forming" && !!(mission as QuadMemory).probe));
+        if (probing) {
+            const drainers = drainerCreeps(name).length + claimedRoles(name).filter(r => r === DRAINER).length;
+            if (drainers === 0) return { name, role: DRAINER, started: false, type: kind };
+            if (mission.state === "probe") continue;
+        }
         if (kind === "quad" && mission.state !== "forming") continue;
         const creeps = kind === "duo" ? duoCreeps(name) : quadCreeps(name);
         const pending = claimedRoles(name);
@@ -569,7 +627,11 @@ function memberOption(room: Room, missing: MissingMember): SpawnOption[] {
     const type = missing.type;
     if (!missing.started) {
         const mission = type === "duo" ? militaryMemory().duos[missing.name] : militaryMemory().quads?.[missing.name];
-        const squad = _.sum(squadMemberCosts(type, memberEnergy(room, mission)));
+        const energy = memberEnergy(room, mission);
+        const squad =
+            missing.role === DRAINER
+                ? _.sum(drainerBody(energy), p => BODYPART_COST[p])
+                : _.sum(squadMemberCosts(type, energy));
         if (effectiveEnergy(room) < MIN_ENERGY + squad) return [];
     }
     return [
@@ -606,6 +668,8 @@ export const militarySpawnRole: SpawnRole = {
             claimed.tick = Game.time;
             claimed.members.push(`${name}|${option.role}`);
         }
+        // A drainer is no quad member (quadCreeps, roster, formation): its own key
+        if (option.role === DRAINER) return { role: option.role, room: room.name, drain: option.memory?.quad };
         return { role: option.role, room: room.name, duo: option.memory?.duo, quad: option.memory?.quad };
     },
 
@@ -616,6 +680,8 @@ export const militarySpawnRole: SpawnRole = {
      * are sized for plain MOVE parts. The squad waits at most SQUAD_BOOST_TIMEOUT ticks for them.
      */
     boosts(room, option, body) {
+        // The drainer stays plain: the compounds in stock are the quad's (its feasibility counted on them)
+        if (option.role === DRAINER) return {};
         const mission = missionOf(option);
         if (mission?.boosts) {
             const chosen = mission.boosts;
@@ -637,6 +703,9 @@ for (const role of [DUO_ATTACKER, DUO_HEALER]) {
         if (!creep.memory.duo || !militaryMemory().duos[creep.memory.duo]) performRecycle(creep);
     });
 }
+registerRole(DRAINER, creep => {
+    if (!creep.memory.drain || !militaryMemory().quads?.[creep.memory.drain]) performRecycle(creep);
+});
 for (const role of [QUAD_ATTACKER, QUAD_HEALER]) {
     registerRole(role, creep => {
         if (!creep.memory.quad || !militaryMemory().quads?.[creep.memory.quad]) performRecycle(creep);

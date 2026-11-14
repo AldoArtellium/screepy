@@ -146,6 +146,11 @@ const threat = (towers, creeps = 0, heal = 0) => ({
     check("3 player towers, XLHO2 only: infeasible with tank", !tanks.feasible, JSON.stringify(tanks));
     const tough = chooseSquad(rcl8({ XLHO2: 9000, XGHO2: 9000 }), threat(3), true, { tank: true });
     check("3 player towers, XLHO2 + XGHO2: feasible with tank", tough.feasible && tough.compounds.tough === "XGHO2", JSON.stringify(tough));
+    // `tanks`: the chosen squad out-heals the towers on its front at close range (no drain needed)
+    check("XLHO2 only: doesn't tank (drainer first)", lasts.tanks === false, JSON.stringify(lasts));
+    check("XLHO2 + XGHO2: tanks (straight in)", tough.tanks === true, JSON.stringify(tough));
+    const edge = chooseSquad(rcl8({ XLHO2: 9000 }), threat(3), false);
+    check("edge rule (drain path): feasible, doesn't tank", edge.feasible && edge.tanks === false, JSON.stringify(edge));
 }
 
 // 5. A cheap T1 beats a T3 that also holds: with prices, T3 at 20 energy a unit, T1 at 2

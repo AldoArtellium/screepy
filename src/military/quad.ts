@@ -42,6 +42,7 @@ import {
     watchDrain
 } from "./combat";
 import { isMine, landing, pickTarget, travelCallback } from "./duo";
+import { drainerCreeps } from "./drainer";
 import { hostileRoom } from "./intel";
 
 export const QUAD_ATTACKER = "quadAttacker";
@@ -49,7 +50,8 @@ export const QUAD_HEALER = "quadHealer";
 /** Spawn order and formation order (attackers lead) */
 export const QUAD_ROSTER = [QUAD_HEALER, QUAD_HEALER, QUAD_ATTACKER, QUAD_ATTACKER];
 
-export type QuadState = "forming" | "travel" | "drain" | "engage" | "retreat";
+/** "probe": only a drainer out (drainer.ts), the quad spawns once the towers are predicted empty */
+export type QuadState = "probe" | "forming" | "travel" | "drain" | "engage" | "retreat";
 
 export interface QuadMemory {
     /** Rally room: the base closest to the target, where the squad forms */
@@ -63,6 +65,8 @@ export interface QuadMemory {
     targetRoom: string;
     /** Room just before the target on the route: where the quad heals up */
     stagingRoom: string;
+    /** Rooms of the route from spawnRoom to the target (military.ts findOrigin) */
+    length?: number;
     state: QuadState;
     /** Members seen alive (to count losses) */
     members: string[];
@@ -85,6 +89,13 @@ export interface QuadMemory {
     drainWatch?: import("./combat").DrainWatch;
     /** The drain didn't bring the towers' energy down: the mission is abandoned (military.ts) */
     drainStalled?: boolean;
+    /** The drainer's measure of the towers (drainForecast.ts), and their total energy last seen */
+    probe?: import("./drainForecast").DrainForecast;
+    probeEnergy?: number;
+    /** Tick the mission started probing (drainer.ts PROBE_TIMEOUT) */
+    probeSince?: number;
+    /** The drainer being tracked and its death by age (an earlier death counts as a loss) */
+    drainer?: { name: string; dies: number };
 }
 
 declare global {
@@ -602,7 +613,7 @@ function travel(group: Creep[], goalRoom: string): void {
  * It steps back below 60%. Over once the towers are seen empty (towers that out-damage our healing
  * near the border would kill a packed quad before it gets anywhere).
  */
-function drain(quad: QuadMemory, group: Creep[]): void {
+function drain(name: string, quad: QuadMemory, group: Creep[]): void {
     const room = Game.rooms[quad.targetRoom];
     if ((room && enemyTowers(room).length === 0) || tanksTowers(group, quad)) {
         quad.drained = true;
@@ -629,7 +640,9 @@ function drain(quad: QuadMemory, group: Creep[]): void {
     const rally = quad.rally ? new RoomPosition(quad.rally.x, quad.rally.y, quad.rally.room) : null;
     let poker = quad.poker ? Game.creeps[quad.poker] : undefined;
     if (poker && hitsRatio(poker) < RETREAT_HITS) poker = undefined;
-    if (!poker && !group.some(c => c.room.name === quad.targetRoom)) {
+    // The mission's drainer still bounces (drainer.ts): no poker of the quad's own, all wait at the rally
+    if (drainerCreeps(name).some(c => !c.spawning)) poker = undefined;
+    else if (!poker && !group.some(c => c.room.name === quad.targetRoom)) {
         // Attackers only (healers would die to a couple of shots)
         const ready = group.filter(c => c.memory.role === QUAD_ATTACKER && hitsRatio(c) >= DRAIN_READY);
         poker = ready.length ? _.max(ready, c => c.hits) : undefined;
@@ -899,11 +912,11 @@ export function runQuad(name: string, quad: QuadMemory): void {
             const shouldDrain = !quad.drained && towersLeft && atBorder && quad.stagingRoom !== quad.targetRoom;
             if (shouldDrain && !tanksTowers(group, quad)) {
                 quad.state = "drain";
-                drain(quad, group);
+                drain(name, quad, group);
             } else travel(group, quad.targetRoom);
         } else if (quad.state === "drain") {
             attackQuad(group, null);
-            drain(quad, group);
+            drain(name, quad, group);
         } else {
             const room = Game.rooms[quad.targetRoom];
             const danger = group.some(c => hitsRatio(c) < RETREAT_HITS || !canEscape(c, group));
