@@ -224,8 +224,8 @@ function remoteHarvesterSources(): Set<string> {
 
 /**
  * Spawn cost of a remote creep on the sources it serves: a remote harvester's on its source, a
- * reserver's split over its room's sources, haulers' and remote builders' (one pool per home) over
- * the home's sources in proportion to their travel time (an estimate: hauling scales with distance).
+ * reserver's (and a keeper killer's) split over its room's sources, haulers' and remote builders' (one
+ * pool per home) over the home's sources in proportion to their travel time (an estimate: hauling scales with distance).
  */
 function addSpawnCost(home: string, memory: Partial<CreepMemory>, cost: number): void {
     const sources = Memory.remoteMining?.sources;
@@ -235,8 +235,9 @@ function addSpawnCost(home: string, memory: Partial<CreepMemory>, cost: number):
         return;
     }
     let served: { key: string; travelTime: number }[] = [];
-    if (memory.reserveRoom) {
-        served = _.filter(sources, s => s.homeRoom === home && s.room === memory.reserveRoom).map(s => ({ key: s.key, travelTime: 1 }));
+    const room = memory.reserveRoom ?? memory.keeperRoom;
+    if (room) {
+        served = _.filter(sources, s => s.homeRoom === home && s.room === room).map(s => ({ key: s.key, travelTime: 1 }));
     } else if (SPLIT_BY_TRAVEL.includes(memory.role ?? "")) {
         // Only the sources the pool works for: remote builders pick sources with a remote harvester,
         // haulers are only counted for a source with a harvester and a container (remoteSpawnRole).

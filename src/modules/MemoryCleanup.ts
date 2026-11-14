@@ -62,6 +62,9 @@ export const memoryCleanupModule = (): void => {
         lastCreepCleanup = Game.time;
         for (const name in Memory.creeps) {
             if (Game.creeps[name]) continue;
+            // A keeper killer gone before its end of life or its recycling died fighting (roles/keeperKiller.ts)
+            const dead = Memory.creeps[name];
+            if (dead.role === "keeperKiller" && !dead.expiring) countStat("keeper:killerDied");
             delete Memory.creeps[name];
             countStat("memory:deadCreep");
         }

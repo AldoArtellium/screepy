@@ -96,3 +96,25 @@ node tests/traffic/run.mjs
 
 ## Décisions pendant le build
 
+- Mockup : les keepers n'apparaissaient pas dans W6N4 (aucun en 3000 ticks rcl7) : le moteur ne traite qu'une
+  room active (objet d'un joueur) et la fixture n'avait que les lairs. `sim.cjs` place un keeper par lair au
+  départ et garde les rooms SK actives à chaque tick (comme le serveur officiel) ; ligne `Source keepers` et
+  clé `keepers` dans le rapport.
+- Tueur à distance au lieu d'ATTACK19 HEAL6 MOVE25 (critère 3) : dans le moteur, HEAL annule ATTACK le même
+  tick et le keeper rend 300 par coup de mêlée ; le duel hors ligne donne la recette mêlée perdante en 9 ticks
+  (keeper à 2870 PV), et au mockup un tueur mêlée de 36 parts est mort 3 fois pour 1 keeper tué. À portée 3 le
+  keeper ne fait que 100/tick : RANGED12 HEAL5 MOVE17 (3900) gagne en 42 ticks, corps grandi avec l'énergie
+  jusqu'à RANGED18 HEAL7 (`keepers.ts` `killerParts`). Mockup : 47 keepers tués, 0 tueur mort sur 8000 ticks.
+- Seuil : RCL 7 et capacité ≥ 3900 (le corps minimal), pas seulement RCL 7 : la base du preset rcl7 plafonne
+  à 4100 (35 extensions), un tueur réduit meurt.
+- Coût du tueur imputé au bilan des sources de sa room (`history.ts`, comme un reserver).
+- Relecture (alemca:typescript-reviewer, aucun CRITICAL/HIGH) : harvesters seulement une fois le tueur vivant
+  ou en spawn ; le tueur garde toutes les sources de la room ; chemins à 4 tuiles du minéral (coût 50).
+  Non corrigé, documenté : le chemin vers la room centrale peut attendre 500 ticks (échec en cache).
+- Fuite élargie aux sources d'un lair qui spawne dans 10 ticks (W6N4:15:43 perdait 7 harvesters) et corps
+  plaine pour les harvesters des rooms SK ; compteur `keeper:hit` ajouté pour le diagnostic.
+- Critère 7 non atteint : au mockup W7N3 rcl7 12000 ticks, énergie remote et points plats (1,030 M / 0,985 M
+  contre 0,989 M ; 5,709 M / 5,714 M contre 5,722 M), stockage plus bas, CPU +1,1 à +1,4, 0 erreur ; une source
+  de W6N4 récolte 0,6 à 3,8 k sur 13,3 k par 1000 ticks pour 1,7 à 8,4 k de coût. À ne pas déployer en l'état :
+  décision de l'utilisateur (2 tueurs par room, attente hors du chemin du keeper, ou retrait).
+
