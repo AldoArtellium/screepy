@@ -1,6 +1,7 @@
 /**
  * Offline check of military/combat: healing, attack power and damage taken by boosted bodies, and
- * whether a quad out-heals the towers that focus its front (no border drain needed).
+ * whether a quad out-heals the towers that focus its front (no border drain needed), and when a border
+ * drain stalls against refilled towers.
  *
  *   node tests/combat/run.mjs
  */
@@ -42,7 +43,7 @@ Object.assign(globalThis, {
     },
 });
 
-const { healPower, attackPower, damageMultiplier, canTank } = require(join(OUT, "military", "combat.js"));
+const { healPower, attackPower, damageMultiplier, canTank, watchDrain, DRAIN_PATIENCE } = require(join(OUT, "military", "combat.js"));
 
 let failures = 0;
 const check = (name, ok, detail) => {
@@ -84,6 +85,16 @@ check("LHO2 + GHO2 quad tanks one tower (300 vs 432)", canTank(heal("LHO2"), 1, 
 check("XLHO2 + GHO2 quad can't tank two towers (600 vs 576)", !canTank(heal("XLHO2"), 2, damageMultiplier(attacker("GHO2"))));
 check("XLHO2 + XGHO2 quad tanks two towers (360 vs 576)", canTank(heal("XLHO2"), 2, damageMultiplier(attacker("XGHO2"))));
 check("no tower: nothing to tank", canTank(0, 0, 1));
+
+// Border drain progress: a checkpoint each time the towers' energy halves, stalled after DRAIN_PATIENCE ticks without
+const first = watchDrain(undefined, 1000, 2400);
+check("first sight: checkpoint, not stalled", first.watch.since === 1000 && first.watch.energy === 2400 && !first.stalled);
+const draining = watchDrain(first.watch, 1100, 1100);
+check("halved: new checkpoint", draining.watch.since === 1100 && draining.watch.energy === 1100 && !draining.stalled);
+check("refilled before the patience: not stalled", !watchDrain(first.watch, 1000 + DRAIN_PATIENCE - 1, 2300).stalled);
+// shard0 W29N4 2026-11-14: 3 towers between 500 and 900 energy, refilled by fillers
+check("refilled after the patience: stalled", watchDrain({ since: 1000, energy: 2260 }, 1000 + DRAIN_PATIENCE, 1500).stalled);
+check("stalled keeps the checkpoint", watchDrain(first.watch, 2000, 2400).watch.since === 1000);
 
 console.log(failures === 0 ? "\nall checks passed" : `\n${failures} check(s) failed`);
 process.exit(failures === 0 ? 0 : 1);
