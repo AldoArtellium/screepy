@@ -35,6 +35,7 @@ import {
 import { reclaimSpawnRole, squadSpawnRole } from "../expansion/squadSpawnRole";
 import { looterSpawnRole } from "../military/loot";
 import { militarySpawnRole } from "../military/military";
+import { siegeSpawnRole } from "../military/siege";
 import { REMOTE_HARVESTER, REMOTE_HAULER, remoteSpawnRole } from "../remote/remoteSpawnRole";
 import { remoteSources } from "../remote/RemoteMining";
 import { dismantlerSpawnRole } from "../remote/dismantle";
@@ -735,6 +736,7 @@ export const ECONOMY_SPAWN_ROLES: SpawnRole[] = [
     reclaimSpawnRole,
     remoteSpawnRole,
     roomDefense,
+    siegeSpawnRole,
     squadSpawnRole,
     transporter,
     upgrader

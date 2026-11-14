@@ -271,22 +271,40 @@ check("current bonus between the others", rooms(pickTargets([a, b, c], ["A"], []
 check("engaged first, never above the cap", rooms(pickTargets([a, b, c], ["A", "B"], ["A", "B"], 2)) === "A,B");
 check("an engaged room no longer a candidate is dropped", rooms(pickTargets([b, c], ["A"], ["A"], 2)) === "C,B");
 
-// Shared missions: other bases spawn members of the same squad (shard0: W29N7 and W28N7 next to each other)
-const { helperRooms, SHARE_RANGE } = require(join(OUT, "military", "roi.js"));
-const base = { capacity: 5600, busy: false };
-const helpers = helperRooms(
-    "W28N7",
-    5600,
-    [
-        { room: "W28N7", route: 0, ...base },
-        { room: "W29N7", route: 1, ...base },
-        { room: "W27N6", route: 2, ...base, capacity: 2300 },
-        { room: "W27N5", route: 2, ...base, busy: true },
-        { room: "W24N8", route: SHARE_RANGE + 1, ...base }
-    ]
-);
-check("helpers: close, big enough, free, not the spawn room", helpers.join() === "W29N7", helpers.join());
-check("helpers: none without candidates", helperRooms("W28N7", 5600, []).length === 0);
+// Colony missions: every base close to the rally spawns members of the same squad (shard0: W28N7 rally,
+// W29N7 next to it, W27N5 three rooms away)
+const { colonyBases, energyBase, offersMember, COLONY_RANGE } = require(join(OUT, "military", "roi.js"));
+const base = { capacity: 5600, rcl: 7, spawns: 1 };
+const colony = [
+    { room: "W29N7", route: 1, ...base },
+    { room: "W28N7", route: 0, ...base, capacity: 2300, rcl: 5 },
+    { room: "W27N6", route: 2, ...base, capacity: 1800, rcl: 5 },
+    { room: "W27N5", route: 3, ...base },
+    { room: "W26N4", route: 2, ...base, rcl: 3 },
+    { room: "W25N4", route: 2, ...base, spawns: 0 },
+    { room: "W24N8", route: COLONY_RANGE + 1, ...base },
+    { room: "W20N1", route: Infinity, ...base }
+];
+const bases = colonyBases(2300, 4, colony);
+check("bases: rally first, then by route, capacity >= energy, RCL and spawn", bases.join() === "W28N7,W29N7,W27N5", bases.join());
+check("bases: a bigger energy leaves the small rally out", colonyBases(5600, 4, colony).join() === "W29N7,W27N5");
+check("bases: minRcl 3 lets a RCL 3 base in", colonyBases(5600, 3, colony).join() === "W29N7,W26N4,W27N5");
+check("bases: none without candidates", colonyBases(2300, 4, []).length === 0);
+check("bases: none big enough, the rally alone (smaller bodies)", colonyBases(9000, 4, colony).join() === "W28N7");
+check("bases: no rally fallback without its spawn", colonyBases(9000, 4, [{ room: "W28N7", route: 0, ...base, spawns: 0 }]).length === 0);
+check("bases: route ties by name", colonyBases(0, 4, [{ room: "B", route: 1, ...base }, { room: "A", route: 1, ...base }]).join() === "A,B");
+
+const pick = (feasible) => energyBase(colony, 4, b => feasible.includes(b.room))?.room ?? null;
+check("energy: the smallest feasible capacity", pick(["W27N6", "W29N7"]) === "W27N6");
+check("energy: an infeasible small base is skipped", pick(["W28N7", "W29N7"]) === "W28N7");
+check("energy: capacity ties go to the closest", pick(["W29N7", "W27N5"]) === "W29N7");
+check("energy: bases out of range, RCL or spawn never count", pick(["W24N8", "W26N4", "W25N4", "W20N1"]) === null);
+check("energy: none feasible", pick([]) === null);
+
+check("boost routing: a plain member goes anywhere", offersMember(false, false, true));
+check("boost routing: a base with the compounds spawns it", offersMember(true, true, true));
+check("boost routing: left to the base holding the compounds", !offersMember(true, false, true));
+check("boost routing: nobody holds them, any base spawns it", offersMember(true, false, false));
 
 console.log(failures === 0 ? "\nall checks passed" : `\n${failures} check(s) failed`);
 process.exit(failures === 0 ? 0 : 1);

@@ -62,6 +62,12 @@ jobs:
       - name: Military ROI check
         run: node tests/militaryRoi/run.mjs
 
+      - name: Military targets check
+        run: node tests/militaryTargets/run.mjs
+
+      - name: Military siege check
+        run: node tests/militarySiege/run.mjs
+
       - name: Combat check
         run: node tests/combat/run.mjs
 

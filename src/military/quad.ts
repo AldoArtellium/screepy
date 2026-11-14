@@ -50,9 +50,14 @@ export const QUAD_ROSTER = [QUAD_HEALER, QUAD_HEALER, QUAD_ATTACKER, QUAD_ATTACK
 export type QuadState = "forming" | "travel" | "drain" | "engage" | "retreat";
 
 export interface QuadMemory {
+    /** Rally room: the base closest to the target, where the squad forms */
     spawnRoom: string;
-    /** Other bases spawning members, who walk to the spawn room to form (roi.ts helperRooms) */
-    helpers?: string[];
+    /** Bases spawning members (roi.ts colonyBases, refreshed every 100 ticks), who walk to spawnRoom to form */
+    bases: string[];
+    /** Tick the bases were chosen */
+    basesAt?: number;
+    /** Energy capacity the bodies are sized on (roi.ts energyBase) */
+    energy: number;
     targetRoom: string;
     /** Room just before the target on the route: where the quad heals up */
     stagingRoom: string;
@@ -64,6 +69,8 @@ export interface QuadMemory {
     boosts?: import("./boostNeed").SquadCompounds;
     /** Losses when the boosts were chosen (escalation) */
     boostLosses?: number;
+    /** Takeover mission: the way to the controller is broken, a siege follows the success (siege.ts) */
+    takeover?: boolean;
     /** Top-left tile of the formation, and since when the quad tries to pack there */
     anchor?: { x: number; y: number; room: string; since: number };
     /** Where the quad heals up: a few tiles inside the staging room, next to the exit it took */
@@ -717,7 +724,7 @@ function engage(name: string, quad: QuadMemory, group: Creep[], room: Room): str
     const dps = structureDps(group);
     const { base, block } = quadMatrices(room, dps);
     if (!quad.anchor || !isPacked(group, quad.anchor)) {
-        const target = pickTarget(room, group[0].pos);
+        const target = pickTarget(room, group[0].pos, dps, { takeover: quad.takeover });
         attackQuad(group, target);
         pack(quad, group, room, base);
         return "packing";
@@ -726,7 +733,7 @@ function engage(name: string, quad: QuadMemory, group: Creep[], room: Room): str
     // Packed: the block stays valid while the quad holds (a failed swap repacks on the same block)
     anchor.since = Game.time;
     const anchorPos = new RoomPosition(anchor.x, anchor.y, room.name);
-    const target = pickTarget(room, anchorPos);
+    const target = pickTarget(room, anchorPos, dps, { takeover: quad.takeover });
     if (!target) {
         attackQuad(group, null);
         group.forEach(hold);
@@ -885,7 +892,7 @@ export function runQuad(name: string, quad: QuadMemory): void {
                 quad.state = "retreat";
                 quad.drained = false;
                 countStat("military:retreat");
-                attackQuad(group, pickTarget(room, leader.pos));
+                attackQuad(group, pickTarget(room, leader.pos, structureDps(group), { takeover: quad.takeover }));
                 retreat(quad, group);
             } else if (room) note = engage(name, quad, group, room);
             else travel(group, quad.targetRoom);

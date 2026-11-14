@@ -17,9 +17,10 @@ import { trafficManager } from "../modules/TrafficManager";
 import { jitter } from "../utils/jitter";
 import { log } from "../utils/logger";
 import { countStat } from "../utils/stats";
-import { incomingDamage, verdict } from "./combat";
+import { attackPower, incomingDamage, verdict } from "./combat";
 import { DuoPath, STILL_TICKS, StillState, cachedStep, newPath, noteStep, stillFor } from "./duoPath";
 import { lootRamparts } from "./loot";
+import { CRITICAL_CLASS, TARGET_CLASS, TargetDescriptor, barrierCost, chooseTarget, targetClass } from "./targetChoice";
 import { cachedObstacles, routeRooms } from "./route";
 
 export const DUO_ATTACKER = "duoAttacker";
@@ -28,9 +29,14 @@ export const DUO_HEALER = "duoHealer";
 export type DuoState = "forming" | "advance" | "retreat";
 
 export interface DuoMemory {
+    /** Rally room: the base closest to the target, where the squad forms */
     spawnRoom: string;
-    /** Other bases spawning members, who walk to the spawn room (roi.ts helperRooms) */
-    helpers?: string[];
+    /** Bases spawning members (roi.ts colonyBases, refreshed every 100 ticks), who walk to spawnRoom to form */
+    bases: string[];
+    /** Tick the bases were chosen */
+    basesAt?: number;
+    /** Energy capacity the bodies are sized on (roi.ts energyBase) */
+    energy: number;
     targetRoom: string;
     state: DuoState;
     /** Room just before the target on the route: where the duo heals up */
@@ -42,6 +48,8 @@ export interface DuoMemory {
     boosts?: import("./boostNeed").SquadCompounds;
     /** Losses when the boosts were chosen (escalation) */
     boostLosses?: number;
+    /** Takeover mission: the way to the controller is broken, a siege follows the success (siege.ts) */
+    takeover?: boolean;
 }
 
 declare global {
@@ -56,7 +64,6 @@ const RETREAT_HITS = 0.6;
 const HEALER_PRIORITY = 1;
 const ATTACKER_PRIORITY = 2;
 const READY_HITS = 0.95;
-const TARGET_ORDER: StructureConstant[] = [STRUCTURE_TOWER, STRUCTURE_INVADER_CORE, STRUCTURE_SPAWN, STRUCTURE_EXTENSION, STRUCTURE_STORAGE, STRUCTURE_TERMINAL];
 const IGNORED: StructureConstant[] = [STRUCTURE_CONTROLLER, STRUCTURE_RAMPART, STRUCTURE_WALL, STRUCTURE_ROAD, STRUCTURE_CONTAINER, STRUCTURE_EXTRACTOR, STRUCTURE_KEEPER_LAIR, STRUCTURE_PORTAL];
 
 function hitsRatio(creep: Creep): number {
@@ -68,17 +75,116 @@ function members(name: string): { attacker?: Creep; healer?: Creep } {
     return { attacker: all.find(c => c.memory.role === DUO_ATTACKER), healer: all.find(c => c.memory.role === DUO_HEALER) };
 }
 
+export interface PickOptions {
+    /**
+     * Takeover mission (controller attack): once no tower or spawn is left, break the way to the
+     * controller when no tile next to it can be reached (controllerBlocker)
+     */
+    takeover?: boolean;
+}
+
+/** Hostile rampart on a tile (a structure under it can only be hit through it) */
+function coverOf(s: Structure): StructureRampart | undefined {
+    return s.pos
+        .lookFor(LOOK_STRUCTURES)
+        .find((r): r is StructureRampart => r.structureType === STRUCTURE_RAMPART && !(r as StructureRampart).my);
+}
+
 /**
- * Structure a squad goes for in the target room: towers, the invader core, spawns, then the ramparts
- * over loot (loot.ts: a store can't be withdrawn from under them), then the rest
+ * Structure a squad goes for in the target room (targetChoice.ts): armed towers and the invader core,
+ * spawns, empty towers, extensions, storage and terminal, then the ramparts over loot (loot.ts: a store
+ * can't be withdrawn from under them), then the rest; the cheapest to break at `dps` within the best class.
+ * With `takeover`, the first barrier on the way to an enclosed controller once towers and spawns are gone.
  */
-export function pickTarget(room: Room, from: RoomPosition): Structure | null {
+export function pickTarget(room: Room, from: RoomPosition, dps = 1, options: PickOptions = {}): Structure | null {
     const hostile = room.find(FIND_HOSTILE_STRUCTURES).filter(s => !IGNORED.includes(s.structureType));
-    for (const type of TARGET_ORDER) {
-        const target = from.findClosestByRange(hostile.filter(s => s.structureType === type));
-        if (target) return target;
+    const byId = new Map<string, Structure>();
+    const targets: TargetDescriptor[] = [];
+    for (const s of hostile) {
+        const energy = s.structureType === STRUCTURE_TOWER ? (s as StructureTower).store.getUsedCapacity(RESOURCE_ENERGY) : 0;
+        byId.set(s.id, s);
+        targets.push({ id: s.id, cls: targetClass(s.structureType, energy), hits: s.hits ?? 0, coverHits: coverOf(s)?.hits ?? 0, range: from.getRangeTo(s) });
     }
-    return from.findClosestByRange(lootRamparts(room)) ?? from.findClosestByRange(hostile);
+    const critical = targets.some(t => t.cls <= CRITICAL_CLASS);
+    if (!critical && options.takeover) {
+        const blocker = controllerBlocker(room, from);
+        if (blocker) return blocker;
+    }
+    // Loot ramparts only matter once the better classes are gone (lootRamparts walks every store)
+    if (!targets.some(t => t.cls < TARGET_CLASS.lootRampart)) {
+        for (const r of lootRamparts(room)) {
+            if (byId.has(r.id)) continue;
+            byId.set(r.id, r);
+            targets.push({ id: r.id, cls: TARGET_CLASS.lootRampart, hits: r.hits, coverHits: 0, range: from.getRangeTo(r) });
+        }
+    }
+    const best = chooseTarget(targets, dps);
+    return best ? (byId.get(best.id) ?? null) : null;
+}
+
+/** Barrier cost matrices of controllerBlocker (heap), rebuilt when the structure count changes or after ~20 ticks */
+const BLOCKER_TTL = 20;
+const blockers: Map<string, { count: number; until: number; id: Id<Structure> | null }> = new Map();
+
+function isHostileBarrier(s: Structure): boolean {
+    if (s.structureType === STRUCTURE_WALL) return true;
+    if (s.structureType !== STRUCTURE_RAMPART) return false;
+    const rampart = s as StructureRampart;
+    return !rampart.my && !rampart.isPublic;
+}
+
+/**
+ * First hostile rampart or wall on the cheapest way from `from` to a tile next to the controller, when no
+ * such tile can be reached without breaking one (null: the controller is open, or no path at all).
+ * Barriers cost by their hits (targetChoice.ts barrierCost), other obstacles block.
+ */
+export function controllerBlocker(room: Room, from: RoomPosition): Structure | null {
+    const controller = room.controller;
+    if (!controller) return null;
+    const count = room.find(FIND_STRUCTURES).length;
+    const cached = blockers.get(room.name);
+    if (cached && cached.count === count && cached.until > Game.time) {
+        return cached.id ? Game.getObjectById(cached.id) : null;
+    }
+    const structures = room.find(FIND_STRUCTURES);
+    const barriers = structures.filter(isHostileBarrier);
+    const maxHits = _.max([1, ...barriers.map(b => b.hits ?? 0)]);
+    const closed = new PathFinder.CostMatrix();
+    const open = new PathFinder.CostMatrix();
+    for (const s of structures) {
+        if (s.structureType === STRUCTURE_ROAD) continue;
+        if (isHostileBarrier(s)) {
+            closed.set(s.pos.x, s.pos.y, 255);
+            if (open.get(s.pos.x, s.pos.y) !== 255) open.set(s.pos.x, s.pos.y, barrierCost(s.hits ?? 0, maxHits));
+        } else if ((OBSTACLE_OBJECT_TYPES as string[]).includes(s.structureType)) {
+            closed.set(s.pos.x, s.pos.y, 255);
+            open.set(s.pos.x, s.pos.y, 255);
+        }
+    }
+    const search = (matrix: CostMatrix) =>
+        PathFinder.search(from, { pos: controller.pos, range: 1 }, {
+            maxRooms: 1,
+            plainCost: 2,
+            swampCost: 10,
+            roomCallback: roomName => (roomName === room.name ? matrix : false)
+        });
+    let id: Id<Structure> | null = null;
+    countStat("military:controllerSearch");
+    if (search(closed).incomplete) {
+        const result = search(open);
+        if (!result.incomplete) {
+            for (const pos of result.path) {
+                const barrier = pos.lookFor(LOOK_STRUCTURES).find(isHostileBarrier);
+                if (barrier) {
+                    id = barrier.id;
+                    break;
+                }
+            }
+        }
+    }
+    if (blockers.size > 20) blockers.clear();
+    blockers.set(room.name, { count, until: Game.time + jitter(BLOCKER_TTL), id });
+    return id ? Game.getObjectById(id) : null;
 }
 
 /** Ramparts and walls cost by their hits (the path goes through the weakest), other obstacles block */
@@ -225,7 +331,7 @@ function travelStep(attacker: Creep, name: string, goalRoom: string, range: numb
 function nextStep(attacker: Creep, name: string, duo: DuoMemory, healerPos?: RoomPosition): { pos: RoomPosition; target?: Structure } | null {
     const room = attacker.room;
     if (room.name === duo.targetRoom) {
-        const target = pickTarget(room, attacker.pos);
+        const target = pickTarget(room, attacker.pos, Math.max(1, attackPower(attacker.body)), { takeover: duo.takeover });
         if (!target) return null;
         if (attacker.pos.isNearTo(target)) return { pos: attacker.pos, target };
         const { matrix, version } = breachMatrix(room, target);

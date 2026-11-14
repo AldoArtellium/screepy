@@ -37,6 +37,10 @@ export interface HostileRoom {
     heal: number;
     /** Loot seen in the room, in energy (roi.ts lootValue at market prices) */
     loot?: number;
+    /** Owned controller: tick it downgrades, tick its upgrade block ends, safe modes left (siege.ts) */
+    downgrade?: number;
+    upgradeBlocked?: number;
+    safeModeAvailable?: number;
 }
 
 export interface AutoTargetEntry {
@@ -44,6 +48,8 @@ export interface AutoTargetEntry {
     reason: import("./strategy").StrategicReason;
     since: number;
     roi?: number;
+    /** The mission takes the controller after the squad's success (siege.ts; its return counted the siege) */
+    takeover?: boolean;
 }
 
 declare global {
@@ -78,10 +84,16 @@ declare global {
             boostDemand?: import("./boostDemand").BoostDemand;
             /** Other players' remotes seized at once (remote/remoteSeize.ts, default 2; 0 turns seizes off) */
             maxSeizes?: number;
-            /** Finished missions ("retargeted": the target changed, not a failure) */
+            /** Controller takeover after a player room's fall (siege.ts; default on, false: squads only) */
+            takeover?: boolean;
+            /** Sieges at once (default 2) */
+            maxSieges?: number;
+            /** Sieges of fallen player rooms' controllers (siege.ts) */
+            sieges?: { [room: string]: import("./siege").SiegeMemory };
+            /** Finished missions and sieges ("retargeted": the target changed, not a failure; "taken": siege won) */
             log?: {
                 room: string;
-                result: "success" | "abandoned" | "retargeted";
+                result: "success" | "abandoned" | "retargeted" | "taken";
                 time: number;
                 losses: number;
                 squad?: string;
@@ -157,6 +169,15 @@ function roomLoot(room: Room, ours: Set<string>): number {
     return Math.round(lootValue(store, r => energyPrice(r as ResourceConstant)));
 }
 
+/** Downgrade tick, upgrade block end and safe modes left of an owned controller (siege.ts) */
+function controllerState(controller: StructureController): Partial<HostileRoom> {
+    return {
+        downgrade: Game.time + controller.ticksToDowngrade,
+        ...(controller.upgradeBlocked && { upgradeBlocked: Game.time + controller.upgradeBlocked }),
+        safeModeAvailable: controller.safeModeAvailable
+    };
+}
+
 function recordRoom(room: Room, ours: Set<string>): void {
     const memory = militaryMemory();
     const owner = room.controller?.owner?.username;
@@ -182,6 +203,7 @@ function recordRoom(room: Room, ours: Set<string>): void {
         towers: towers.length,
         spawns: structures.filter(s => s.structureType === STRUCTURE_SPAWN).length,
         ...(room.controller?.safeMode && { safeMode: Game.time + room.controller.safeMode }),
+        ...(hostileOwner && controllerState(room.controller!)),
         barrier: barriers.length ? _.min(barriers.map(s => s.hits)) : 0,
         ...(core && { coreLevel: core.level, coreDeploy: Game.time + (core.ticksToDeploy ?? 0) }),
         ...(collapse && { collapse: Game.time + collapse.ticksRemaining }),

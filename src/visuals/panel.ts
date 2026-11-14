@@ -297,6 +297,12 @@ function infoRows(room: Room): Entry[] {
     }
     const attacks = _.uniq([...(Memory.military?.attack ? [Memory.military.attack] : []), ...(Memory.military?.targets ?? []).map(t => t.room)]);
     if (attacks.length > 0) rows.push({ label: "Attack", text: attacks.join(" "), color: BAD });
+    // Colony missions this room spawns members for (military.ts), the rally marked
+    const missions = [...Object.values(Memory.military?.duos ?? {}), ...Object.values(Memory.military?.quads ?? {})];
+    const serves = missions
+        .filter(m => (m.bases ?? []).includes(room.name) || m.spawnRoom === room.name)
+        .map(m => (m.spawnRoom === room.name ? `${m.targetRoom} (rally)` : m.targetRoom));
+    if (serves.length > 0) rows.push({ label: "Squads", text: serves.join(" "), color: BAD });
     return rows;
 }
 

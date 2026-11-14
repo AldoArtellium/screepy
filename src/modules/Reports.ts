@@ -322,8 +322,19 @@ export function buildReport(state: ReportState): string {
     const military = Memory.military;
     if (military) {
         const parts: string[] = [];
-        if (military.attack) parts.push(`${military.attack} (manual)`);
-        for (const target of military.targets ?? []) if (target.room !== military.attack) parts.push(`${target.room} (${target.reason})`);
+        // Colony missions: the bases spawning members, the rally first
+        const missions = [...Object.values(military.duos ?? {}), ...Object.values(military.quads ?? {})];
+        const from = (room: string): string => {
+            const mission = missions.find(m => m.targetRoom === room);
+            if (!mission) return "";
+            const bases = _.uniq([mission.spawnRoom, ...(mission.bases ?? [])]);
+            return ` from ${bases.join("+")}`;
+        };
+        if (military.attack) parts.push(`${military.attack} (manual)${from(military.attack)}`);
+        for (const target of military.targets ?? [])
+            if (target.room !== military.attack) parts.push(`${target.room} (${target.reason})${from(target.room)}`);
+        for (const [room, siege] of Object.entries(military.sieges ?? {}))
+            parts.push(`siege ${room} (${siege.owner}) RCL ${siege.level ?? "?"}, ${siege.attacks} attacks`);
         for (const entry of (military.log ?? []).filter(e => e.time > state.time)) {
             parts.push(`${entry.room} ${entry.result}, ${entry.losses} lost`);
         }
