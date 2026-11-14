@@ -48,6 +48,8 @@ export interface DuoMemory {
     boosts?: import("./boostNeed").SquadCompounds;
     /** Losses when the boosts were chosen (escalation) */
     boostLosses?: number;
+    /** Takeover mission: the way to the controller is broken, a siege follows the success (siege.ts) */
+    takeover?: boolean;
 }
 
 declare global {
@@ -329,7 +331,7 @@ function travelStep(attacker: Creep, name: string, goalRoom: string, range: numb
 function nextStep(attacker: Creep, name: string, duo: DuoMemory, healerPos?: RoomPosition): { pos: RoomPosition; target?: Structure } | null {
     const room = attacker.room;
     if (room.name === duo.targetRoom) {
-        const target = pickTarget(room, attacker.pos, Math.max(1, attackPower(attacker.body)));
+        const target = pickTarget(room, attacker.pos, Math.max(1, attackPower(attacker.body)), { takeover: duo.takeover });
         if (!target) return null;
         if (attacker.pos.isNearTo(target)) return { pos: attacker.pos, target };
         const { matrix, version } = breachMatrix(room, target);

@@ -333,6 +333,8 @@ export function buildReport(state: ReportState): string {
         if (military.attack) parts.push(`${military.attack} (manual)${from(military.attack)}`);
         for (const target of military.targets ?? [])
             if (target.room !== military.attack) parts.push(`${target.room} (${target.reason})${from(target.room)}`);
+        for (const [room, siege] of Object.entries(military.sieges ?? {}))
+            parts.push(`siege ${room} (${siege.owner}) RCL ${siege.level ?? "?"}, ${siege.attacks} attacks`);
         for (const entry of (military.log ?? []).filter(e => e.time > state.time)) {
             parts.push(`${entry.room} ${entry.result}, ${entry.losses} lost`);
         }

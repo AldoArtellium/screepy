@@ -7,7 +7,9 @@
  * whose squad holds, roi.ts energyBase) spawns members (`bases`, roi.ts colonyBases, refreshed every
  * BASES_REFRESH ticks), boosted members from the bases holding the mission's compounds. A base serves
  * every mission, in the order of currentTargets(). The mission ends when the room has no spawn, no tower
- * and no invader core left, or after the squad lost 10 creeps. Our design; see docs/decisions/military.md.
+ * and no invader core left, or after the squad lost 10 creeps. A takeover mission (a player's room whose
+ * controller siege fits, siege.ts) also waits for a way to the controller, and opens the siege on success.
+ * Our design; see docs/decisions/military.md.
  */
 
 import { duoCreeps, effectiveEnergy, quadCreeps } from "../core/roomState";
@@ -18,7 +20,8 @@ import type { SpawnOption, SpawnRole } from "../spawning/spawnRoles";
 import { log } from "../utils/logger";
 import { countStat } from "../utils/stats";
 import { BOOST_MARGIN, BoostedEffect } from "./boostNeed";
-import { DUO_ATTACKER, DUO_HEALER, DuoMemory, runDuo } from "./duo";
+import { controllerBlocker, DUO_ATTACKER, DUO_HEALER, DuoMemory, runDuo } from "./duo";
+import { openSiege, runSieges, siegePlan } from "./siege";
 import { hostileRoom, militaryMemory, updateMilitaryIntel } from "./intel";
 import { lootRamparts, startLooting, updateLootMissions } from "./loot";
 import { QUAD_ATTACKER, QUAD_HEALER, QUAD_ROSTER, QuadMemory, runQuad } from "./quad";
@@ -172,14 +175,11 @@ function missionsInOrder(): MissionEntry[] {
         .map(x => x.entry);
 }
 
-function finish(
-    kind: "duo" | "quad",
-    name: string,
-    mission: { targetRoom: string; spawnRoom: string; losses: number },
-    result: "success" | "abandoned" | "retargeted"
-): void {
+function finish(kind: "duo" | "quad", name: string, mission: Mission, result: "success" | "abandoned" | "retargeted"): void {
     if (result === "success") {
         startLooting(mission.targetRoom, mission.spawnRoom);
+        // Before releaseFallen: the siege reads the owner from the intel
+        if (mission.takeover) openSiege(mission.targetRoom, mission.bases, mission.spawnRoom);
         releaseFallen(mission.targetRoom);
     }
     // The members go to be recycled: boosting them first (CreepRunner boosts before the role) wastes the compound
@@ -199,8 +199,11 @@ function finish(
     log.info("Military", `Attack on ${mission.targetRoom} (${kind}): ${result} (${mission.losses} creeps lost)`);
 }
 
-/** Visible room without spawn, tower or invader core left, nor a hostile rampart over loot (loot.ts) */
-function isNeutralized(roomName: string): boolean {
+/**
+ * Visible room without spawn, tower or invader core left, nor a hostile rampart over loot (loot.ts); for a
+ * takeover, a tile next to the controller reachable from a squad member in the room (duo.ts controllerBlocker)
+ */
+function isNeutralized(roomName: string, mission: Mission, creeps: Creep[]): boolean {
     const room = Game.rooms[roomName];
     if (!room) return false;
     const left = room.find(FIND_HOSTILE_STRUCTURES, {
@@ -209,7 +212,10 @@ function isNeutralized(roomName: string): boolean {
             s.structureType === STRUCTURE_TOWER ||
             s.structureType === STRUCTURE_INVADER_CORE
     });
-    return left.length === 0 && lootRamparts(room).length === 0;
+    if (left.length > 0 || lootRamparts(room).length > 0) return false;
+    if (!mission.takeover || !room.controller?.owner || room.controller.my) return true;
+    const inside = creeps.find(c => !c.spawning && c.room.name === roomName);
+    return !!inside && !controllerBlocker(room, inside.pos);
 }
 
 /**
@@ -319,6 +325,7 @@ function startMission(target: string): void {
         return;
     }
     const bases = colonyBases(energy, minRcl(), candidates);
+    const takeover = takeoverOf(target, bases);
     const base = {
         ...origin,
         bases,
@@ -328,7 +335,8 @@ function startMission(target: string): void {
         members: [],
         losses: 0,
         boosts: plan.compounds,
-        boostLosses: 0
+        boostLosses: 0,
+        ...(takeover !== undefined && { takeover })
     };
     if (plan.type === "duo") memory.duos[`duo.${target}`] = { ...base, state: "forming" };
     else memory.quads = { ...memory.quads, [`quad.${target}`]: { ...base, state: "forming" } };
@@ -339,8 +347,32 @@ function startMission(target: string): void {
         `to attack ${target} (staging in ${origin.stagingRoom}):`,
         `edge damage ${plan.threat.edge}, close damage ${plan.threat.close}, heal ${plan.heal},`,
         `boosts ${describeBoosts(plan.compounds)} (${plan.boostCost} energy)`,
-        plan.feasible ? "" : "(not enough healing: drain only)"
+        plan.feasible ? "" : "(not enough healing: drain only)",
+        takeover ? "takeover" : ""
     );
+}
+
+/**
+ * Takeover (siege.ts): a player's room whose siege fits SIEGE_MAX_TICKS with the claimer of the mission's
+ * biggest base; an automatic target whose return could not carry the siege (targets.ts) is attacked
+ * without it. Undefined while the room has no intel (a manual attack on a room never seen).
+ */
+function takeoverOf(target: string, bases: string[]): boolean | undefined {
+    if (!hostileRoom(target)?.rcl) return undefined;
+    const memory = militaryMemory();
+    const biggest = _.max([0, ...bases.map(b => Game.rooms[b]?.energyCapacityAvailable ?? 0)]);
+    const siege = siegePlan(target, biggest);
+    if (!siege) return false;
+    if (memory.attack !== target && memory.targets?.find(t => t.room === target)?.takeover === false) return false;
+    log.info("Military", `Attack on ${target} is a takeover: siege ~${siege.ticks} ticks with ${siege.parts} CLAIM parts`);
+    return true;
+}
+
+/** A mission started before its target was seen: takeover or not once the intel has it */
+function resolveTakeover(mission: Mission): void {
+    if (mission.takeover !== undefined) return;
+    const takeover = takeoverOf(mission.targetRoom, mission.bases);
+    if (takeover !== undefined) mission.takeover = takeover;
 }
 
 /** An engaged target still worth its squad: no safe mode on, a spawn still seen there */
@@ -380,7 +412,13 @@ function updateAutoTargets(): void {
             next.push(known);
             continue;
         }
-        next.push({ room: auto.room, reason: auto.reason, since: Game.time, roi: Math.round(auto.roi * 100) / 100 });
+        next.push({
+            room: auto.room,
+            reason: auto.reason,
+            since: Game.time,
+            roi: Math.round(auto.roi * 100) / 100,
+            takeover: auto.takeover
+        });
         countStat(`military:target:${auto.reason}`);
         log.info("Military", `Automatic target: ${auto.room} (${auto.reason}, value ${auto.value} for a squad of ${auto.cost} energy)`);
     }
@@ -407,7 +445,10 @@ function runMilitary(): void {
     }
     if (Game.time % AUTO_TARGET_EVERY === 0) updateAutoTargets();
     for (const target of currentTargets()) if (!hasMission(target)) startMission(target);
-    for (const { name, mission } of missionsInOrder()) refreshBases(name, mission);
+    for (const { name, mission } of missionsInOrder()) {
+        refreshBases(name, mission);
+        resolveTakeover(mission);
+    }
 
     for (const name in memory.duos) {
         const duo = memory.duos[name];
@@ -420,7 +461,7 @@ function runMilitary(): void {
             log.info("Military", `${name} lost ${duo.losses} creeps: a quad takes over (boosts ${describeBoosts(upgrade.compounds)})`);
             continue;
         }
-        const duoEnd = isNeutralized(duo.targetRoom) ? "success" : endReason(duo);
+        const duoEnd = isNeutralized(duo.targetRoom, duo, duoCreeps(name)) ? "success" : endReason(duo);
         if (duoEnd) finish("duo", name, duo, duoEnd);
         else {
             escalateBoosts("duo", name, duo);
@@ -429,13 +470,14 @@ function runMilitary(): void {
     }
     for (const name in memory.quads ?? {}) {
         const quad = memory.quads![name];
-        const quadEnd = isNeutralized(quad.targetRoom) ? "success" : endReason(quad);
+        const quadEnd = isNeutralized(quad.targetRoom, quad, quadCreeps(name)) ? "success" : endReason(quad);
         if (quadEnd) finish("quad", name, quad, quadEnd);
         else {
             escalateBoosts("quad", name, quad);
             runQuad(name, quad);
         }
     }
+    runSieges();
 }
 
 /** A squad member to spawn; `started`: another member is already alive or spawning */

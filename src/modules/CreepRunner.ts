@@ -7,6 +7,7 @@
 import "../roles/brawler";
 import "../roles/builder";
 import "../roles/claimer";
+import "../roles/controllerAttacker";
 import "../roles/dismantler";
 import "../roles/guardian";
 import "../roles/harvester";
@@ -18,6 +19,7 @@ import "../roles/remoteDefender";
 import "../roles/remoteHarvester";
 import "../roles/remoteHauler";
 import "../roles/reserver";
+import "../roles/siegeGuard";
 import "../roles/transporter";
 import "../roles/upgrader";
 import { needsBoosting, overrideForBoosting } from "../labs/boosts";
@@ -41,7 +43,9 @@ const THROTTLE: { [role: string]: [stopAt: number, throttleAt: number] } = {
     remoteDefender: [0, 0],
     reserver: [0, 0],
     claimer: [0, 0],
-    pioneer: [0, 0]
+    pioneer: [0, 0],
+    siegeGuard: [0, 0],
+    controllerAttacker: [0, 0]
 };
 
 /** Heap only: throttle offset per creep, spreads the skipped ticks */

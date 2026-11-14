@@ -129,4 +129,30 @@ export function drawMapStrategy(visual: MapVisual, labels: MapLabels, panel?: Ma
     const military = Memory.military;
     const targets = [...(military?.attack ? [military.attack] : []), ...(military?.targets ?? []).map(t => t.room)];
     for (const target of _.uniq(targets)) drawAttack(visual, labels, target, rows);
+    for (const [room, siege] of Object.entries(military?.sieges ?? {})) drawSiege(visual, labels, room, siege, rows);
+}
+
+/** Controller siege (military/siege.ts): a line from each base, level and attacks */
+function drawSiege(
+    visual: MapVisual,
+    labels: MapLabels,
+    room: string,
+    siege: NonNullable<NonNullable<Memory["military"]>["sieges"]>[string],
+    rows?: Cell[][]
+): void {
+    const target = center(room);
+    for (const base of siege.bases) visual.line(center(base), target, { color: BAD, width: 1, opacity: 0.4, lineStyle: "dashed" });
+    const left = siege.downgrade !== undefined ? ` · ${siege.downgrade - Game.time} to downgrade` : "";
+    const text = `RCL ${siege.level ?? "?"} · ${siege.attacks} attacks${left}`;
+    if (rows) {
+        rows.push([
+            { text: "siege", color: BAD },
+            { text: room, color: BAD },
+            { text: siege.owner, color: BAD },
+            { text, color: BAD }
+        ]);
+        return;
+    }
+    const pos = (y: number) => new RoomPosition(25, y, room);
+    labels.add(`siege · ${text}`, [pos(40), pos(44), pos(16)], labelStyle(BAD, FONT), LABEL_PRIORITY.owned, true);
 }

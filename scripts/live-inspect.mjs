@@ -360,6 +360,22 @@ function printMilitary(memory, time) {
       ]),
       [0, 1, 2, 3]
     );
+  // Controller sieges (siege.ts)
+  const sieges = Object.entries(military.sieges ?? {});
+  if (sieges.length > 0)
+    table(
+      ["siege", "owner", "level", "to downgrade", "attacks", "guards lost", "since"],
+      sieges.map(([room, s]) => [
+        room,
+        s.owner,
+        s.level ?? "?",
+        s.downgrade !== undefined && time !== undefined ? s.downgrade - time : "?",
+        s.attacks,
+        s.losses,
+        s.since
+      ]),
+      [0, 1]
+    );
   const recent = (military.log ?? []).filter(e => time === undefined || time - e.time < 50000);
   if (recent.length > 0)
     table(["mission", "result", "tick", "losses", "squad"], recent.map(e => [e.room, e.result, e.time, e.losses, e.squad ?? ""]), [0, 1, 4]);

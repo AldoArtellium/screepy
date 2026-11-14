@@ -69,6 +69,8 @@ export interface QuadMemory {
     boosts?: import("./boostNeed").SquadCompounds;
     /** Losses when the boosts were chosen (escalation) */
     boostLosses?: number;
+    /** Takeover mission: the way to the controller is broken, a siege follows the success (siege.ts) */
+    takeover?: boolean;
     /** Top-left tile of the formation, and since when the quad tries to pack there */
     anchor?: { x: number; y: number; room: string; since: number };
     /** Where the quad heals up: a few tiles inside the staging room, next to the exit it took */
@@ -722,7 +724,7 @@ function engage(name: string, quad: QuadMemory, group: Creep[], room: Room): str
     const dps = structureDps(group);
     const { base, block } = quadMatrices(room, dps);
     if (!quad.anchor || !isPacked(group, quad.anchor)) {
-        const target = pickTarget(room, group[0].pos, dps);
+        const target = pickTarget(room, group[0].pos, dps, { takeover: quad.takeover });
         attackQuad(group, target);
         pack(quad, group, room, base);
         return "packing";
@@ -731,7 +733,7 @@ function engage(name: string, quad: QuadMemory, group: Creep[], room: Room): str
     // Packed: the block stays valid while the quad holds (a failed swap repacks on the same block)
     anchor.since = Game.time;
     const anchorPos = new RoomPosition(anchor.x, anchor.y, room.name);
-    const target = pickTarget(room, anchorPos, dps);
+    const target = pickTarget(room, anchorPos, dps, { takeover: quad.takeover });
     if (!target) {
         attackQuad(group, null);
         group.forEach(hold);
@@ -890,7 +892,7 @@ export function runQuad(name: string, quad: QuadMemory): void {
                 quad.state = "retreat";
                 quad.drained = false;
                 countStat("military:retreat");
-                attackQuad(group, pickTarget(room, leader.pos, structureDps(group)));
+                attackQuad(group, pickTarget(room, leader.pos, structureDps(group), { takeover: quad.takeover }));
                 retreat(quad, group);
             } else if (room) note = engage(name, quad, group, room);
             else travel(group, quad.targetRoom);
