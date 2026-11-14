@@ -165,24 +165,64 @@ export function pickTargets<T extends { room: string; roi: number }>(
     return [...kept, ...rest].slice(0, max);
 }
 
-/** Route length in rooms between a mission's spawn room and the bases that spawn members for it */
-export const SHARE_RANGE = 2;
+/** Route length in rooms (route.ts squadRoute) from a mission's rally room to the bases spawning its members */
+export const COLONY_RANGE = 4;
+/** Ticks between two refreshes of a mission's bases (military.ts) */
+export const BASES_REFRESH = 100;
+
+/** An owned room that may spawn squad members; `route`: rooms to the rally (0: the rally, Infinity: no route) */
+export interface BaseCandidate {
+    room: string;
+    route: number;
+    capacity: number;
+    rcl: number;
+    spawns: number;
+}
 
 /**
- * Bases sharing a mission (our design, 2026-11-05): other rooms within SHARE_RANGE of the spawn room
- * whose energy capacity builds the same bodies and that arm no other mission spawn some of its members,
- * who walk to the spawn room to form (quad.ts, duo.ts): a quad's 4 members (~200 parts) took one spawn
- * ~600 ticks, its first members waiting for the last ones
+ * Bases of a colony mission (our design, 2026-11-14; 2026-11-05 helpers within 2 rooms, frozen, one mission
+ * per base): every owned room of RCL `minRcl`+ with a spawn, whose energy capacity builds the bodies the
+ * mission is sized on (`energy`) and within COLONY_RANGE rooms of the rally, which members walk to to form
+ * (quad.ts, duo.ts). Closest first: a quad's 4 members (~200 parts) took one spawn ~600 ticks.
+ * None big enough: the rally (route 0) alone, with smaller bodies (military.ts memberEnergy), so a capacity
+ * drop never stalls the mission (mockup rcl4 preset: RoomCleanup removed the extensions off the plan, the
+ * capacity fell from 1300 to 800 at tick 100 and came back at 2000).
  */
-export function helperRooms(
-    spawnRoom: string,
-    capacity: number,
-    bases: { room: string; route: number; capacity: number; busy: boolean }[]
-): string[] {
-    return bases
-        .filter(b => b.room !== spawnRoom && !b.busy && b.capacity >= capacity && b.route <= SHARE_RANGE)
-        .sort((x, y) => x.route - y.route)
+export function colonyBases(energy: number, minRcl: number, candidates: BaseCandidate[]): string[] {
+    const usable = candidates.filter(b => b.rcl >= minRcl && b.spawns > 0 && b.route <= COLONY_RANGE);
+    const bases = usable
+        .filter(b => b.capacity >= energy)
+        .sort((x, y) => x.route - y.route || (x.room < y.room ? -1 : 1))
         .map(b => b.room);
+    if (bases.length > 0) return bases;
+    return usable.filter(b => b.route === 0).map(b => b.room);
+}
+
+/**
+ * Base whose capacity a mission's bodies are sized on: among the candidates within COLONY_RANGE of the
+ * rally, by capacity ascending (then closest), the first whose squad holds against the target with its
+ * own boosts (`feasible`, sizing.ts planSquad): the smallest bodies that win let the most bases share the
+ * mission. Null when none does.
+ */
+export function energyBase<T extends BaseCandidate>(
+    candidates: T[],
+    minRcl: number,
+    feasible: (base: T) => boolean
+): T | null {
+    const sorted = candidates
+        .filter(b => b.rcl >= minRcl && b.spawns > 0 && b.route <= COLONY_RANGE)
+        .sort((x, y) => x.capacity - y.capacity || x.route - y.route);
+    for (const base of sorted) if (feasible(base)) return base;
+    return null;
+}
+
+/**
+ * Boost routing of a squad member: a base without the mission's compounds for the member's boosted parts
+ * leaves it to a base of the mission that holds them; when none does, any base spawns it (labs/boosts.ts
+ * boostsWith falls back to the best in stock)
+ */
+export function offersMember(boosted: boolean, holdsHere: boolean, holdsElsewhere: boolean): boolean {
+    return !boosted || holdsHere || !holdsElsewhere;
 }
 
 const MAX_LOOTERS = 3;

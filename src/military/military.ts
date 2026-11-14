@@ -1,13 +1,17 @@
 /**
  * Offense: `Memory.military.attack = "<room>"` (by hand), else an automatic target (targets.ts:
  * strongholds near our rooms; player rooms unless `Memory.military.auto = false`), sends a duo or
- * a quad (sizing.ts, `Memory.military.squad` to force one) from the closest RCL 4+ room with a spawn.
- * The mission ends when the room has no spawn, no tower and no invader core left, or after the
- * squad lost 10 creeps. Our design; see docs/superpowers/roadmap.md (J7).
+ * a quad (sizing.ts, `Memory.military.squad` to force one). Colony missions (2026-11-14): the squad
+ * forms in the rally room (`spawnRoom`, the RCL 4+ base with a spawn closest to the target); every base
+ * within COLONY_RANGE of it whose capacity builds the mission's bodies (`energy`: the smallest capacity
+ * whose squad holds, roi.ts energyBase) spawns members (`bases`, roi.ts colonyBases, refreshed every
+ * BASES_REFRESH ticks), boosted members from the bases holding the mission's compounds. A base serves
+ * every mission, in the order of currentTargets(). The mission ends when the room has no spawn, no tower
+ * and no invader core left, or after the squad lost 10 creeps. Our design; see docs/decisions/military.md.
  */
 
 import { duoCreeps, effectiveEnergy, quadCreeps } from "../core/roomState";
-import { boostsFor, boostsWith, cancelBoost } from "../labs/boosts";
+import { boostableParts, boostsFor, boostsWith, canBoost, cancelBoost } from "../labs/boosts";
 import { performRecycle } from "../roles/recycle";
 import { registerRole } from "../roles/registry";
 import type { SpawnOption, SpawnRole } from "../spawning/spawnRoles";
@@ -32,7 +36,7 @@ import {
     SquadType
 } from "./sizing";
 import { AutoTargetEntry } from "./intel";
-import { helperRooms } from "./roi";
+import { BASES_REFRESH, BaseCandidate, colonyBases, energyBase, offersMember } from "./roi";
 import { chooseAutoTargets, releaseFallen } from "./targets";
 import { militaryCpuAverage, militaryCpuTooHigh } from "./cpuGuard";
 import { decisionBucket } from "../utils/throttle";
@@ -72,27 +76,25 @@ export function towersRefill(roomName: string): boolean {
     return (intel?.coreLevel ?? 0) > 0 || !!intel?.owner;
 }
 
+function minRcl(): number {
+    return militaryMemory().minRcl ?? 4;
+}
+
 /**
- * RCL 4+ room with a spawn whose squad can fight the target (sizing.ts feasible: its boosts in stock
- * count), closest first, else the closest one; and the room the squad heals up in before the target.
- * shard0 W28N8: W28N7 (RCL 5, no labs) is next to it, W29N7 (RCL 6, labs, XLHO2 and GHO2) one more room.
+ * Rally room of a mission: the RCL 4+ room with a spawn closest to the target by squad route, and the
+ * room the squad heals up in before the target. Whether its squad can win is the bases' matter
+ * (startMission): shard0 W28N8, W28N7 (RCL 5, no labs) next to it rallies, W29N7 (RCL 6, labs, XLHO2 and
+ * GHO2) one more room spawns the boosted members.
  */
-function findOrigin(target: string, busy: Set<string>): { spawnRoom: string; stagingRoom: string } | null {
-    let best: { spawnRoom: string; stagingRoom: string; length: number; feasible: boolean } | null = null;
-    const minRcl = militaryMemory().minRcl ?? 4;
-    const refills = towersRefill(target);
-    for (const room of _.filter(Game.rooms, r => !!r.controller?.my && r.controller.level >= minRcl)) {
-        // A base arms one mission at a time
-        if (busy.has(room.name) || room.find(FIND_MY_SPAWNS).length === 0) continue;
+function findOrigin(target: string): { spawnRoom: string; stagingRoom: string } | null {
+    let best: { spawnRoom: string; stagingRoom: string; length: number } | null = null;
+    for (const room of _.filter(Game.rooms, r => !!r.controller?.my && r.controller.level >= minRcl())) {
+        if (room.find(FIND_MY_SPAWNS).length === 0) continue;
         // The squad's own room route (route.ts): the staging room is never another player's room
         const rooms = squadRoute(room.name, target);
         if (!rooms || rooms.length < 2 || rooms.length - 1 > MAX_ROUTE_ROOMS) continue;
-        const route = rooms.slice(1);
-        const stagingRoom = rooms[rooms.length - 2];
-        const energy = room.energyCapacityAvailable;
-        const feasible = planSquad(target, energy, militaryMemory().squad, refills, room).feasible;
-        if (!best || (feasible && !best.feasible) || (feasible === best.feasible && route.length < best.length))
-            best = { spawnRoom: room.name, stagingRoom, length: route.length, feasible };
+        if (!best || rooms.length - 1 < best.length)
+            best = { spawnRoom: room.name, stagingRoom: rooms[rooms.length - 2], length: rooms.length - 1 };
     }
     return best;
 }
@@ -104,38 +106,70 @@ export function currentTargets(): string[] {
     return memory.attack ? [memory.attack, ...rooms.filter(r => r !== memory.attack)] : rooms;
 }
 
-/** Bases arming a mission (spawn rooms and helpers), but the one against `except` */
-function busyBases(except?: string): Set<string> {
-    const memory = militaryMemory();
-    const busy = new Set<string>();
-    const missions: (DuoMemory | QuadMemory)[] = [...Object.values(memory.duos), ...Object.values(memory.quads ?? {})];
-    for (const mission of missions) {
-        if (mission.targetRoom === except) continue;
-        busy.add(mission.spawnRoom);
-        for (const helper of mission.helpers ?? []) busy.add(helper);
-    }
-    return busy;
-}
+type Mission = DuoMemory | QuadMemory;
 
-/** Free bases close to the spawn room that build the same bodies spawn members too (roi.ts helperRooms) */
-function findHelpers(spawnRoom: string, busy: Set<string>): string[] {
-    const home = Game.rooms[spawnRoom];
-    if (!home) return [];
-    const minRcl = militaryMemory().minRcl ?? 4;
-    const bases = _.filter(
-        Game.rooms,
-        r => !!r.controller?.my && r.controller.level >= minRcl && r.find(FIND_MY_SPAWNS).length > 0
-    ).map(r => {
-        // The squad's own route (route.ts): members never walk through another player's or a keeper room
-        const rooms = r.name === spawnRoom ? [r.name] : squadRoute(r.name, spawnRoom);
+/**
+ * Our rooms as bases of a mission rallying in `rally` (roi.ts colonyBases filters them), by the squad's
+ * own route (route.ts): members never walk through another player's or a keeper room
+ */
+function baseCandidates(rally: string): (BaseCandidate & { home: Room })[] {
+    return _.filter(Game.rooms, r => !!r.controller?.my).map(r => {
+        const level = r.controller!.level;
+        const rooms = level >= minRcl() ? squadRoute(r.name, rally) : null;
         return {
             room: r.name,
             route: rooms ? rooms.length - 1 : Infinity,
             capacity: r.energyCapacityAvailable,
-            busy: busy.has(r.name)
+            rcl: level,
+            spawns: r.find(FIND_MY_SPAWNS).length,
+            home: r
         };
     });
-    return helperRooms(spawnRoom, home.energyCapacityAvailable, bases);
+}
+
+/** Missions started before 2026-11-14 (a spawn room and its helpers): the colony's fields */
+function migrateMission(mission: Mission): void {
+    if (mission.bases) return;
+    const old = mission as Mission & { helpers?: string[] };
+    mission.bases = [mission.spawnRoom, ...(old.helpers ?? [])];
+    const capacities = mission.bases.map(b => Game.rooms[b]?.energyCapacityAvailable).filter((c): c is number => !!c);
+    mission.energy = Game.rooms[mission.spawnRoom]?.energyCapacityAvailable ?? capacities[0] ?? 0;
+    delete old.helpers;
+}
+
+/** Bases of a mission again every BASES_REFRESH ticks: rooms grow, lose their spawn, get one */
+function refreshBases(name: string, mission: Mission): void {
+    if (Game.time - (mission.basesAt ?? -Infinity) < BASES_REFRESH) return;
+    mission.basesAt = Game.time;
+    const bases = colonyBases(mission.energy, minRcl(), baseCandidates(mission.spawnRoom));
+    if (_.isEqual(bases, mission.bases)) return;
+    log.info("Military", `${name}: bases ${mission.bases.join("+") || "none"} -> ${bases.join("+") || "none"}`);
+    mission.bases = bases;
+}
+
+interface MissionEntry {
+    kind: "duo" | "quad";
+    name: string;
+    mission: Mission;
+}
+
+/** Every mission (migrated), those of currentTargets() first in its order (the manual attack first) */
+function missionsInOrder(): MissionEntry[] {
+    const memory = militaryMemory();
+    const entries: MissionEntry[] = [
+        ...Object.entries(memory.duos).map(([name, mission]) => ({ kind: "duo" as const, name, mission })),
+        ...Object.entries(memory.quads ?? {}).map(([name, mission]) => ({ kind: "quad" as const, name, mission }))
+    ];
+    for (const entry of entries) migrateMission(entry.mission);
+    const targets = currentTargets();
+    const rank = (entry: MissionEntry) => {
+        const index = targets.indexOf(entry.mission.targetRoom);
+        return index < 0 ? targets.length : index;
+    };
+    return entries
+        .map((entry, index) => ({ entry, index }))
+        .sort((x, y) => rank(x.entry) - rank(y.entry) || x.index - y.index)
+        .map(x => x.entry);
 }
 
 function finish(
@@ -183,15 +217,22 @@ function isNeutralized(roomName: string): boolean {
  * ESCALATION_LOSSES creeps lost, never weaker boosts than the mission's (the intel the choice was made
  * on was stale, or the model too optimistic)
  */
-function escalatedPlan(mission: DuoMemory | QuadMemory, type?: SquadType): SquadPlan | null {
-    const spawnRoom = Game.rooms[mission.spawnRoom];
-    if (!spawnRoom) return null;
+function escalatedPlan(mission: Mission, type?: SquadType): SquadPlan | null {
     const steps = Math.floor(mission.losses / ESCALATION_LOSSES);
     const refills = towersRefill(mission.targetRoom);
-    return planSquad(mission.targetRoom, spawnRoom.energyCapacityAvailable, type, refills, spawnRoom, {
-        floor: mission.boosts,
-        margin: BOOST_MARGIN * (1 + ESCALATION_STEP * steps)
-    });
+    // The stock of each base with labs (the first visible base without any): the first that holds wins
+    const visible = mission.bases.map(b => Game.rooms[b]).filter((r): r is Room => !!r);
+    const labRooms = visible.filter(r => canBoost(r));
+    let fallback: SquadPlan | null = null;
+    for (const room of labRooms.length > 0 ? labRooms : visible.slice(0, 1)) {
+        const plan = planSquad(mission.targetRoom, mission.energy, type, refills, room, {
+            floor: mission.boosts,
+            margin: BOOST_MARGIN * (1 + ESCALATION_STEP * steps)
+        });
+        if (plan.feasible) return plan;
+        fallback = fallback ?? plan;
+    }
+    return fallback;
 }
 
 /** A duo that lost a pair against a room now sized for a quad (unless the squad type is forced): the quad's plan */
@@ -202,7 +243,7 @@ function upgradePlan(duo: DuoMemory): SquadPlan | null {
 }
 
 /** Stronger boosts for the next members once the squad lost ESCALATION_LOSSES more creeps */
-function escalateBoosts(kind: "duo" | "quad", name: string, mission: DuoMemory | QuadMemory): void {
+function escalateBoosts(kind: "duo" | "quad", name: string, mission: Mission): void {
     // Missions started before the boost choice keep the strongest boosts in stock
     if (!mission.boosts || mission.losses < (mission.boostLosses ?? 0) + ESCALATION_LOSSES) return;
     const plan = escalatedPlan(mission, kind);
@@ -249,24 +290,53 @@ function startMission(target: string): void {
     const memory = militaryMemory();
     if (Game.time - (startTried.get(target) ?? -Infinity) < START_RETRY) return;
     startTried.set(target, Game.time);
-    const busy = busyBases(target);
-    const origin = findOrigin(target, busy);
+    const origin = findOrigin(target);
     if (!origin) return;
     const refills = towersRefill(target);
-    const spawnRoom = Game.rooms[origin.spawnRoom];
-    const plan = planSquad(target, spawnRoom.energyCapacityAvailable, memory.squad, refills, spawnRoom);
-    if (!plan.feasible && memory.attack !== target) {
+    const candidates = baseCandidates(origin.spawnRoom);
+    // Bodies sized on the smallest capacity whose squad holds with that base's boosts (roi.ts energyBase)
+    const plans = new Map<string, SquadPlan>();
+    const planOf = (base: BaseCandidate & { home: Room }): SquadPlan => {
+        const known = plans.get(base.room);
+        if (known) return known;
+        const plan = planSquad(target, base.capacity, memory.squad, refills, base.home);
+        plans.set(base.room, plan);
+        return plan;
+    };
+    const sizing = energyBase(candidates, minRcl(), base => planOf(base).feasible);
+    let plan: SquadPlan;
+    let energy: number;
+    if (sizing) {
+        plan = planOf(sizing);
+        energy = sizing.capacity;
+    } else if (memory.attack === target) {
+        // By hand: the rally's squad, drain only
+        const rally = Game.rooms[origin.spawnRoom];
+        energy = rally.energyCapacityAvailable;
+        plan = planSquad(target, energy, memory.squad, refills, rally);
+    } else {
         if (memory.targets) memory.targets = memory.targets.filter(t => t.room !== target);
         return;
     }
-    busy.add(origin.spawnRoom);
-    const helpers = findHelpers(origin.spawnRoom, busy);
-    const base = { ...origin, helpers, targetRoom: target, members: [], losses: 0, boosts: plan.compounds, boostLosses: 0 };
+    const bases = colonyBases(energy, minRcl(), candidates);
+    const base = {
+        ...origin,
+        bases,
+        basesAt: Game.time,
+        energy,
+        targetRoom: target,
+        members: [],
+        losses: 0,
+        boosts: plan.compounds,
+        boostLosses: 0
+    };
     if (plan.type === "duo") memory.duos[`duo.${target}`] = { ...base, state: "forming" };
     else memory.quads = { ...memory.quads, [`quad.${target}`]: { ...base, state: "forming" } };
     log.info(
         "Military",
-        `${plan.type} from ${[origin.spawnRoom, ...helpers].join("+")} to attack ${target} (staging in ${origin.stagingRoom}):`,
+        `${plan.type} rallying in ${origin.spawnRoom} from ${bases.join("+")}`,
+        `(bodies of ${energy} energy${sizing ? `, boosts of ${sizing.room}` : ""})`,
+        `to attack ${target} (staging in ${origin.stagingRoom}):`,
         `edge damage ${plan.threat.edge}, close damage ${plan.threat.close}, heal ${plan.heal},`,
         `boosts ${describeBoosts(plan.compounds)} (${plan.boostCost} energy)`,
         plan.feasible ? "" : "(not enough healing: drain only)"
@@ -337,6 +407,7 @@ function runMilitary(): void {
     }
     if (Game.time % AUTO_TARGET_EVERY === 0) updateAutoTargets();
     for (const target of currentTargets()) if (!hasMission(target)) startMission(target);
+    for (const { name, mission } of missionsInOrder()) refreshBases(name, mission);
 
     for (const name in memory.duos) {
         const duo = memory.duos[name];
@@ -372,11 +443,7 @@ interface MissingMember {
     name: string;
     role: string;
     started: boolean;
-}
-
-/** A base of the mission: its spawn room or a helper (shared missions) */
-function spawnsFor(mission: DuoMemory | QuadMemory, roomName: string): boolean {
-    return mission.spawnRoom === roomName || !!mission.helpers?.includes(roomName);
+    type: "duo" | "quad";
 }
 
 /**
@@ -390,53 +457,72 @@ function claimedRoles(name: string): string[] {
     return claimed.members.filter(m => m.startsWith(`${name}|`)).map(m => m.split("|")[1]);
 }
 
-function duoMissing(roomName: string): MissingMember | null {
-    for (const [name, duo] of Object.entries(militaryMemory().duos)) {
-        if (!spawnsFor(duo, roomName)) continue;
-        const creeps = duoCreeps(name);
-        const pending = claimedRoles(name);
-        for (const role of [DUO_HEALER, DUO_ATTACKER]) {
-            if (!creeps.some(c => c.memory.role === role) && !pending.includes(role))
-                return { name, role, started: creeps.length + pending.length > 0 };
-        }
-    }
-    return null;
+/** Bodies the mission is sized on (its `energy`), a base never builds bigger ones than it can */
+function memberEnergy(room: Room, mission: Mission | undefined): number {
+    return mission?.energy ? Math.min(room.energyCapacityAvailable, mission.energy) : room.energyCapacityAvailable;
 }
 
-/** Quads are refilled only while forming at home */
-function quadMissing(roomName: string): MissingMember | null {
-    for (const [name, quad] of Object.entries(militaryMemory().quads ?? {})) {
-        if (!spawnsFor(quad, roomName) || quad.state !== "forming") continue;
-        const creeps = quadCreeps(name);
+function memberBody(role: string, energy: number): BodyPartConstant[] {
+    if (role === DUO_HEALER) return duoHealerBody(energy);
+    if (role === QUAD_HEALER) return quadHealerBody(energy);
+    if (role === QUAD_ATTACKER) return quadAttackerBody(energy);
+    return duoAttackerBody(energy);
+}
+
+/**
+ * Boost routing (roi.ts offersMember): a base without the mission's compounds for the member's boosted
+ * parts (labs, storage, terminal, minus other creeps' requests) leaves it to a base of the mission that
+ * holds them all
+ */
+function offersBoosted(room: Room, mission: Mission, role: string): boolean {
+    const compounds = mission.boosts;
+    if (!compounds) return true;
+    const counts = _.countBy(memberBody(role, memberEnergy(room, mission)));
+    const needs = (Object.keys(SQUAD_BOOST_PARTS) as BoostedEffect[])
+        .map(effect => ({ compound: compounds[effect], parts: counts[SQUAD_BOOST_PARTS[effect][0]] ?? 0 }))
+        .filter(need => !!need.compound && need.parts > 0);
+    const holds = (base: Room | undefined): boolean =>
+        !!base && canBoost(base) && needs.every(n => boostableParts(base, n.compound as ResourceConstant) >= n.parts);
+    const here = needs.length === 0 || holds(room);
+    const elsewhere = !here && mission.bases.some(b => b !== room.name && holds(Game.rooms[b]));
+    return offersMember(needs.length > 0, here, elsewhere);
+}
+
+/**
+ * First member this base spawns: missions it is a base of, in the order of currentTargets(); quads are
+ * refilled only while forming at the rally
+ */
+function missingMember(room: Room): MissingMember | null {
+    for (const { kind, name, mission } of missionsInOrder()) {
+        if (!mission.bases.includes(room.name)) continue;
+        if (kind === "quad" && mission.state !== "forming") continue;
+        const creeps = kind === "duo" ? duoCreeps(name) : quadCreeps(name);
         const pending = claimedRoles(name);
+        const roster = kind === "duo" ? [DUO_HEALER, DUO_ATTACKER] : QUAD_ROSTER;
         const have = _.countBy([...creeps.map(c => c.memory.role), ...pending]);
-        const wanted = _.countBy(QUAD_ROSTER);
-        for (const role of QUAD_ROSTER) {
-            if ((have[role] ?? 0) < wanted[role]) return { name, role, started: creeps.length + pending.length > 0 };
+        const wanted = _.countBy(roster);
+        for (const role of _.uniq(roster)) {
+            if ((have[role] ?? 0) >= wanted[role] || !offersBoosted(room, mission, role)) continue;
+            return { name, role, started: creeps.length + pending.length > 0, type: kind };
         }
     }
     return null;
 }
 
-function missionOf(option: SpawnOption): DuoMemory | QuadMemory | undefined {
+function missionOf(option: SpawnOption): Mission | undefined {
     const memory = militaryMemory();
     return option.memory?.duo ? memory.duos[option.memory.duo] : memory.quads?.[option.memory?.quad ?? ""];
-}
-
-/** Bodies of the mission's spawn room, so members from a bigger helper match the squad's sizing */
-function memberEnergy(room: Room, option: SpawnOption): number {
-    const home = Game.rooms[missionOf(option)?.spawnRoom ?? ""];
-    return Math.min(room.energyCapacityAvailable, home?.energyCapacityAvailable ?? room.energyCapacityAvailable);
 }
 
 /**
  * Spawn option of a missing member: the first one only once the room can pay for the whole squad
  * (the others then never wait for energy), the next ones back to back at BURST_PRIORITY
  */
-function memberOption(room: Room, missing: MissingMember, type: "duo" | "quad"): SpawnOption[] {
+function memberOption(room: Room, missing: MissingMember): SpawnOption[] {
+    const type = missing.type;
     if (!missing.started) {
-        const option = { role: missing.role, priority: 0, weight: 0, memory: { [type]: missing.name } } as SpawnOption;
-        const squad = _.sum(squadMemberCosts(type, memberEnergy(room, option)));
+        const mission = type === "duo" ? militaryMemory().duos[missing.name] : militaryMemory().quads?.[missing.name];
+        const squad = _.sum(squadMemberCosts(type, memberEnergy(room, mission)));
         if (effectiveEnergy(room) < MIN_ENERGY + squad) return [];
     }
     return [
@@ -458,19 +544,12 @@ export const militarySpawnRole: SpawnRole = {
 
     options(room) {
         if (effectiveEnergy(room) < MIN_ENERGY) return [];
-        const duo = duoMissing(room.name);
-        if (duo) return memberOption(room, duo, "duo");
-        const quad = quadMissing(room.name);
-        if (quad) return memberOption(room, quad, "quad");
-        return [];
+        const missing = missingMember(room);
+        return missing ? memberOption(room, missing) : [];
     },
 
     body(room, option) {
-        const energy = memberEnergy(room, option);
-        if (option.role === DUO_HEALER) return duoHealerBody(energy);
-        if (option.role === QUAD_HEALER) return quadHealerBody(energy);
-        if (option.role === QUAD_ATTACKER) return quadAttackerBody(energy);
-        return duoAttackerBody(energy);
+        return memberBody(option.role, memberEnergy(room, missionOf(option)));
     },
 
     memory(room, option) {

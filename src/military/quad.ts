@@ -50,9 +50,14 @@ export const QUAD_ROSTER = [QUAD_HEALER, QUAD_HEALER, QUAD_ATTACKER, QUAD_ATTACK
 export type QuadState = "forming" | "travel" | "drain" | "engage" | "retreat";
 
 export interface QuadMemory {
+    /** Rally room: the base closest to the target, where the squad forms */
     spawnRoom: string;
-    /** Other bases spawning members, who walk to the spawn room to form (roi.ts helperRooms) */
-    helpers?: string[];
+    /** Bases spawning members (roi.ts colonyBases, refreshed every 100 ticks), who walk to spawnRoom to form */
+    bases: string[];
+    /** Tick the bases were chosen */
+    basesAt?: number;
+    /** Energy capacity the bodies are sized on (roi.ts energyBase) */
+    energy: number;
     targetRoom: string;
     /** Room just before the target on the route: where the quad heals up */
     stagingRoom: string;

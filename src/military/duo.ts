@@ -29,9 +29,14 @@ export const DUO_HEALER = "duoHealer";
 export type DuoState = "forming" | "advance" | "retreat";
 
 export interface DuoMemory {
+    /** Rally room: the base closest to the target, where the squad forms */
     spawnRoom: string;
-    /** Other bases spawning members, who walk to the spawn room (roi.ts helperRooms) */
-    helpers?: string[];
+    /** Bases spawning members (roi.ts colonyBases, refreshed every 100 ticks), who walk to spawnRoom to form */
+    bases: string[];
+    /** Tick the bases were chosen */
+    basesAt?: number;
+    /** Energy capacity the bodies are sized on (roi.ts energyBase) */
+    energy: number;
     targetRoom: string;
     state: DuoState;
     /** Room just before the target on the route: where the duo heals up */

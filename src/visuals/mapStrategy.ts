@@ -100,8 +100,8 @@ function drawAttack(visual: MapVisual, labels: MapLabels, targetRoom: string, ro
     const squads = [...Object.values(military.duos ?? {}), ...Object.values(military.quads ?? {})].filter(
         s => s.targetRoom === targetRoom
     );
-    // Shared missions: a line from each base spawning members
-    const homes = new Set(squads.flatMap(s => [s.spawnRoom, ...(s.helpers ?? [])]));
+    // Colony missions: a line from the rally and each base spawning members
+    const homes = new Set(squads.flatMap(s => [s.spawnRoom, ...(s.bases ?? [])]));
     const states = new Set<string>(squads.map(s => s.state));
     for (const home of homes) visual.line(center(home), target, { color: BAD, width: 1, opacity: 0.6 });
     visual.circle(target, { radius: 6, fill: "transparent", stroke: BAD, strokeWidth: 1, opacity: 0.8 });
