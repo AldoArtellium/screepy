@@ -40,7 +40,7 @@ import {
 import { blockerCost } from "./blockers";
 import { isKeeperOrCenter, keeperRoomCandidate, killerParts, partsCost } from "./keepers";
 import { isRemoteExcluded } from "./remoteBalance";
-import { isRemoteBlocked } from "./remoteRooms";
+import { isRemoteBlocked, pickSourceContainer } from "./remoteRooms";
 import { updateSeizes } from "./remoteSeize";
 import { Hits, onRoomEdge, PathNeed, pathNeed, repairsDue, Tile, upkeepWork } from "./repairs";
 
@@ -939,14 +939,17 @@ export function remoteContainer(source: RemoteSource): StructureContainer | null
         } else return null;
     }
     const room = Game.rooms[source.room];
+    if (!room) return null;
+    // The path's container tile, else a container next to the source (remoteRooms.ts pickSourceContainer)
     const pos = containerPos(source);
-    // Path unknown (paths segment not loaded yet on the first tick after a reset)
-    if (!room || !pos) return null;
-    const container = pos
-        .lookFor(LOOK_STRUCTURES)
-        .find(s => s.structureType === STRUCTURE_CONTAINER) as StructureContainer | undefined;
+    const near = room
+        .lookForAtArea(LOOK_STRUCTURES, source.y - 1, source.x - 1, source.y + 1, source.x + 1, true)
+        .map(r => r.structure)
+        .filter((s): s is StructureContainer => s.structureType === STRUCTURE_CONTAINER);
+    const id = pickSourceContainer(source, pos, near.map(c => ({ id: c.id, x: c.pos.x, y: c.pos.y })));
+    const container = near.find(c => c.id === id) ?? null;
     if (container) source.containerId = container.id;
-    return container ?? null;
+    return container;
 }
 
 export function hasRemoteContainer(source: RemoteSource): boolean {

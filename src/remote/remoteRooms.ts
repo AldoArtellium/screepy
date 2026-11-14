@@ -207,6 +207,26 @@ export function noteContest(
     return true;
 }
 
+/**
+ * A remote source's container: the one on the path's container tile, else the container next to the
+ * source closest to that tile. shard0 2026-11-14 W26N4: full containers at 6,36 and 46,15 next to their
+ * sources while the paths started at 7,36 / 46,13 (sites): the sources counted no container, so no hauler
+ * demand, one hauler per room and 1.4-3.6k energy piled on the ground.
+ */
+export function pickSourceContainer(
+    source: { x: number; y: number },
+    pathTile: { x: number; y: number } | undefined,
+    containers: { id: string; x: number; y: number }[]
+): string | undefined {
+    const range = (a: { x: number; y: number }, b: { x: number; y: number }) => Math.max(Math.abs(a.x - b.x), Math.abs(a.y - b.y));
+    const onPath = pathTile && containers.find(c => c.x === pathTile.x && c.y === pathTile.y);
+    if (onPath) return onPath.id;
+    const near = containers.filter(c => range(c, source) <= 1);
+    if (near.length === 0) return undefined;
+    if (!pathTile) return near[0].id;
+    return near.reduce((best, c) => (range(c, pathTile) < range(best, pathTile) ? c : best)).id;
+}
+
 /** Drops the expired entries */
 export function pruneContests(entries: { [room: string]: ContestEntry }, time: number): void {
     for (const roomName in entries) if (!isContested(entries[roomName], time)) delete entries[roomName];

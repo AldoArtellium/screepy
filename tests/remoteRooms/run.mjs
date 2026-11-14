@@ -222,5 +222,16 @@ check("a killer on its way does not", !keeperRoomHeld([{ spawning: false, inRoom
 check("a killer in the room holds it", keeperRoomHeld([{ spawning: false, inRoom: true }]));
 check("the old killer still there holds it while its successor spawns", keeperRoomHeld([{ spawning: false, inRoom: true }, { spawning: true, inRoom: false }]));
 
+// A source's container: the path's container tile, else any container next to the source. shard0 2026-11-14
+// W26N4: full containers at 6,36 and 46,15 next to their sources while the paths start at 7,36 / 46,13
+// (sites): the sources counted no container, no hauler came, 1.4-3.6k energy piled on the ground
+const { pickSourceContainer } = require(join(OUT, "remote", "remoteRooms.js"));
+const src = { x: 6, y: 37 };
+check("the path's tile first", pickSourceContainer(src, { x: 7, y: 36 }, [{ id: "a", x: 6, y: 36 }, { id: "b", x: 7, y: 36 }]) === "b");
+check("else a container next to the source", pickSourceContainer(src, { x: 7, y: 36 }, [{ id: "a", x: 6, y: 36 }]) === "a");
+check("not one 2 tiles away", pickSourceContainer(src, { x: 7, y: 36 }, [{ id: "c", x: 8, y: 37 }]) === undefined);
+check("the one closest to the path's tile", pickSourceContainer(src, { x: 7, y: 36 }, [{ id: "a", x: 5, y: 38 }, { id: "d", x: 7, y: 37 }]) === "d");
+check("no path tile: next to the source", pickSourceContainer(src, undefined, [{ id: "a", x: 6, y: 36 }]) === "a");
+
 console.log(failures === 0 ? "\nall checks passed" : `\n${failures} check(s) failed`);
 process.exit(failures === 0 ? 0 : 1);
