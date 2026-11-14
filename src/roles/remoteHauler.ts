@@ -44,6 +44,8 @@ export function runRemoteHauler(creep: Creep): void {
     if (creep.memory.delivering) deliver(creep);
     else pickup(creep);
     countStat(`haul:tick:${tickState}`);
+    // Same states per home RCL: low RCL rooms have spare transporters (counter transport:rcl<n>:*)
+    countStat(`haul:rcl${Game.rooms[creep.memory.room ?? ""]?.controller?.level ?? 0}:${tickState}`);
 }
 
 /** Load of a trip home against the capacity: partial trips cost the same walk as full ones */

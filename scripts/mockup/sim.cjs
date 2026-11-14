@@ -1220,6 +1220,20 @@ async function main() {
         `, partial ${trips ? (((counters["haul:partialTrips"] || 0) / trips) * 100).toFixed(1) : "n/a"}% | leave: ${leaves}`
     );
   }
+  // Per RCL: remote hauler ticks spent walking in the home room vs transporter spare time
+  for (let rcl = 1; rcl <= 8; rcl++) {
+    const haul = Object.entries(counters).filter(([k]) => k.startsWith(`haul:rcl${rcl}:`));
+    const transportTicks = counters[`transport:rcl${rcl}:tick`] || 0;
+    if (!haul.length && !transportTicks) continue;
+    const haulTotal = haul.reduce((sum, [, v]) => sum + v, 0);
+    const home = haul.filter(([k]) => /:(toSource:home|unload:.*)$/.test(k)).reduce((sum, [, v]) => sum + v, 0);
+    const pct = (v, total) => (total ? ((v / total) * 100).toFixed(1) : "n/a");
+    const spare = (counters[`transport:rcl${rcl}:idle`] || 0) + (counters[`transport:rcl${rcl}:noOrder`] || 0);
+    console.log(
+      `Hauling RCL ${rcl}: remote hauler ${haulTotal} ticks, ${home} (${pct(home, haulTotal)}%) in the home room` +
+        ` | transporter ${transportTicks} ticks, spare ${spare} (${pct(spare, transportTicks)}%), empty ${pct(counters[`transport:rcl${rcl}:empty`] || 0, transportTicks)}%`
+    );
+  }
   console.log(`Tasks ${completed} completed / ${failed} failed`);
   console.log(`Module errors ${moduleErrors.length} | console errors ${errorCount}`);
   const memorySize = Object.fromEntries(Object.entries(memory).map(([k, v]) => [k, JSON.stringify(v).length]));

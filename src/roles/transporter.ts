@@ -29,6 +29,18 @@ function setDelivering(creep: Creep, delivering: boolean): void {
 }
 
 export function runTransporter(creep: Creep): void {
+    const rcl = `transport:rcl${creep.room.controller?.level ?? 0}`;
+    countStat(`${rcl}:tick`);
+    const wasIdle = !!idlingFor.get(creep.name);
+    if (wasIdle) countStat(`${rcl}:idle`);
+    const hadOrder = !!creep.memory.order;
+    runTransporterTick(creep);
+    // Spare transporter time: idling, or no order before nor after this tick (a finished order clears it)
+    if (!wasIdle && !hadOrder && !creep.memory.order) countStat(`${rcl}:noOrder`);
+    if (creep.store.getUsedCapacity() === 0) countStat(`${rcl}:empty`);
+}
+
+function runTransporterTick(creep: Creep): void {
     const order = creep.memory.order;
     const idle = idlingFor.get(creep.name) ?? 0;
     if (idle > 0) {
