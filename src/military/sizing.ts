@@ -42,6 +42,19 @@ export function quadHealerBody(energy: number): BodyPartConstant[] {
     return buildBody({ weights: { [HEAL]: 3, [RANGED_ATTACK]: 1 }, moveMode: MoveMode.PLAINS, energyLimit: energy });
 }
 
+/**
+ * Drainer (drainer.ts): TOUGH to soak a volley at the exit tile, HEAL to recover on our side between
+ * pokes, a RANGED_ATTACK part per 6 others (towers that only target armed creeps still focus it, and
+ * it shoots what is in range from the exit tile), MOVE for plains
+ */
+export function drainerBody(energy: number): BodyPartConstant[] {
+    return buildBody({
+        weights: { [TOUGH]: 2, [HEAL]: 4, [RANGED_ATTACK]: 1 },
+        moveMode: MoveMode.PLAINS,
+        energyLimit: energy
+    });
+}
+
 /** Spawn cost of each member of a squad (roi.ts squadCost) */
 export function squadMemberCosts(type: SquadType, energy: number): number[] {
     const cost = (body: BodyPartConstant[]) => _.sum(body, p => BODYPART_COST[p]);
@@ -96,6 +109,8 @@ export interface SquadPlan {
     type: SquadType;
     /** The front creep of the chosen squad lasts SURVIVE_TICKS at the edge (boostNeed.ts) */
     feasible: boolean;
+    /** The squad out-heals the towers at close range: no drain; else a drainer first (drainer.ts) */
+    tanks: boolean;
     /** Healing of the chosen squad, its boosts included */
     heal: number;
     threat: Threat;
@@ -194,17 +209,29 @@ export function planSquad(
     // tanked. shard0 2026-11-14: Blindfold's towers repaired walls instead of shooting the poker on the
     // exit tile and fillers topped them up, quads sized to last 10 ticks poked W29N4 and W28N3 for their
     // whole life. A stronghold's core refills 1% a tick: the border drain works, the old rule stays.
+    // Untanked, they can still be drained: a drainer goes first and measures it (drainer.ts), the quad
+    // follows once the towers are predicted empty, judged then at the edge like towers without refill
     const tank = refills && !(hostileRoom(targetRoom)?.coreLevel ?? 0);
-    const choice = chooseSquad(shapes, threat, refills, {
+    const opts = {
         mode: militaryMemory().boosts,
         attrition: ATTRITION,
         floor: escalation.floor,
-        margin: escalation.margin,
-        tank
-    });
+        margin: escalation.margin
+    };
+    let choice = chooseSquad(shapes, threat, refills, { ...opts, tank });
+    if (tank && !choice.feasible) {
+        const drained = chooseSquad(
+            shapes.filter(s => s.type === "quad"),
+            threat,
+            false,
+            opts
+        );
+        if (drained.feasible) choice = drained;
+    }
     return {
         type: choice.type,
         feasible: choice.feasible,
+        tanks: choice.tanks,
         heal: choice.heal,
         threat,
         compounds: choice.compounds,

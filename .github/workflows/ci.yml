@@ -71,6 +71,9 @@ jobs:
       - name: Combat check
         run: node tests/combat/run.mjs
 
+      - name: Drain forecast check
+        run: node tests/drainForecast/run.mjs
+
       - name: Squad route check
         run: node tests/squadRoute/run.mjs
 

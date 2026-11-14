@@ -75,6 +75,11 @@ export interface SquadChoice {
     boostCost: number;
     /** (Spawn energy + boosts) x attrition */
     cost: number;
+    /**
+     * Out-heals the towers on its front at close range (combat.ts canTank, TOUGH share applied): the squad
+     * goes in without a drain; otherwise a drainer drains the towers first (military/drainer.ts)
+     */
+    tanks: boolean;
 }
 
 export interface ChooseOptions {
@@ -144,7 +149,8 @@ function result(
         compounds: { heal: levels.heal.compound, tough: levels.tough.compound, attack: levels.attack.compound },
         heal,
         boostCost,
-        cost: (shape.spawnCost + boostCost) * attrition
+        cost: (shape.spawnCost + boostCost) * attrition,
+        tanks: judge(shape, levels, threat, true, 1, true).holds
     };
 }
 
