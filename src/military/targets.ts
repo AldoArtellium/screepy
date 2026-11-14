@@ -32,6 +32,7 @@ import { looksStronger, OwnedRoomSeen, playerRoomCounts } from "./playerThreat";
 import {
     ATTRITION,
     freedSources,
+    MIN_ROI,
     pickTargets,
     REMOTE_HORIZON,
     releasedRooms,
@@ -46,6 +47,7 @@ import { labResources } from "../labs/reactions";
 import { marketAverage } from "../modules/MarketManager";
 import { countStat } from "../utils/stats";
 import { BoostDemand, DEMAND_TTL, demandAffordable, demandAmounts, demandState } from "./boostDemand";
+import { siegeEnergy, siegePlan } from "./siege";
 import { describeBoosts, planSquad, SquadPlan, squadMemberCosts } from "./sizing";
 import { blocksExpansion, isEncroacher, playerReason, spareRemoteRooms, StrategicReason, usableSources } from "./strategy";
 
@@ -60,8 +62,10 @@ export interface AutoTarget {
     reason: StrategicReason;
     roi: number;
     value: number;
-    /** Spawn energy and boosts with replacements */
+    /** Spawn energy and boosts with replacements (and the siege of a takeover) */
     cost: number;
+    /** The controller is taken after the squad's success (siege.ts): its siege is in the cost */
+    takeover: boolean;
 }
 
 interface Origin {
@@ -247,8 +251,11 @@ export function rankTargets(engaged: string[] = []): AutoTarget[] {
     const skipped: { [room: string]: string } = {};
     /** Candidates no origin can fight with its stock (offensive boost demand) */
     const blocked: { room: string; value: number }[] = [];
+    // The siege's claimer comes from the biggest base (siege.ts)
+    const biggest = _.max([0, ...from.map(o => o.room.energyCapacityAvailable)]);
     for (const [roomName, intel] of Object.entries(memory.rooms ?? {})) {
-        if (recentlyFailed(roomName)) continue;
+        // A sieged room has its creeps already
+        if (recentlyFailed(roomName) || memory.sieges?.[roomName]) continue;
         const kept = engaged.includes(roomName) ? memory.targets?.find(t => t.room === roomName)?.reason : undefined;
         const candidate =
             strongholdCandidate(roomName, intel, context.spare, skipped, kept) ??
@@ -277,8 +284,14 @@ export function rankTargets(engaged: string[] = []): AutoTarget[] {
         const energy = near.origin.room.energyCapacityAvailable;
         const members = squadMemberCosts(plan.type, energy);
         // The compounds the squad needs against this target (sizing.ts planSquad) are spent too
-        const cost = squadCost(members, ATTRITION, plan.boostCost);
-        targets.push({ room: roomName, reason, roi: value / cost, value: Math.round(value), cost });
+        const squad = squadCost(members, ATTRITION, plan.boostCost);
+        // A takeover adds its siege (claimers and guards) when the return still holds with it; else the room
+        // is attacked as before, squads only
+        const siege = siegePlan(roomName, biggest);
+        const withSiege = siege ? squad + siegeEnergy(siege, biggest) : Infinity;
+        const takeover = value / withSiege >= MIN_ROI;
+        const cost = Math.round(takeover ? withSiege : squad);
+        targets.push({ room: roomName, reason, roi: value / cost, value: Math.round(value), cost, takeover });
     }
     memory.skipped = skipped;
     updateBoostDemand(from, blocked, targets);

@@ -84,6 +84,29 @@ const BLOCKERS = opt("blockers", null);
 const REFILL_MAX = 790;
 const ENEMY_REFILL = opt("enemy-refill", null);
 const refillTrack = { given: 0, stock: 0, minTowerEnergy: null, emptyTicks: 0 };
+/**
+ * Downgrade timer of the enemy's controller at the start (needs --enemy), e.g. --enemy-downgrade 10000 for a
+ * full RCL 2 timer (default 100000: the enemy-bot never upgrades). The enemy controller's level, owner and
+ * upgrade block are tracked every tick: changes are logged and listed in the report (`enemy.controllerLog`).
+ */
+const ENEMY_DOWNGRADE = Number(opt("enemy-downgrade", 100000));
+const controllerTrack = { last: null, changes: [] };
+
+/** Logs every change of the enemy room's controller level or owner, and each attack (upgrade block set) */
+async function trackEnemyController(server, enemy, tick) {
+  const c = await server.common.storage.db["rooms.objects"].findOne({ room: enemy.room, type: "controller" });
+  if (!c) return;
+  const time = await server.world.gameTime;
+  const state = { level: c.level, user: c.user === enemy.id ? "enemy" : c.user || "none", blocked: c.upgradeBlocked || 0 };
+  const last = controllerTrack.last;
+  if (!last || last.level !== state.level || last.user !== state.user || last.blocked !== state.blocked) {
+    const left = c.downgradeTime ? c.downgradeTime - time : null;
+    const change = { tick, level: state.level, user: state.user, downgradeIn: left, attacked: !!last && state.blocked > last.blocked };
+    controllerTrack.changes.push(change);
+    log(`Enemy controller at tick ${tick}: ${JSON.stringify(change)}`);
+  }
+  controllerTrack.last = state;
+}
 
 /** Tops the enemy towers up from the refill stock (see ENEMY_REFILL); samples their energy every tick */
 async function refillEnemyTowers(server, enemy, tick) {
@@ -287,7 +310,7 @@ async function setupEnemy(server, fixture, spec) {
   }
   await env.set(env.keys.MEMORY + enemy.id, JSON.stringify(memory));
   const time = await server.world.gameTime;
-  await db["rooms.objects"].update({ room, type: "controller" }, { $set: { level: rcl, progress: 0, downgradeTime: time + 100000, safeModeAvailable: 0, safeMode: null } });
+  await db["rooms.objects"].update({ room, type: "controller" }, { $set: { level: rcl, progress: 0, downgradeTime: time + ENEMY_DOWNGRADE, safeModeAvailable: 0, safeMode: null } });
   await db.rooms.update({ _id: room }, { $set: { active: true } });
   const wall = (x, y) => (Number(r.terrain[y * 50 + x]) & 1) === 1;
   const taken = new Set([spot.y * 50 + spot.x, ...r.objects.map((o) => o.y * 50 + o.x)]);
@@ -639,6 +662,7 @@ async function enemyStatus(server, enemy) {
   const towerEnergy = objects.filter((o) => o.type === "tower").reduce((sum, o) => sum + ((o.store && o.store.energy) || 0), 0);
   const status = { spawns: count("spawn"), towers: count("tower"), towerEnergy, ramparts: count("rampart"), creeps: count("creep") };
   if (ENEMY_REFILL) status.refill = { ...refillTrack };
+  if (controllerTrack.last) status.controller = `${controllerTrack.last.user} RCL ${controllerTrack.last.level}`;
   if (SIEGE) status.siege = await siegeStatus(server, enemy);
   if (ENEMY_REMOTE) {
     const { db, env } = server.common.storage;
@@ -1133,6 +1157,7 @@ async function main() {
       log(`Siege: safe mode of ${SIEGE.split(":")[0]} cleared at tick ${tick}`);
     }
     await runTick(server);
+    if (enemy) await trackEnemyController(server, enemy, tick);
     if (SIEGE && enemy && tick % 5 === 0) {
       // Siege energy: the enemy's spawn and extensions full again (its spawn time is the limit)
       for (const type of ["spawn", "extension"]) {
@@ -1309,7 +1334,7 @@ async function main() {
     cpu: { avg: cpuAvg, max: cpuMax, intentsPerTick, officialEstimate: officialCpu, byRole: roleCpu },
     raids: raidLog,
     keepers: keeperTrack,
-    enemy: enemy ? await enemyStatus(server, enemy) : null,
+    enemy: enemy ? { ...(await enemyStatus(server, enemy)), controllerLog: controllerTrack.changes } : null,
     stronghold: stronghold ? await strongholdStatus(server, stronghold) : null,
     leftovers: leftovers ? await structuresLeft(server, leftovers) : null,
     stats,
