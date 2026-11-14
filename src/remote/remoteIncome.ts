@@ -20,6 +20,29 @@ export interface SourceEconomy {
      * home's one builder, repairs.ts upkeepWork (RemoteMining maintenanceWork)
      */
     maintenanceWork: number;
+    /** Energy per tick of the source's share of its keeper room's killer (escortShare; 0 elsewhere) */
+    escort?: number;
+    /** Body parts of that share, per CREEP_LIFE_TIME ticks */
+    escortParts?: number;
+}
+
+/** Net energy per tick under which a remote source is not worth its creeps */
+export const MIN_SOURCE_NET = 1;
+
+export function worthMining(net: number): boolean {
+    return net >= MIN_SOURCE_NET;
+}
+
+export { KEEPER_KILLER_COST, KEEPER_KILLER_PARTS } from "./keepers";
+
+/** Energy per tick of a keeper room or sector center source: 4000 per regeneration */
+export function keeperGeneration(): number {
+    return SOURCE_ENERGY_KEEPER_CAPACITY / ENERGY_REGEN_TIME;
+}
+
+/** A source's share of its room's killer: `cost` per CREEP_LIFE_TIME ticks over the room's mined sources */
+export function escortShare(cost: number, sources: number): number {
+    return cost / CREEP_LIFE_TIME / Math.max(1, sources);
 }
 
 /** Container decay outside owned rooms: 5000 hits per 100 ticks, repaired at 100 hits per energy */
@@ -57,7 +80,7 @@ export function sourceNet(source: SourceEconomy): number {
         (builderWork * BODYPART_COST[WORK] + builderCarry * BODYPART_COST[CARRY] + builderMoves * BODYPART_COST[MOVE]) /
         CREEP_LIFE_TIME;
 
-    return generation - harvesterCost - haulerCost - builderCost - CONTAINER_UPKEEP;
+    return generation - harvesterCost - haulerCost - builderCost - CONTAINER_UPKEEP - (source.escort ?? 0);
 }
 
 /** One CLAIM + MOVE reserver kept on the controller: 650 energy per (600 - distance) ticks */
@@ -94,7 +117,7 @@ export function sourceParts(source: SourceEconomy): number {
     const builderWork = source.maintenanceWork;
     const builderCarry = builderWork * 2.5;
     const builders = builderWork + builderCarry + (builderWork + builderCarry) / 2;
-    return harvester + haulers + builders;
+    return harvester + haulers + builders + (source.escortParts ?? 0);
 }
 
 export interface SourceCrew {

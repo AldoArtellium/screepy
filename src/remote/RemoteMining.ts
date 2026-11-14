@@ -16,9 +16,10 @@ import { hasInvaderCore, isRoomContested, isRoomUnderAttack, releasedPlayer } fr
 import { roomPlanner } from "../planner/RoomPlanner";
 import { log } from "../utils/logger";
 import { spawnManager } from "../modules/SpawnManager";
+import { trafficManager } from "../modules/TrafficManager";
 import { decisionBucket } from "../utils/throttle";
 import { decodePath, encodePath } from "../utils/pathCodec";
-import { parseRoomName, roomsInRange, roomStatus } from "../utils/rooms";
+import { isKeeperRoom, parseRoomName, roomsInRange, roomStatus } from "../utils/rooms";
 import { segmentStore } from "../utils/segments";
 import { countStat } from "../utils/stats";
 import { jitter, jitterFor } from "../utils/jitter";
@@ -26,14 +27,18 @@ import {
     budgetRooms,
     INTENT_CPU,
     cpuAverage,
+    escortShare,
+    keeperGeneration,
     reserverCost,
     roomEnergyPerCreep,
     SourceCrew,
     sourceCreeps,
     sourceNet,
-    sourceParts
+    sourceParts,
+    worthMining
 } from "./remoteIncome";
 import { blockerCost } from "./blockers";
+import { isKeeperOrCenter, keeperRoomCandidate, killerParts, partsCost } from "./keepers";
 import { isRemoteExcluded } from "./remoteBalance";
 import { isRemoteBlocked } from "./remoteRooms";
 import { updateSeizes } from "./remoteSeize";
@@ -184,16 +189,30 @@ function pathRooms(source: RemoteSource): string[] {
 
 /**
  * Another player's room or remote (reserved, or mined / reserved by them within ~20000 ticks), or a
- * source keeper room: never mined nor crossed on the way to a remote (remoteRooms.ts)
+ * source keeper room: never mined nor crossed on the way to a remote (remoteRooms.ts). A keeper room
+ * `home` mines (its killer clears it) is crossed by that home's paths: the way to the sector center.
  */
-function isBlockedRoom(roomName: string): boolean {
+function isBlockedRoom(roomName: string, home?: string): boolean {
     return isRemoteBlocked(
         roomName,
         intelManager.getIntel(roomName),
         Memory.username,
         isRoomContested(roomName),
-        releasedPlayer(roomName)
+        releasedPlayer(roomName),
+        home !== undefined && isRemoteRoomMined(home, roomName)
     );
+}
+
+/** A keeper room (name or intel): mined behind a keeperKiller */
+export function isKeeperRemote(roomName: string): boolean {
+    return isKeeperRoom(roomName) || !!intelManager.getIntel(roomName)?.hasSourceKeepers;
+}
+
+/** An invader stronghold is active in the room (military intel, until its collapse) */
+function hasStronghold(roomName: string): boolean {
+    const intel = Memory.military?.rooms?.[roomName];
+    if ((intel?.coreLevel ?? 0) <= 0) return false;
+    return intel?.collapse === undefined || intel.collapse > Game.time;
 }
 
 /** Positions of a packed path; the array is shared, don't modify it */
@@ -217,6 +236,24 @@ export function remotePath(source: RemoteSource): RoomPosition[] {
     return unpackPath(packedPath(source));
 }
 
+/** Cost of a tile within MINERAL_KEEPER_RANGE of a keeper room's mineral */
+const MINERAL_KEEPER_COST = 50;
+const MINERAL_KEEPER_RANGE = 4;
+
+function avoidMineralKeeper(matrix: CostMatrix, room: Room): void {
+    const terrain = room.getTerrain();
+    for (const mineral of room.find(FIND_MINERALS)) {
+        for (let dx = -MINERAL_KEEPER_RANGE; dx <= MINERAL_KEEPER_RANGE; dx++) {
+            for (let dy = -MINERAL_KEEPER_RANGE; dy <= MINERAL_KEEPER_RANGE; dy++) {
+                const x = mineral.pos.x + dx;
+                const y = mineral.pos.y + dy;
+                if (x < 0 || x > 49 || y < 0 || y > 49 || terrain.get(x, y) === TERRAIN_MASK_WALL) continue;
+                if (matrix.get(x, y) < MINERAL_KEEPER_COST) matrix.set(x, y, MINERAL_KEEPER_COST);
+            }
+        }
+    }
+}
+
 /** Rooms owned by someone else (or an active invader core) are never crossed */
 const matrixCache: Map<string, { until: number; matrix: CostMatrix | false }> = new Map();
 function remoteCostMatrix(roomName: string): CostMatrix | false {
@@ -238,6 +275,9 @@ function remoteCostMatrix(roomName: string): CostMatrix | false {
                 for (const pos of plan.getLocations(type)) matrix.set(pos.x, pos.y, 255);
             }
         }
+        // A keeper room's mineral keeper is never killed (keeperKiller guards the sources): paths keep
+        // out of its reach
+        if (isKeeperRemote(roomName)) avoidMineralKeeper(matrix, room);
     }
     matrixCache.set(roomName, { until: Game.time + jitter(1000), matrix });
     return matrix;
@@ -371,7 +411,7 @@ function pathFor(home: Room, sourcePos: RoomPosition): RoomPosition[] | null {
         const ttl = cache.path ? PATH_TTL : FAILED_PATH_TTL;
         // A cached path that now crosses someone else's room is searched again at once
         const crossesBlocked =
-            !!cache.path && roomsOf(cache.path).some(r => r !== sourcePos.roomName && isBlockedRoom(r));
+            !!cache.path && roomsOf(cache.path).some(r => r !== sourcePos.roomName && isBlockedRoom(r, home.name));
         if (Game.time - cache.generated < jitterFor(key, ttl) && !crossesBlocked) return cache.path ? unpackPath(cache.path) : null;
     }
     const storagePos = roomPlanner.getPlan(home.name)?.getLocations("storage")[0];
@@ -390,7 +430,7 @@ function pathFor(home: Room, sourcePos: RoomPosition): RoomPosition[] | null {
         maxOps: 10000,
         heuristicWeight: 1,
         roomCallback: roomName =>
-            (roomName !== sourcePos.roomName && isBlockedRoom(roomName)) || roomStatus(roomName) !== zone
+            (roomName !== sourcePos.roomName && isBlockedRoom(roomName, home.name)) || roomStatus(roomName) !== zone
                 ? false
                 : sharedCostMatrix(roomName, shared)
     });
@@ -415,21 +455,30 @@ function worldTile(roomName: string, x: number, y: number): { x: number; y: numb
 }
 
 /**
- * Remote room candidates of a home room: known, not owned, not source keeper, not another player's
- * remote (their reservation, or contested: see remoteRooms.ts), within 3 rooms
+ * Remote room candidates of a home room: known, not owned, not another player's remote (their
+ * reservation, or contested: see remoteRooms.ts), within 3 rooms. A keeper room only for an RCL 7+
+ * home within 2 rooms, without an active stronghold (keepers.ts keeperRoomCandidate).
  */
 function candidateRooms(home: Room): string[] {
     return roomsInRange(home.name, MAX_ROOM_DISTANCE).filter(roomName => {
         const intel = intelManager.getIntel(roomName);
-        if (!intel?.sources?.length) return false;
-        if (intel.owner || isBlockedRoom(roomName)) return false;
+        if (!intel?.sources?.length || intel.owner) return false;
+        const keeper = isKeeperRemote(roomName);
+        if (!keeper && isBlockedRoom(roomName)) return false;
         const route = Game.map.findRoute(home.name, roomName);
-        return route !== ERR_NO_PATH && route.length <= MAX_ROOM_DISTANCE;
+        if (route === ERR_NO_PATH || route.length > MAX_ROOM_DISTANCE) return false;
+        if (!keeper) return true;
+        const open = keeperRoomCandidate({
+            rcl: home.controller?.level ?? 0,
+            capacity: home.energyCapacityAvailable,
+            distance: route.length,
+            stronghold: hasStronghold(roomName) || hasInvaderCore(roomName)
+        });
+        if (!open) return false;
+        return !isRemoteBlocked(roomName, intel, Memory.username, isRoomContested(roomName), releasedPlayer(roomName), true);
     });
 }
 
-/** Net energy per tick under which a remote source is not worth its creeps */
-const MIN_SOURCE_NET = 1;
 /** Sources already mined keep their place unless another one scores 10% more */
 const KEEP_BONUS = 1.1;
 
@@ -568,7 +617,7 @@ function sampleCpu(): void {
  * INTENT_CPU per move (`intents:move:<role>`: the TrafficManager issues the moves, so `cpu:<role>`
  * leaves them out; they were ~45% of a room on shard0)
  */
-const REMOTE_CPU_ROLES = ["remoteHarvester", "remoteHauler", "reserver", "remoteBuilder"];
+const REMOTE_CPU_ROLES = ["remoteHarvester", "remoteHauler", "reserver", "remoteBuilder", "keeperKiller"];
 
 /** Updates the average CPU per tick of one remote room from the remote roles' CPU and move counters */
 function sampleRoomCpu(currentRooms: number): void {
@@ -632,7 +681,8 @@ type Candidate = { source: RemoteSource; net: number; parts: number; crew: Sourc
 type HomeSelection = {
     home: Room;
     cap: number | undefined;
-    rooms: { [room: string]: { candidates: Candidate[]; reserverCost: number } };
+    /** `escorted`: a keeper room, its killer counted as one more creep */
+    rooms: { [room: string]: { candidates: Candidate[]; reserverCost: number; escorted: boolean } };
     ranked: Candidate[];
     chosen: { [room: string]: RemoteSource[] };
     count: number;
@@ -693,24 +743,36 @@ function selectRemotes(): void {
         for (const roomName of candidateNames) {
             const intel = intelManager.getIntel(roomName)!;
             const candidates: Candidate[] = [];
+            // Keeper rooms and the sector center: 4000 per regeneration, no controller to reserve
+            const strong = isKeeperOrCenter(roomName, intel.hasSourceKeepers);
             const capacity = reserved(roomName) ? SOURCE_ENERGY_CAPACITY : SOURCE_ENERGY_NEUTRAL_CAPACITY;
-            const generation = capacity / ENERGY_REGEN_TIME;
-            let net = 0;
+            const generation = strong ? keeperGeneration() : capacity / ENERGY_REGEN_TIME;
+            const reachable: { source: NonNullable<typeof intel.sources>[number]; path: RoomPosition[] }[] = [];
             for (const source of intel.sources!) {
                 // Measured to lose energy for this home (remoteBalance.ts)
                 if (isRemoteExcluded(sourceKey(roomName, source.x, source.y), home.name)) continue;
                 const path = pathFor(home, new RoomPosition(source.x, source.y, roomName));
-                if (!path || path.length === 0) continue;
+                if (path && path.length > 0) reachable.push({ source, path });
+            }
+            // A keeper room's killer, shared between its reachable sources
+            const escorted = isKeeperRemote(roomName);
+            const killer = killerParts(home.energyCapacityAvailable);
+            const killerEnergy = killer ? partsCost(killer) : 0;
+            const killerBodyParts = killer ? killer.ranged + killer.heal + killer.move : 0;
+            let net = 0;
+            for (const { source, path } of reachable) {
                 const economy = {
                     generation,
                     distance: path.length,
                     roads,
                     // maintenanceWork() for a path not selected yet
-                    maintenanceWork: roads ? upkeepWork(path.filter(p => !isOwnedRoom(p.roomName)).length, path.length) : 0
+                    maintenanceWork: roads ? upkeepWork(path.filter(p => !isOwnedRoom(p.roomName)).length, path.length) : 0,
+                    escort: escorted ? escortShare(killerEnergy, reachable.length) : 0,
+                    escortParts: escorted ? killerBodyParts / reachable.length : 0
                 };
                 const sourceIncome = sourceNet(economy);
                 // A source that barely pays for its creeps is left out
-                if (sourceIncome < MIN_SOURCE_NET) continue;
+                if (!worthMining(sourceIncome)) continue;
                 net += sourceIncome;
                 const key = sourceKey(roomName, source.x, source.y);
                 const previous = memory().sources[key];
@@ -735,7 +797,7 @@ function selectRemotes(): void {
             if (candidates.length === 0) continue;
             const reserver = reserved(roomName) ? reserverCost(_.min(candidates.map(c => c.source.travelTime))) : 0;
             if (net - reserver <= 0) continue;
-            rooms[roomName] = { candidates, reserverCost: reserver };
+            rooms[roomName] = { candidates, reserverCost: reserver, escorted };
         }
         // Best net energy per spawn part first: the room-level net income kept two far sources over
         // a close one, and the spawn never got to the far ones' harvesters
@@ -771,7 +833,8 @@ function selectRemotes(): void {
             const room = entry.rooms[roomName];
             const chosen = sources.map(s => room.candidates.find(c => c.source === s)!);
             const score = _.sum(chosen, c => c.net) - room.reserverCost;
-            const perCreep = roomEnergyPerCreep(chosen, room.reserverCost, room.reserverCost > 0 ? 1 : 0);
+            const fixedCreeps = (room.reserverCost > 0 ? 1 : 0) + (room.escorted ? 1 : 0);
+            const perCreep = roomEnergyPerCreep(chosen, room.reserverCost, fixedCreeps);
             picked.push({ score, perCreep, travel: _.min(sources.map(s => s.travelTime)), sources });
         }
     }
@@ -829,20 +892,26 @@ export function minedRemoteRoomNames(): Set<string> {
     return new Set(Object.values(memory().sources).map(s => s.room));
 }
 
-/** "home>room" of every selected source, rebuilt once per tick (heap) */
+/** "home>room" of every selected source, and the rooms alone, rebuilt once per tick (heap) */
 const minedRooms: Set<string> = new Set();
+const minedRoomsAlone: Set<string> = new Set();
 let minedRoomsTick = -1;
+
+function refreshMinedRooms(): void {
+    if (minedRoomsTick === Game.time) return;
+    minedRoomsTick = Game.time;
+    minedRooms.clear();
+    minedRoomsAlone.clear();
+    for (const key in memory().sources) {
+        const source = memory().sources[key];
+        minedRooms.add(`${source.homeRoom}>${source.room}`);
+        minedRoomsAlone.add(source.room);
+    }
+}
 
 /** A home mines a source in the room (cheap: reservers check it every tick) */
 export function isRemoteRoomMined(homeRoom: string, roomName: string): boolean {
-    if (minedRoomsTick !== Game.time) {
-        minedRoomsTick = Game.time;
-        minedRooms.clear();
-        for (const key in memory().sources) {
-            const source = memory().sources[key];
-            minedRooms.add(`${source.homeRoom}>${source.room}`);
-        }
-    }
+    refreshMinedRooms();
     return minedRooms.has(`${homeRoom}>${roomName}`);
 }
 
@@ -1057,15 +1126,46 @@ export function operationRoadPositions(homeRoom: string): RoomPosition[] {
     });
 }
 
-/** Hivemind canReserveFrom: a reserver can be spawned, so the source is assumed reserved (3000) */
+/**
+ * Hivemind canReserveFrom: a reserver can be spawned, so the source is assumed reserved (3000). Never
+ * a room without controller (keeper rooms, sector centers: their sources hold 4000 anyway)
+ */
 export function canReserveFrom(home: Room, remoteRoom: string): boolean {
-    const positions = intelManager.getIntel(remoteRoom)?.reservePositions ?? 0;
+    const intel = intelManager.getIntel(remoteRoom);
+    if (!intel?.controllerPos) return false;
+    const positions = intel.reservePositions ?? 0;
     return home.energyCapacityAvailable >= (positions > 1 ? 650 : 1300);
 }
 
 export function sourceEnergyCapacity(home: Room, source: RemoteSource): number {
+    const keepers = intelManager.getIntel(source.room)?.hasSourceKeepers;
+    if (isKeeperOrCenter(source.room, keepers)) return SOURCE_ENERGY_KEEPER_CAPACITY;
     return canReserveFrom(home, source.room) ? SOURCE_ENERGY_CAPACITY : SOURCE_ENERGY_NEUTRAL_CAPACITY;
 }
+
+/** Keeper rooms a home mines (a killer each) */
+export function minedKeeperRooms(homeRoom: string): string[] {
+    return [...new Set(remoteSources(homeRoom).map(s => s.room))].filter(isKeeperRemote);
+}
+
+/**
+ * Keeper tiles are walkable for our creeps in a keeper room or sector center a home mines (TrafficManager
+ * keeperTiles): cartographer avoids every tile within 5 of a keeper room's sources by default, the very
+ * tiles the harvesters stand on
+ */
+export function isMinedStrongRoom(roomName: string): boolean {
+    refreshMinedRooms();
+    if (!minedRoomsAlone.has(roomName)) return false;
+    return isKeeperOrCenter(roomName, intelManager.getIntel(roomName)?.hasSourceKeepers);
+}
+
+/** Roles of the keeper room operation: their searches cross keeper tiles in the rooms mined */
+const KEEPER_OPERATION_ROLES = new Set(["remoteHarvester", "remoteHauler", "remoteBuilder", "keeperKiller"]);
+
+trafficManager.keeperTiles = (creep, target) =>
+    "body" in creep &&
+    KEEPER_OPERATION_ROLES.has(creep.memory.role ?? "") &&
+    (isMinedStrongRoom(creep.pos.roomName) || isMinedStrongRoom(target.roomName));
 
 export const remoteMiningModule = () => {
     sampleSpawns();

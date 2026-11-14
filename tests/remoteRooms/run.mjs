@@ -23,6 +23,7 @@ try {
             "--outDir", OUT, "--rootDir", join(ROOT, "src"), "--module", "commonjs", "--target", "es2019", "--skipLibCheck",
             "--types", "screeps,lodash",
             join(ROOT, "src", "remote", "remoteRooms.ts"),
+            join(ROOT, "src", "remote", "keepers.ts"),
         ],
         { stdio: "pipe" }
     );
@@ -136,6 +137,80 @@ check("held while mined and quiet", seizeStatus({ aggression: 0, threshold: 300,
 check("held while the selection may still pick it", seizeStatus({ aggression: 0, threshold: 300, since: 1000, now: 1000 + SEIZE_SELECT_GRACE - 1, mined: false }) === "hold");
 check("unused once the selection left it out", seizeStatus({ aggression: 0, threshold: 300, since: 1000, now: 1000 + SEIZE_SELECT_GRACE, mined: false }) === "unused");
 check("lost once they fight back", seizeStatus({ aggression: 300, threshold: 300, since: 1000, now: 2000, mined: true }) === "lost");
+
+// Source keeper mining (2026-11-14, spec sk-mining): shard0's remotes ran out (6 sources) while W26N4-6,
+// W25N4, W24N4 (keeper rooms) and W25N5 (sector center, 3 sources) stayed unused
+const keepers = require(join(OUT, "remote", "keepers.js"));
+const {
+    KEEPER_MIN_RCL, KEEPER_RANGE, keeperRoomCandidate, isSectorCenter, isKeeperOrCenter,
+    keeperTarget, keeperDangers, inKeeperDanger, killerNeeded, LAIR_WARNING, KEEPER_FLEE_RANGE,
+} = keepers;
+const skFacts = { rcl: 7, capacity: 5600, distance: 1, stronghold: false };
+check("keeper room next to an RCL 7 base is a candidate", keeperRoomCandidate(skFacts));
+check("RCL 7 is the least", KEEPER_MIN_RCL === 7 && !keeperRoomCandidate({ ...skFacts, rcl: 6 }));
+check("RCL 8 too", keeperRoomCandidate({ ...skFacts, rcl: 8 }));
+check("2 rooms away", KEEPER_RANGE === 2 && keeperRoomCandidate({ ...skFacts, distance: 2 }));
+check("not 3 rooms away", !keeperRoomCandidate({ ...skFacts, distance: 3 }));
+check("not with an active invader stronghold", !keeperRoomCandidate({ ...skFacts, stronghold: true }));
+// Mockup W7N3 rcl7 2026-11-14: at 3300 capacity (extensions still building) the killer came out at 36 parts and died 3 times
+check("not before the home can spawn the least killer (3900)", !keeperRoomCandidate({ ...skFacts, capacity: 3300 }) && !keeperRoomCandidate({ ...skFacts, capacity: 3899 }));
+check("3900 capacity is enough", keeperRoomCandidate({ ...skFacts, capacity: 3900 }));
+// Killer body (engine: heal cancels a melee attack, a keeper hits back 300 per melee hit: ATTACK19 HEAL6 MOVE25
+// loses in 9 ticks; at range 3 a keeper deals 100 per tick): RANGED + HEAL grown with the energy
+const { killerParts } = keepers;
+check("no killer under 3900", killerParts(3899) === undefined);
+check("3900: RANGED12 HEAL5 MOVE17", JSON.stringify(killerParts(3900)) === JSON.stringify({ ranged: 12, heal: 5, move: 17 }));
+check("4100 (mockup W7N3 rcl7): RANGED13 HEAL5", JSON.stringify(killerParts(4100)) === JSON.stringify({ ranged: 13, heal: 5, move: 18 }));
+check("5600 (RCL 7): RANGED17 HEAL7", JSON.stringify(killerParts(5600)) === JSON.stringify({ ranged: 17, heal: 7, move: 24 }));
+check("RCL 8: RANGED18 HEAL7, 50 parts at most", JSON.stringify(killerParts(12900)) === JSON.stringify({ ranged: 18, heal: 7, move: 25 }));
+
+// A keeper room mined by the home is no longer blocked for that home; any other keeper room still is
+check("keeper room held by the home is not blocked", !isRemoteBlocked("W26N5", { hasSourceKeepers: true }, ME, false, undefined, true));
+check("keeper room not held stays blocked", isRemoteBlocked("W26N5", { hasSourceKeepers: true }, ME, false, undefined, false));
+check("a held keeper room that is contested stays blocked", isRemoteBlocked("W26N5", {}, ME, true, undefined, true));
+check("held flag changes nothing for a plain room", isRemoteBlocked("W27N8", { reserver: "doorknobnob" }, ME, false, undefined, true));
+
+check("W25N5 is a sector center", isSectorCenter("W25N5") && isSectorCenter("E15S35"));
+check("W26N5 is not a sector center", !isSectorCenter("W26N5") && !isSectorCenter("W20N5"));
+check("keeper rooms and centers carry 4000 sources", isKeeperOrCenter("W26N5") && isKeeperOrCenter("W25N5") && !isKeeperOrCenter("W27N5"));
+check("intel keepers count too", isKeeperOrCenter("W27N5", true));
+
+// The killer's target: a live keeper by its guarded sources first (closest), else the lair whose keeper comes first
+const pos = { x: 20, y: 20 };
+const lairs = [
+    { id: "a", x: 14, y: 47, ticksToSpawn: 120 },
+    { id: "b", x: 15, y: 7, ticksToSpawn: 35 },
+    { id: "c", x: 27, y: 12, ticksToSpawn: undefined }
+];
+check("live keeper first", keeperTarget(pos, [{ id: "k1", x: 30, y: 12 }], lairs)?.id === "k1");
+check("closest live keeper", keeperTarget(pos, [{ id: "k1", x: 40, y: 40 }, { id: "k2", x: 22, y: 22 }], lairs)?.id === "k2");
+check("no keeper: lair spawning first", JSON.stringify(keeperTarget(pos, [], lairs)) === JSON.stringify({ kind: "lair", id: "b" }));
+check("a lair without timer comes last", keeperTarget(pos, [], [{ id: "c", x: 27, y: 12 }, { id: "a", x: 14, y: 47, ticksToSpawn: 280 }])?.id === "a");
+check("equal timers: closest lair", keeperTarget(pos, [], [{ id: "a", x: 14, y: 47, ticksToSpawn: 50 }, { id: "b", x: 15, y: 7, ticksToSpawn: 50 }])?.id === "b");
+check("nothing to guard", keeperTarget(pos, [], []) === undefined);
+
+// Civilians step out of range 3 of a live keeper or of a lair about to spawn
+check("flee range 3, lair warning 10", KEEPER_FLEE_RANGE === 3 && LAIR_WARNING === 10);
+const dangers = keeperDangers([{ x: 10, y: 10 }], [{ x: 30, y: 30, ticksToSpawn: 10 }, { x: 40, y: 5, ticksToSpawn: 11 }, { x: 5, y: 40 }]);
+check("live keeper and lair at 10 ticks are dangers", dangers.length === 2);
+check("within 3 of a keeper", inKeeperDanger({ x: 13, y: 12 }, dangers));
+check("4 tiles away is safe", !inKeeperDanger({ x: 14, y: 10 }, dangers));
+check("within 3 of a lair spawning in 10", inKeeperDanger({ x: 32, y: 31 }, dangers));
+check("next to a lair spawning in 11 is safe", !inKeeperDanger({ x: 40, y: 6 }, keeperDangers([], [{ x: 40, y: 5, ticksToSpawn: 11 }])));
+// Mockup W7N3 rcl7 2026-11-14: W6N4:15:43 lost 7 harvesters: its keeper spawned 4 tiles away and walked to
+// the source, the harvester on the container (out of range 3 of the lair) only fled once hit, too slow
+const guardedSources = [{ x: 15, y: 43 }, { x: 15, y: 4 }];
+const soon = keeperDangers([], [{ x: 14, y: 47, ticksToSpawn: 8 }], guardedSources);
+check("a lair spawning soon makes its source a danger", inKeeperDanger({ x: 16, y: 42 }, soon) && !inKeeperDanger({ x: 15, y: 8 }, soon));
+const later = keeperDangers([], [{ x: 14, y: 47, ticksToSpawn: 40 }], guardedSources);
+check("a lair far from spawning does not", !inKeeperDanger({ x: 16, y: 42 }, later));
+
+// Killer relief: a successor once no killer outlives its arrival (spawn time + travel)
+check("no killer: one needed", killerNeeded([], 150));
+check("one spawning: none needed", !killerNeeded([{ spawning: true, ticksToLive: undefined }], 150));
+check("an old killer arriving later than its end: successor", killerNeeded([{ spawning: false, ticksToLive: 140 }], 150));
+check("a young killer: none", !killerNeeded([{ spawning: false, ticksToLive: 900 }], 150));
+check("an old one and its successor: none", !killerNeeded([{ spawning: false, ticksToLive: 100 }, { spawning: true }], 150));
 
 console.log(failures === 0 ? "\nall checks passed" : `\n${failures} check(s) failed`);
 process.exit(failures === 0 ? 0 : 1);

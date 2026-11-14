@@ -1,8 +1,8 @@
 /**
  * Spawn role for remote mining: at most one option per tick. Sources are taken closest first and a
  * source is only considered once every closer one has its haulers, harvesters and reservers.
- * Ported from Hivemind (MIT), src/spawn-role/remote-mining.ts (source keepers and dismantlers left
- * out: RCL 7, rare on a fresh server). See docs/hivemind/hivemind-remote.md §6.
+ * Ported from Hivemind (MIT), src/spawn-role/remote-mining.ts (dismantlers left out). Keeper rooms: our
+ * keeperKiller first (2026-11-14, docs/decisions/economy.md). See docs/hivemind/hivemind-remote.md §6.
  */
 
 import { bodyCost, buildBody, MoveMode } from "../core/bodyBuilder";
@@ -15,6 +15,7 @@ import type { SpawnOption, SpawnRole } from "../spawning/spawnRoles";
 import {
     canReserveFrom,
     hasRemoteContainer,
+    isKeeperRemote,
     isRemoteUnderAttack,
     needsRepairs,
     remoteContainer,
@@ -24,6 +25,8 @@ import {
     remoteSources,
     sourceEnergyCapacity
 } from "./RemoteMining";
+import { isKeeperOrCenter, killerNeeded, killerParts } from "./keepers";
+
 import { builderWork } from "./repairs";
 import { pathTerrain, recordSpawnLateness, spawnLeadObserved, travelObserved, walkTicks } from "./travel";
 
@@ -31,6 +34,7 @@ export const REMOTE_HARVESTER = "remoteHarvester";
 export const REMOTE_HAULER = "remoteHauler";
 export const RESERVER = "reserver";
 export const REMOTE_BUILDER = "remoteBuilder";
+export const KEEPER_KILLER = "keeperKiller";
 
 /** Reservation a second reserver of a room is spawned under (not in Hivemind: one per free tile around the controller) */
 const RESERVE_HOLD = 1000;
@@ -43,11 +47,15 @@ declare global {
         reserveRoom?: string;
         /** Remote harvester that reached its source once */
         arrived?: boolean;
+        /** Keeper room a keeperKiller clears */
+        keeperRoom?: string;
+        /** A keeperKiller at the end of its life or recycled: its death is no combat loss */
+        expiring?: boolean;
     }
 }
 
 type RemoteOption = SpawnOption & {
-    unit: "hauler" | "builder" | "harvester" | "reserver";
+    unit: "hauler" | "builder" | "harvester" | "reserver" | "killer";
     remote?: RemoteSource;
     /** Replacement harvester: the tick it had to spawn to arrive as the youngest harvester left dies */
     deadline?: number;
@@ -103,11 +111,14 @@ function haulerSize(home: Room, totalCarry: number): number {
 
 function harvesterBody(home: Room, option: RemoteOption): BodyPartConstant[] {
     const established = option.remote ? isEstablished(option.remote) : false;
+    // A keeper room's harvester runs from its keeper off the road: plains body (mockup W7N3 rcl7, road
+    // bodies: 3-5 harvesters per W6N4 source and window, ~20% of its energy harvested)
+    const fleeing = !!option.remote && isKeeperOrCenter(option.remote.room, isKeeperRemote(option.remote.room));
     return buildBody({
         weights: { [WORK]: 20, [CARRY]: 1 },
         partLimits: { [WORK]: option.size ? option.size + 1 : 0 },
         // Road bodies only once the home builds remote roads (storage era): off roads they walk at half speed
-        moveMode: established && haulerMove(home) === MoveMode.ROAD ? MoveMode.ROAD : MoveMode.PLAINS,
+        moveMode: established && !fleeing && haulerMove(home) === MoveMode.ROAD ? MoveMode.ROAD : MoveMode.PLAINS,
         carryContentLevel: 0,
         energyLimit: energyLimit(home)
     });
@@ -235,6 +246,31 @@ function harvesterOption(home: Room, source: RemoteSource): RemoteOption | null 
     return option;
 }
 
+/**
+ * The keeper killer: RANGED_ATTACK and HEAL grown with the home's energy (keepers.ts killerParts, why not
+ * melee there), none under RANGED12 HEAL5 MOVE17. MOVE parts in front take the hits, HEAL last.
+ */
+function killerBody(home: Room): BodyPartConstant[] {
+    const parts = killerParts(home.energyCapacityAvailable);
+    if (!parts) return [];
+    return [
+        ...Array<BodyPartConstant>(parts.move).fill(MOVE),
+        ...Array<BodyPartConstant>(parts.ranged).fill(RANGED_ATTACK),
+        ...Array<BodyPartConstant>(parts.heal).fill(HEAL)
+    ];
+}
+
+/** A keeper room's killer, before its harvesters: a successor once none outlives its spawn and travel */
+function killerOption(home: Room, source: RemoteSource): RemoteOption | null {
+    const body = killerBody(home);
+    if (body.length === 0) return null;
+    const killers = creepsByRole(home.name, KEEPER_KILLER).filter(c => c.memory.keeperRoom === source.room);
+    const lead = body.length * CREEP_SPAWN_TIME + source.travelTime;
+    if (!killerNeeded(killers.map(c => ({ spawning: c.spawning, ticksToLive: c.ticksToLive })), lead)) return null;
+    const weight = 1 - source.travelTime / 100;
+    return { role: KEEPER_KILLER, unit: "killer", priority: HARVESTER_PRIORITY, weight, remote: source };
+}
+
 function reserverOption(home: Room, source: RemoteSource): RemoteOption | null {
     const intel = intelManager.getIntel(source.room);
     if (!intel?.controllerPos || intel.owner) return null;
@@ -282,6 +318,7 @@ export const remoteSpawnRole: SpawnRole = {
         let haulerDemand = 0;
         let builderChecked = false;
         const reserved = new Set<string>();
+        const guarded = new Set<string>();
         for (const source of remoteSources(home.name)) {
             if (isRemoteUnderAttack(source)) continue;
             // Haulers only for a mined source: a container left without harvester has nothing to carry
@@ -294,6 +331,15 @@ export const remoteSpawnRole: SpawnRole = {
                 const builder = builderOption(home);
                 if (builder) return [builder];
             }
+            // A keeper room's killer goes before its harvesters, checked once per room
+            const keeperRoom = isKeeperRemote(source.room);
+            if (keeperRoom && !guarded.has(source.room)) {
+                guarded.add(source.room);
+                const killer = killerOption(home, source);
+                if (killer) return [killer];
+            }
+            // No harvester walks into live keepers: its killer spawning or alive first
+            if (keeperRoom && !creepsByRole(home.name, KEEPER_KILLER).some(c => c.memory.keeperRoom === source.room)) continue;
             const harvester = harvesterOption(home, source);
             if (!harvester) harvesterWanted.delete(source.key);
             else if (!harvesterWanted.has(source.key)) {
@@ -313,6 +359,7 @@ export const remoteSpawnRole: SpawnRole = {
         if (remote.unit === "hauler") return haulerBody(home, option.size ?? 0);
         if (remote.unit === "builder") return builderBody(home, option.size ?? 0);
         if (remote.unit === "harvester") return harvesterBody(home, remote);
+        if (remote.unit === "killer") return killerBody(home);
         const body = reserverBody(home);
         return bodyCost(body) <= home.energyCapacityAvailable ? body : [];
     },
@@ -321,6 +368,7 @@ export const remoteSpawnRole: SpawnRole = {
         const remote = option as RemoteOption;
         if (remote.unit === "hauler") return { role: REMOTE_HAULER, room: home.name, delivering: false };
         if (remote.unit === "builder") return { role: REMOTE_BUILDER, room: home.name, returning: true };
+        if (remote.unit === "killer") return { role: KEEPER_KILLER, room: home.name, keeperRoom: remote.remote!.room };
         if (remote.unit === "harvester") {
             const wanted = harvesterWanted.get(remote.remote!.key);
             if (wanted) {

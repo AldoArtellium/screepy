@@ -694,6 +694,46 @@ async function enemyStatus(server, enemy) {
   return status;
 }
 
+/**
+ * Source keepers seen per room (user "3"), sampled every KEEPER_SAMPLE ticks: the engine only processes
+ * an active room (one with a player's object), so a keeper room's lairs only tick while our creeps are
+ * there. `max` keepers alive at once, `samples` with at least one, `firstSeen` tick.
+ */
+const KEEPER_SAMPLE = 50;
+const keeperTrack = {};
+async function sampleKeepers(server, tick) {
+  const keepers = await server.common.storage.db["rooms.objects"].find({ type: "creep", user: "3" });
+  const byRoom = {};
+  for (const k of keepers) byRoom[k.room] = (byRoom[k.room] || 0) + 1;
+  for (const [room, n] of Object.entries(byRoom)) {
+    const t = (keeperTrack[room] ??= { max: 0, samples: 0, firstSeen: tick });
+    t.max = Math.max(t.max, n);
+    t.samples++;
+  }
+}
+
+/**
+ * Keeper rooms of the fixture. The official server processes every room, so a lair's keeper is always
+ * there and respawns 300 ticks after its death; the mockup engine only processes active rooms (a
+ * player's object in them) and the fixture has lairs without keepers: before 2026-11-14 a keeper
+ * spawned 300 ticks after one of our creeps entered and only while it stayed (none seen in W6N4 over
+ * 3000 ticks at rcl7). Each lair gets its keeper at setup and these rooms stay active every tick.
+ */
+const keeperRooms = [];
+
+/** A lair's keeper as @screeps/engine processor/intents/keeper-lairs/tick.js spawns it */
+function keeperOf(lair) {
+  const body = [
+    ...Array(17).fill("tough"),
+    ...Array(13).fill("move"),
+    ...Array.from({ length: 20 }, (_, i) => (i % 2 === 0 ? "attack" : "ranged_attack"))
+  ].map((type) => ({ type, hits: 100 }));
+  return {
+    name: `Keeper${lair._id}`, x: lair.x, y: lair.y, body, store: { energy: 0 }, storeCapacity: 0, type: "creep",
+    room: lair.room, user: "3", hits: 5000, hitsMax: 5000, spawning: false, fatigue: 0
+  };
+}
+
 async function setupWorld(server, fixture) {
   const { db, env } = server.common.storage;
   await server.world.reset();
@@ -709,8 +749,10 @@ async function setupWorld(server, fixture) {
     for (const o of r.objects) {
       const doc = { room: name, ...o };
       if (o.type === "source") doc.ticksToRegeneration = 300;
-      await db["rooms.objects"].insert(doc);
+      const inserted = await db["rooms.objects"].insert(doc);
+      if (o.type === "keeperLair") await db["rooms.objects"].insert(keeperOf(inserted));
     }
+    if (r.sourceKeepers) keeperRooms.push(name);
   }
   // Rooms around the fixture block: fully walled so exits don't lead into undefined rooms
   const terrain = await db["rooms.terrain"].find();
@@ -757,6 +799,8 @@ async function runTick(server) {
   await server.usersQueue.addMulti(users.map((u) => u._id.toString()));
   await server.usersQueue.whenAllDone();
   stage("getAllRoomsNames");
+  // Keeper rooms are always processed, as on the official server (see keeperRooms)
+  for (const room of keeperRooms) await driver.activateRoom(room);
   const rooms = (await driver.getAllRoomsNames()) || [];
   stage("rooms (processor)");
   await server.roomsQueue.addMulti(rooms);
@@ -1125,6 +1169,7 @@ async function main() {
       }
       if (tick >= Number(SIEGE.split(":")[1] || 1) - 5 && tick % 10 === 0) await sampleSiege(server, enemy);
     }
+    if (tick % KEEPER_SAMPLE === 0) await sampleKeepers(server, tick);
     if (!FAST) {
       stage("sim: users.findOne");
       const u = await db.users.findOne({ _id: user.id });
@@ -1233,6 +1278,7 @@ async function main() {
         ` | replacements late ${counters["remote:replacements"] ? (counters["remote:late"] / counters["remote:replacements"]).toFixed(0) : "n/a"} ticks (${counters["remote:replacements"] || 0})`
     );
   }
+  if (Object.keys(keeperTrack).length) console.log(`Source keepers (max alive / samples every ${KEEPER_SAMPLE} ticks / first seen): ${Object.entries(keeperTrack).map(([r, t]) => `${r} ${t.max}/${t.samples}/${t.firstSeen}`).join(", ")}`);
   console.log(`Tasks ${completed} completed / ${failed} failed`);
   console.log(`Module errors ${moduleErrors.length} | console errors ${errorCount}`);
   const memorySize = Object.fromEntries(Object.entries(memory).map(([k, v]) => [k, JSON.stringify(v).length]));
@@ -1287,6 +1333,7 @@ async function main() {
     checks,
     cpu: { avg: cpuAvg, max: cpuMax, intentsPerTick, officialEstimate: officialCpu, byRole: roleCpu },
     raids: raidLog,
+    keepers: keeperTrack,
     enemy: enemy ? { ...(await enemyStatus(server, enemy)), controllerLog: controllerTrack.changes } : null,
     stronghold: stronghold ? await strongholdStatus(server, stronghold) : null,
     leftovers: leftovers ? await structuresLeft(server, leftovers) : null,

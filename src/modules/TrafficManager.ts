@@ -84,6 +84,13 @@ class TrafficManager {
     private structureMatricesTick = 0;
 
     /**
+     * Whether a creep's search may cross keeper tiles (cartographer avoids every tile within 5 of a
+     * keeper room's sources and minerals by default). Set by RemoteMining: our creeps of a keeper room
+     * it mines, behind its keeperKiller.
+     */
+    keeperTiles: (creep: Creep | PowerCreep, target: RoomPosition) => boolean = () => false;
+
+    /**
      * Call once at the start of each tick
      */
     preTick(): void {
@@ -136,6 +143,7 @@ class TrafficManager {
             // Obstacles from a matrix built once per room and tick instead of every path search
             roomCallback: this.structureMatrix,
             avoidObstacleStructures: false,
+            avoidSourceKeepers: !this.keeperTiles(creep, targetPos),
             visualizePathStyle: options.visualize ? { stroke: options.combat ? "#ff0000" : "#ffffff", lineStyle: "dashed" as const } : undefined
         };
         // Stuck creeps: cartographer repaths with avoidCreeps, which marks every creep tile impassable,

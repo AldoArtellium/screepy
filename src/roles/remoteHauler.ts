@@ -9,7 +9,7 @@ import { followPath, whenInRange } from "../core/movement";
 import { clearOrder, creepsByRole } from "../core/roomState";
 import { trafficManager } from "../modules/TrafficManager";
 import {
-    canReserveFrom,
+    sourceEnergyCapacity,
     getRemoteSource,
     isRemoteUnderAttack,
     remoteContainer,
@@ -68,7 +68,7 @@ function score(creep: Creep, home: Room | undefined, source: RemoteSource): numb
     }
     const harvesters = creepsByRole(source.homeRoom, REMOTE_HARVESTER).filter(c => c.memory.source === source.key);
     const ttl = _.max(harvesters.map(c => c.ticksToLive ?? CREEP_LIFE_TIME).concat([0]));
-    const capacity = home && canReserveFrom(home, source.room) ? SOURCE_ENERGY_CAPACITY : SOURCE_ENERGY_NEUTRAL_CAPACITY;
+    const capacity = home ? sourceEnergyCapacity(home, source) : SOURCE_ENERGY_NEUTRAL_CAPACITY;
     const income = container ? (Math.min(ttl, source.travelTime) * capacity) / ENERGY_REGEN_TIME : 0;
     const queued = _.sum(
         creepsByRole(source.homeRoom, REMOTE_HAULER).filter(c => c !== creep && !c.memory.delivering && c.memory.source === source.key),

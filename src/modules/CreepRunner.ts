@@ -12,6 +12,7 @@ import "../roles/dismantler";
 import "../roles/guardian";
 import "../roles/harvester";
 import "../roles/helper";
+import "../roles/keeperKiller";
 import "../roles/mineralHarvester";
 import "../roles/pioneer";
 import "../roles/remoteBuilder";
@@ -41,6 +42,7 @@ const THROTTLE: { [role: string]: [stopAt: number, throttleAt: number] } = {
     brawler: [0, 0],
     guardian: [0, 0],
     remoteDefender: [0, 0],
+    keeperKiller: [0, 0],
     reserver: [0, 0],
     claimer: [0, 0],
     pioneer: [0, 0],

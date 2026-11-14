@@ -36,11 +36,11 @@ Object.assign(globalThis, {
     BODYPART_COST: { move: 50, work: 100, carry: 50, claim: 600 },
     MAX_CREEP_SIZE: 50, HARVEST_POWER: 2, CARRY_CAPACITY: 50, CREEP_LIFE_TIME: 1500, CREEP_CLAIM_LIFE_TIME: 600,
     CONTAINER_DECAY: 5000, CONTAINER_DECAY_TIME: 100, REPAIR_POWER: 100, CONTAINER_CAPACITY: 2000,
-    CONTROLLER_RESERVE_MAX: 5000, SOURCE_ENERGY_CAPACITY: 3000, SOURCE_ENERGY_NEUTRAL_CAPACITY: 1500, ENERGY_REGEN_TIME: 300,
+    CONTROLLER_RESERVE_MAX: 5000, SOURCE_ENERGY_CAPACITY: 3000, SOURCE_ENERGY_NEUTRAL_CAPACITY: 1500, SOURCE_ENERGY_KEEPER_CAPACITY: 4000, ENERGY_REGEN_TIME: 300,
 });
 
 const {
-    sourceCreeps, sourceNet, roomEnergyPerCreep, cpuAverage, budgetRooms,
+    sourceCreeps, sourceNet, sourceParts, roomEnergyPerCreep, cpuAverage, budgetRooms,
     reserverCost, cpuPressure, expansionCpuFits, preparesNextExpansion, NEXT_EXPANSION_PROGRESS,
 } = require(join(OUT, "remote", "remoteIncome.js"));
 
@@ -132,5 +132,27 @@ check("next: GCL slots full, 80% of the way", preparesNextExpansion({ ...gcl6, p
 check("next: not yet at 70%", !preparesNextExpansion({ ...gcl6, progress: 0.7, total: 1 }));
 check("next: a free slot is the current expansion's job", !preparesNextExpansion({ ...gcl6, rooms: 5, progress: 0.9, total: 1 }));
 check("next: no progress total", !preparesNextExpansion({ ...gcl6, progress: 5, total: 0 }));
+
+// Source keeper sources (2026-11-14, spec sk-mining): 4000 per 300 ticks, no reserver, the room's killer
+// (a ranged killer, RANGED12 HEAL5 MOVE17 at least: 3900 energy per 1500 ticks) shared between the room's mined sources
+const { keeperGeneration, escortShare, worthMining, MIN_SOURCE_NET, KEEPER_KILLER_COST } = require(join(OUT, "remote", "remoteIncome.js"));
+check("keeper sources yield 4000 / 300", Math.abs(keeperGeneration() - 4000 / 300) < 1e-9);
+check("the least killer costs 3900", KEEPER_KILLER_COST === 3900);
+check("one killer for 3 sources: a third each", Math.abs(escortShare(4270, 3) - 4270 / 1500 / 3) < 1e-9);
+check("no source: the whole killer", Math.abs(escortShare(4270, 0) - 4270 / 1500) < 1e-9);
+const sk = { generation: keeperGeneration(), distance: 60, roads: true, maintenanceWork: 0.5 };
+const skShared = sourceNet({ ...sk, escort: escortShare(KEEPER_KILLER_COST, 3) });
+const skAlone = sourceNet({ ...sk, escort: escortShare(KEEPER_KILLER_COST, 1) });
+const reservedSource = sourceNet({ ...sk, generation: 10 }) - reserverCost(60) / 2;
+console.log(`keeper source net: shared ${skShared.toFixed(2)}, alone ${skAlone.toFixed(2)}, reserved 2-source room ${reservedSource.toFixed(2)}`);
+check("the killer's share lowers the net", skAlone < skShared && Math.abs(skShared - sourceNet(sk) + escortShare(KEEPER_KILLER_COST, 3)) < 1e-9);
+check("a shared keeper source pays more than a reserved one", skShared > reservedSource);
+check("its harvester is sized for 4000: more parts than a reserved one", sourceParts(sk) > sourceParts({ ...sk, generation: 10 }));
+check("the killer's parts are counted", sourceParts({ ...sk, escort: 1, escortParts: 50 / 3 }) - sourceParts(sk) > 16);
+check("MIN_SOURCE_NET is 1", MIN_SOURCE_NET === 1);
+check("worth mining at 1", worthMining(1) && !worthMining(0.99));
+// A lone source far away without roads, its killer alone: net below 1 is not mined
+const far = { generation: keeperGeneration(), distance: 199, roads: false, maintenanceWork: 0, escort: escortShare(KEEPER_KILLER_COST * 3, 1) };
+check("a far lone keeper source with a costly escort is not worth it", !worthMining(sourceNet(far)), sourceNet(far).toFixed(2));
 
 process.exit(failures ? 1 : 0);

@@ -44,15 +44,20 @@ export function isContested(entry: ContestEntry | undefined, time: number): bool
     return !!entry && time - entry.seen < entry.ttl;
 }
 
-/** `releasedFrom`: the player whose reservation no longer blocks the room (releaseFrom) */
+/**
+ * `releasedFrom`: the player whose reservation no longer blocks the room (releaseFrom). `keeperHeld`: a
+ * keeper room the home mines (or may mine, keepers.ts keeperRoomCandidate), its killer clearing the
+ * keepers: no longer blocked for that home (2026-11-14); every other keeper room still is.
+ */
 export function isRemoteBlocked(
     roomName: string,
     info: RemoteRoomInfo | undefined,
     me: string | undefined,
     contested = false,
-    releasedFrom?: string
+    releasedFrom?: string,
+    keeperHeld = false
 ): boolean {
-    if (isKeeperRoom(roomName) || info?.hasSourceKeepers) return true;
+    if ((isKeeperRoom(roomName) || info?.hasSourceKeepers) && !keeperHeld) return true;
     if (contested) return true;
     if (!info) return false;
     if (info.owner && info.owner !== me) return true;
