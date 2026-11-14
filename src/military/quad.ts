@@ -717,7 +717,7 @@ function engage(name: string, quad: QuadMemory, group: Creep[], room: Room): str
     const dps = structureDps(group);
     const { base, block } = quadMatrices(room, dps);
     if (!quad.anchor || !isPacked(group, quad.anchor)) {
-        const target = pickTarget(room, group[0].pos);
+        const target = pickTarget(room, group[0].pos, dps);
         attackQuad(group, target);
         pack(quad, group, room, base);
         return "packing";
@@ -726,7 +726,7 @@ function engage(name: string, quad: QuadMemory, group: Creep[], room: Room): str
     // Packed: the block stays valid while the quad holds (a failed swap repacks on the same block)
     anchor.since = Game.time;
     const anchorPos = new RoomPosition(anchor.x, anchor.y, room.name);
-    const target = pickTarget(room, anchorPos);
+    const target = pickTarget(room, anchorPos, dps);
     if (!target) {
         attackQuad(group, null);
         group.forEach(hold);
@@ -885,7 +885,7 @@ export function runQuad(name: string, quad: QuadMemory): void {
                 quad.state = "retreat";
                 quad.drained = false;
                 countStat("military:retreat");
-                attackQuad(group, pickTarget(room, leader.pos));
+                attackQuad(group, pickTarget(room, leader.pos, structureDps(group)));
                 retreat(quad, group);
             } else if (room) note = engage(name, quad, group, room);
             else travel(group, quad.targetRoom);
