@@ -11,7 +11,6 @@
  */
 
 import { creepsByRole } from "../core/roomState";
-import { claimingSquadsOf } from "../expansion/Expansion";
 import { intelManager } from "../modules/IntelManager";
 import { hasInvaderCore, isRoomContested, isRoomUnderAttack, releasedPlayer } from "../modules/RoomIntel";
 import { roomPlanner } from "../planner/RoomPlanner";
@@ -525,10 +524,11 @@ function updateSourceCap(home: Room): number | undefined {
 
 function maxRemotes(home: Room): number {
     const spawns = Math.max(1, home.find(FIND_MY_SPAWNS).length);
-    // An expansion squad spawned here takes a remote's place until its target is claimed (Hivemind
-    // roomNeeds counts every squad, pioneers-only ones after the claim included)
-    const squads = claimingSquadsOf(home.name).length;
-    const needs = (home.controller!.level >= 4 ? 1 : 0) + (home.controller!.level >= 6 ? 1 : 0) + squads;
+    // Deviation: Hivemind's roomNeeds also counts every expansion squad spawned here, each one taking a
+    // remote room's place (up to 6 rooms, one support pioneer each, during an expansion). An expansion
+    // doesn't hold back our other rooms' remotes: its squad spawns first (priority 4) and the measured
+    // source cap (updateSourceCap) drops a source once the spawn really can't serve it.
+    const needs = (home.controller!.level >= 4 ? 1 : 0) + (home.controller!.level >= 6 ? 1 : 0);
     return Math.floor(spawns * 5 - needs);
 }
 
