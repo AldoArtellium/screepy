@@ -29,14 +29,30 @@ import { performDeliver } from "./transporter";
 const returningFrom: Map<string, string> = new Map();
 /** Haulers whose energy of the current trip home was counted (remote balance), cleared outside home */
 const deliveredTrip: Set<string> = new Set();
+/** Haulers that just left a source: their load is counted on the next tick (withdraw lands at the end of the tick) */
+const tripStarted: Set<string> = new Set();
+/** What the hauler spent this tick on (counter haul:tick:<state>) */
+let tickState = "other";
 
 export function runRemoteHauler(creep: Creep): void {
     const used = creep.store.getUsedCapacity();
+    if (tripStarted.delete(creep.name)) countTrip(creep, used);
     if (creep.memory.delivering && used === 0) startPickup(creep);
-    else if (!creep.memory.delivering && used >= creep.store.getCapacity() * 0.9) startDelivering(creep);
+    else if (!creep.memory.delivering && used >= creep.store.getCapacity() * 0.9) startDelivering(creep, "full");
 
+    tickState = "other";
     if (creep.memory.delivering) deliver(creep);
     else pickup(creep);
+    countStat(`haul:tick:${tickState}`);
+}
+
+/** Load of a trip home against the capacity: partial trips cost the same walk as full ones */
+function countTrip(creep: Creep, used: number): void {
+    const capacity = creep.store.getCapacity();
+    countStat("haul:trips");
+    countStat("haul:load", used);
+    countStat("haul:capacity", capacity);
+    if (used < capacity / 2) countStat("haul:partialTrips");
 }
 
 function startPickup(creep: Creep): void {
@@ -48,7 +64,11 @@ function startPickup(creep: Creep): void {
     creep.memory.source = typeof best === "number" ? undefined : best.key;
 }
 
-function startDelivering(creep: Creep): void {
+function startDelivering(creep: Creep, reason: string): void {
+    if (!creep.memory.delivering) {
+        tripStarted.add(creep.name);
+        countStat(`haul:leave:${reason}`);
+    }
     creep.memory.delivering = true;
     if (creep.memory.source) returningFrom.set(creep.name, creep.memory.source);
     delete creep.memory.source;
@@ -80,15 +100,19 @@ function score(creep: Creep, home: Room | undefined, source: RemoteSource): numb
 function pickup(creep: Creep): void {
     const source = getRemoteSource(creep.memory.source);
     if (!source) {
-        if (creep.store.getUsedCapacity() > 0) startDelivering(creep);
+        tickState = "idle";
+        if (creep.store.getUsedCapacity() > 0) startDelivering(creep, "noSource");
         else startPickup(creep);
         // Nothing to haul: wait at home
         if (!creep.memory.source && creep.room.name === creep.memory.room) trafficManager.requestMove(creep, creep.pos, { range: 0 });
         return;
     }
     const target = sourcePos(source);
+    tickState = "flee";
     if (fleeIfThreatened(creep, target)) return;
+    tickState = "scavenge";
     if (pickupNearby(creep)) return;
+    tickState = creep.room.name === creep.memory.room ? "toSource:home" : "toSource";
     if (creep.room.name !== source.room || creep.pos.getRangeTo(target) > 3) {
         if (!followPath(creep, remotePath(source), true, 45)) trafficManager.requestMove(creep, target, { range: 2, priority: 45 });
         return;
@@ -98,17 +122,21 @@ function pickup(creep: Creep): void {
         c => c.memory.source === source.key && container && c.pos.inRangeTo(container, 3)
     );
     if (!container) {
-        whenInRange(creep, 2, target, () => startDelivering(creep));
+        whenInRange(creep, 2, target, () => startDelivering(creep, "noContainer"));
         return;
     }
     if (!harvesterNear && container.store.energy < 20) {
-        startDelivering(creep);
+        startDelivering(creep, "dry");
         return;
     }
     whenInRange(creep, 1, container, () => {
+        tickState = "wait";
         const enough = container.store.energy >= Math.min(container.store.getCapacity() / 2, creep.store.getFreeCapacity());
         const dying = (creep.ticksToLive ?? CREEP_LIFE_TIME) < 1.5 * source.travelTime;
-        if ((enough || !harvesterNear || dying) && creep.withdraw(container, RESOURCE_ENERGY) === OK) startDelivering(creep);
+        if ((enough || !harvesterNear || dying) && creep.withdraw(container, RESOURCE_ENERGY) === OK) {
+            tickState = "load";
+            startDelivering(creep, enough ? "withdraw" : dying ? "dying" : "noHarvester");
+        }
     });
 }
 
@@ -145,7 +173,9 @@ function pickupNearby(creep: Creep): boolean {
 
 function deliver(creep: Creep): void {
     const home = creep.memory.room ?? creep.room.name;
+    tickState = "flee";
     if (fleeIfThreatened(creep)) return;
+    tickState = "toHome";
     if (creep.room.name !== home) {
         deliveredTrip.delete(creep.name);
         const source = getRemoteSource(returningFrom.get(creep.name));
@@ -160,9 +190,18 @@ function deliver(creep: Creep): void {
         deliveredTrip.add(creep.name);
     }
     // At home: deliver like a transporter (spawn, extensions, towers, workers, storage, center pile)
+    tickState = `unload:${deliveryStep(creep)}`;
     performDeliver(creep);
+    if (tickState === "unload:walk" && !creep.memory.order) tickState = "unload:noTarget";
     // performDeliver clears `delivering` when the creep has nothing left to deliver to
     creep.memory.delivering = true;
+}
+
+/** Delivery at home: next to the order target (act) or still walking to it / choosing one (walk) */
+function deliveryStep(creep: Creep): string {
+    const order = creep.memory.order;
+    const target = order?.target ? Game.getObjectById(order.target as Id<Structure | Creep>) : null;
+    return target && creep.pos.inRangeTo(target, 1) ? `act:${order!.type}` : "walk";
 }
 
 registerRole(REMOTE_HAULER, runRemoteHauler);

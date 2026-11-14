@@ -1208,6 +1208,18 @@ async function main() {
         ` | replacements late ${counters["remote:replacements"] ? (counters["remote:late"] / counters["remote:replacements"]).toFixed(0) : "n/a"} ticks (${counters["remote:replacements"] || 0})`
     );
   }
+  // Remote haulers: share of their ticks per state, trip load against capacity, why they left a source
+  const haulTicks = Object.entries(counters).filter(([k]) => k.startsWith("haul:tick:"));
+  if (haulTicks.length) {
+    const total = haulTicks.reduce((sum, [, v]) => sum + v, 0);
+    const states = haulTicks.sort((a, b) => b[1] - a[1]).map(([k, v]) => `${k.slice(10)} ${((v / total) * 100).toFixed(1)}%`).join(", ");
+    const trips = counters["haul:trips"] || 0;
+    const leaves = Object.entries(counters).filter(([k]) => k.startsWith("haul:leave:")).map(([k, v]) => `${k.slice(11)} ${v}`).join(", ");
+    console.log(
+      `Remote hauling: ${states} of ${total} creep ticks | ${trips} trips, load ${trips ? ((counters["haul:load"] / counters["haul:capacity"]) * 100).toFixed(1) : "n/a"}%` +
+        `, partial ${trips ? (((counters["haul:partialTrips"] || 0) / trips) * 100).toFixed(1) : "n/a"}% | leave: ${leaves}`
+    );
+  }
   console.log(`Tasks ${completed} completed / ${failed} failed`);
   console.log(`Module errors ${moduleErrors.length} | console errors ${errorCount}`);
   const memorySize = Object.fromEntries(Object.entries(memory).map(([k, v]) => [k, JSON.stringify(v).length]));
