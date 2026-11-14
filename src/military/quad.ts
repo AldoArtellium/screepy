@@ -6,7 +6,8 @@
  * States: forming (gather at home until the four are out) -> travel (loose chain, the leader waits
  * for the others) -> drain (towers left: one member bounces on the border tile while the others heal
  * it, until the towers are seen empty; skipped when the quad's boosted healing covers the towers on
- * its front, canTank: towers a player refills are never seen empty) -> engage (in the target room:
+ * its front, canTank: towers a player refills are never seen empty; a drain that doesn't bring their
+ * energy down ends the mission, combat.ts watchDrain) -> engage (in the target room:
  * pack into the 2x2 block, then
  * step as one) -> retreat (packed while away from the border, to a rally point in the staging room,
  * below 60% hits or when a member could not walk out under the net damage) -> travel again once
@@ -37,7 +38,8 @@ import {
     healPower,
     incomingDamage,
     towerPower,
-    verdict
+    verdict,
+    watchDrain
 } from "./combat";
 import { isMine, landing, pickTarget, travelCallback } from "./duo";
 import { hostileRoom } from "./intel";
@@ -79,6 +81,10 @@ export interface QuadMemory {
     drained?: boolean;
     /** Member bouncing on the border to drain the towers */
     poker?: string;
+    /** Towers' energy at the last drain checkpoint (combat.ts watchDrain), while draining */
+    drainWatch?: import("./combat").DrainWatch;
+    /** The drain didn't bring the towers' energy down: the mission is abandoned (military.ts) */
+    drainStalled?: boolean;
 }
 
 declare global {
@@ -605,6 +611,19 @@ function drain(quad: QuadMemory, group: Creep[]): void {
         travel(group, quad.targetRoom);
         return;
     }
+    if (room) {
+        const towers = room.find(FIND_HOSTILE_STRUCTURES, {
+            filter: s => s.structureType === STRUCTURE_TOWER
+        }) as StructureTower[];
+        const energy = _.sum(towers, t => t.store.energy);
+        const { watch, stalled } = watchDrain(quad.drainWatch, Game.time, energy);
+        quad.drainWatch = watch;
+        if (stalled && !quad.drainStalled) {
+            quad.drainStalled = true;
+            countStat("military:drainStalled");
+            log.info("Quad", `${quad.targetRoom}: towers refilled (${energy} energy, ${watch.energy} at tick ${watch.since})`);
+        }
+    }
     const staging = Game.rooms[quad.stagingRoom];
     const exitDirection = Game.map.findExit(quad.stagingRoom, quad.targetRoom);
     const rally = quad.rally ? new RoomPosition(quad.rally.x, quad.rally.y, quad.rally.room) : null;
@@ -898,5 +917,7 @@ export function runQuad(name: string, quad: QuadMemory): void {
             else travel(group, quad.targetRoom);
         }
     }
+    // A new drain (after a retreat or a refill) starts from the towers' energy it finds
+    if (quad.state !== "drain") delete quad.drainWatch;
     trace(name, quad, group, note);
 }

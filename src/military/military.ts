@@ -470,7 +470,12 @@ function runMilitary(): void {
     }
     for (const name in memory.quads ?? {}) {
         const quad = memory.quads![name];
-        const quadEnd = isNeutralized(quad.targetRoom, quad, quadCreeps(name)) ? "success" : endReason(quad);
+        // A drain the owner out-refills (quad.ts drain): abandoned, the room left alone FAILURE_MEMORY ticks
+        const quadEnd = isNeutralized(quad.targetRoom, quad, quadCreeps(name))
+            ? "success"
+            : quad.drainStalled
+              ? "abandoned"
+              : endReason(quad);
         if (quadEnd) finish("quad", name, quad, quadEnd);
         else {
             escalateBoosts("quad", name, quad);
