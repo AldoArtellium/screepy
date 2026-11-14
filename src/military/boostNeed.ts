@@ -83,6 +83,11 @@ export interface ChooseOptions {
     attrition?: number;
     /** Boosts chosen before (escalation): never weaker */
     floor?: SquadCompounds;
+    /**
+     * Feasible only when the squad tanks the refilled towers (judge's tank rule), not when its front
+     * merely lasts SURVIVE_CLOSE_TICKS: a player's towers (sizing.ts planSquad)
+     */
+    tank?: boolean;
 }
 
 type Levels = Record<BoostedEffect, BoostOption>;
@@ -99,8 +104,8 @@ function gain(effect: BoostedEffect, option: BoostOption): number {
 
 /**
  * `tank`: towers that refill are out-healed on the front, its TOUGH taking its share (combat.ts canTank),
- * the boost choice's rule; without it, the front creep only lasts SURVIVE_CLOSE_TICKS (feasibility,
- * as before). Mockup W8N3 RCL 4 with a refilled tower: a quad with XLHO2 alone (it lasts, it doesn't
+ * the boost choice's rule, and the feasibility against a player's towers (ChooseOptions.tank); without
+ * it, the front creep only lasts SURVIVE_CLOSE_TICKS (feasibility against a stronghold). Mockup W8N3 RCL 4 with a refilled tower: a quad with XLHO2 alone (it lasts, it doesn't
  * tank) lost 6 creeps and took 2900 ticks, the strongest boosts 2 creeps and 1230 ticks.
  */
 function judge(shape: SquadShape, levels: Levels, threat: ThreatModel, refills: boolean, margin: number, tank = false) {
@@ -123,9 +128,16 @@ function strongest(options: BoostOption[], effect: BoostedEffect): BoostOption {
     return options.reduce((best, o) => (gain(effect, o) > gain(effect, best) ? o : best), options[0]);
 }
 
-function result(shape: SquadShape, levels: Levels, threat: ThreatModel, refills: boolean, attrition: number): SquadChoice {
+function result(
+    shape: SquadShape,
+    levels: Levels,
+    threat: ThreatModel,
+    refills: boolean,
+    attrition: number,
+    tank = false
+): SquadChoice {
     const boostCost = Math.round(EFFECTS.reduce((sum, e) => sum + shape.parts[e] * levels[e].cost, 0));
-    const { holds, heal } = judge(shape, levels, threat, refills, 1);
+    const { holds, heal } = judge(shape, levels, threat, refills, 1, tank);
     return {
         type: shape.type,
         feasible: holds,
@@ -168,7 +180,7 @@ export function chooseSquad(shapes: SquadShape[], threat: ThreatModel, refills: 
                     for (const attack of allowed(shape, "attack", mode, opts.floor)) {
                         const levels = { heal, tough, attack };
                         if (!judge(shape, levels, threat, refills, margin, true).holds) continue;
-                        const choice = result(shape, levels, threat, refills, attrition);
+                        const choice = result(shape, levels, threat, refills, attrition, opts.tank);
                         const tiers = heal.tier + tough.tier + attack.tier;
                         if (!best || choice.cost < best.choice.cost || (choice.cost === best.choice.cost && tiers < best.tiers))
                             best = { choice, tiers };
@@ -183,8 +195,8 @@ export function chooseSquad(shapes: SquadShape[], threat: ThreatModel, refills: 
             tough: allowed(shape, "tough", fallback)[0],
             attack: allowed(shape, "attack", fallback)[0]
         };
-        return { shape, levels, holds: judge(shape, levels, threat, refills, 1).holds };
+        return { shape, levels, holds: judge(shape, levels, threat, refills, 1, opts.tank).holds };
     });
     const pick = choices.find(c => c.holds) ?? choices[choices.length - 1];
-    return result(pick.shape, pick.levels, threat, refills, attrition);
+    return result(pick.shape, pick.levels, threat, refills, attrition, opts.tank);
 }

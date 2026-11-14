@@ -190,11 +190,17 @@ export function planSquad(
         const quad = [quadAttackerBody(energy), quadAttackerBody(energy), healer, healer];
         shapes.push(shape(boostRoom, "quad", quad, [healer, healer], forced === "quad", anyCompound));
     }
+    // A player's towers (refilled from a storage, possibly not firing at exit tiles): feasible only when
+    // tanked. shard0 2026-11-14: Blindfold's towers repaired walls instead of shooting the poker on the
+    // exit tile and fillers topped them up, quads sized to last 10 ticks poked W29N4 and W28N3 for their
+    // whole life. A stronghold's core refills 1% a tick: the border drain works, the old rule stays.
+    const tank = refills && !(hostileRoom(targetRoom)?.coreLevel ?? 0);
     const choice = chooseSquad(shapes, threat, refills, {
         mode: militaryMemory().boosts,
         attrition: ATTRITION,
         floor: escalation.floor,
-        margin: escalation.margin
+        margin: escalation.margin,
+        tank
     });
     return {
         type: choice.type,
