@@ -126,6 +126,28 @@ const threat = (towers, creeps = 0, heal = 0) => ({
     check("3 refilled towers: strongest boosts kept", c.compounds.heal === "XLHO2" && c.compounds.tough === "XGHO2", JSON.stringify(c.compounds));
 }
 
+// 4b. A player's 3 refilled towers, RCL 8 quad (healer 15 HEAL, attacker 7 TOUGH 18 ATTACK), XLHO2 alone in
+//     stock (shard0 W29N4 / W28N3 2026-11-14): its front lasts 10 ticks (1440 heal vs 1800), so feasible by
+//     the stronghold rule, but it doesn't tank: infeasible with `tank`; XGHO2 in stock makes it tank (540)
+{
+    const rcl8 = stock => {
+        const quad = {
+            type: "quad", spawnCost: 5600 * 4, heal: 2 * 15 * 12, damage: 18 * 30, frontTough: 7, frontOther: 43,
+            parts: { heal: 30, tough: 14, attack: 36 },
+        };
+        quad.options = {
+            heal: options("heal", 30, stock), tough: options("tough", 14, stock), attack: options("attack", 36, stock),
+        };
+        return [quad];
+    };
+    const lasts = chooseSquad(rcl8({ XLHO2: 9000 }), threat(3), true);
+    check("3 player towers, XLHO2 only: lasts (stronghold rule)", lasts.feasible, JSON.stringify(lasts));
+    const tanks = chooseSquad(rcl8({ XLHO2: 9000 }), threat(3), true, { tank: true });
+    check("3 player towers, XLHO2 only: infeasible with tank", !tanks.feasible, JSON.stringify(tanks));
+    const tough = chooseSquad(rcl8({ XLHO2: 9000, XGHO2: 9000 }), threat(3), true, { tank: true });
+    check("3 player towers, XLHO2 + XGHO2: feasible with tank", tough.feasible && tough.compounds.tough === "XGHO2", JSON.stringify(tough));
+}
+
 // 5. A cheap T1 beats a T3 that also holds: with prices, T3 at 20 energy a unit, T1 at 2
 {
     const price = compound => (compound.startsWith("X") ? 20 : compound.length === 2 ? 2 : 6);
