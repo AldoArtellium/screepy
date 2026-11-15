@@ -32,7 +32,7 @@ try {
     // Type errors outside this file (global declarations) don't prevent emitting
 }
 
-const { sellOrderPrice, repricedSellPrice, instantSellPays, prefersInstantSell, forcedBuyPays, FORCED_BUY_MAX_RATIO, spendableCredits, buyOrdersToCancel, buyOrdersAbovePrice } = require(join(OUT, "market", "pricing.js"));
+const { sellOrderPrice, repricedSellPrice, instantSellPays, prefersInstantSell, forcedBuyPays, FORCED_BUY_MAX_RATIO, spendableCredits, buyOrdersToCancel, buyOrdersAbovePrice, sellOrderAmount } = require(join(OUT, "market", "pricing.js"));
 
 let failures = 0;
 const check = (name, ok, detail) => {
@@ -110,6 +110,11 @@ const above = buyOrdersAbovePrice(legacy, 50);
 check("buy order above the worth cap is cancelled", above.join() === "old", above.join());
 check("buy order at the worth cap is kept", buyOrdersAbovePrice(legacy, 48).join() === "old");
 check("no buy order cancelled when all pay", buyOrdersAbovePrice(legacy, 1000).length === 0);
+
+// Sell order size capped by the stock (shard0 2026-11-14: 1000 concentrate listed with 1 held, 19.5M fee)
+check("sell order capped by the stock", sellOrderAmount(1000, 1) === 1, sellOrderAmount(1000, 1));
+check("sell order keeps the volume step below the stock", sellOrderAmount(10000, 35095) === 10000);
+check("no sell order without stock", sellOrderAmount(10000, 0.4) === 0);
 
 console.log(failures === 0 ? "\nall checks passed" : `\n${failures} check(s) failed`);
 process.exit(failures === 0 ? 0 : 1);
