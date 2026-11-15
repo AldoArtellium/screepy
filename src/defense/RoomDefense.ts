@@ -175,8 +175,6 @@ export function enemyStrength(room: Room): EnemyStrength {
 
 /** Threat decay per tick without a serious attack (half-life ~6900 ticks; TI: 0.99999) */
 const THREAT_DECAY = 0.9999;
-/** Threat per infamy point (energy value of a player's creeps seen in our rooms and remotes) */
-const INFAMY_THREAT = 0.1;
 /** Lowest rampart target from RCL 3 (TI minRampartHits fallback) */
 const MIN_WALL_TARGET = 20000;
 
@@ -212,14 +210,6 @@ export function updateThreat(room: Room): void {
     if (memory.threat < 1) delete memory.threat;
 }
 
-/** Room threat, at least the infamy of the worst player who came into our rooms or remotes */
-export function roomThreat(room: Room): number {
-    let infamy = 0;
-    const players = Memory.military?.infamy ?? {};
-    for (const player in players) infamy = Math.max(infamy, players[player]);
-    return Math.max(room.memory.threat ?? 0, infamy * INFAMY_THREAT);
-}
-
 /**
  * Rampart hits wanted for an RCL and a threat (TI minRampartHits): ((rcl - 3) x 50)^2.5 + threat x 5 x rcl^2,
  * at least 20k, never above Hivemind's maxWallHealth: RCL 4 20k, 5 100k, 6 276k, 7 566k, 8 988k without threat.
@@ -236,7 +226,7 @@ export function desiredWallStrength(room: Room): number {
     let multiplier = 1;
     if (room.controller?.safeModeCooldown) multiplier = 2;
     else if (myRooms().some(r => r.controller?.safeMode)) multiplier = 1.5;
-    return tickCache(`wallTarget:${room.name}`, () => wallTarget(rcl, roomThreat(room))) * multiplier;
+    return tickCache(`wallTarget:${room.name}`, () => wallTarget(rcl, room.memory.threat ?? 0)) * multiplier;
 }
 
 /** Share of the damage a part takes (boosted TOUGH below 1) */

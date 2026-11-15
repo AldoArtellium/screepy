@@ -5,7 +5,6 @@
  * invader cores only).
  */
 
-import { healWounded } from "../core/healing";
 import { stayInPlace, whenInRange } from "../core/movement";
 import { isFast } from "../defense/RoomDefense";
 import { trafficManager } from "../modules/TrafficManager";
@@ -65,8 +64,6 @@ export function runRemoteDefender(creep: Creep): void {
         engage(creep, core);
         return;
     }
-    // Remote clear: heal the harvesters and haulers hit in the fight first (no tower there, a damaged part does nothing)
-    if (healWounded(creep, { move: true })) return;
     if (!isRoomUnderAttack(targetRoom)) {
         // Forget the target: else, back out of it, the defender walked to it again (endless bounce
         // on the room edge)

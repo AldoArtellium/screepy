@@ -1,6 +1,6 @@
 /**
  * Our nukes: where one lands for the most value, and when the squad of the same target may start. Pure
- * functions (tests/nukes/run.mjs); military/nukes.ts reads the rooms and launches, roi.ts prices a strike.
+ * functions (tests/nukes/run.mjs); military/nukeStrike.ts reads the rooms and launches.
  *
  * A structure is destroyed when the damage on its tile exceeds the rampart over it plus its own hits
  * (defense/nukeDefense.ts: 10M at the center, 5M within range 2, ramparts absorb first). Its value is what
@@ -10,9 +10,6 @@
 
 import { NUKE_RADIUS, nukeDamageAt, STRUCTURE_WORTH } from "../defense/nukeDefense";
 
-/** A launch: NUKER_ENERGY_CAPACITY energy and NUKER_GHODIUM_CAPACITY ghodium (constants here: pure module) */
-export const NUKE_ENERGY = 300000;
-export const NUKE_GHODIUM = 5000;
 /** Rooms a nuker reaches (NUKE_RANGE) */
 export const NUKE_RANGE = 10;
 

@@ -456,7 +456,7 @@ function runMilitary(): void {
     const memory = militaryMemory();
     if (Game.time % AUTO_TARGET_EVERY === 0) updateAutoTargets();
     runBaits();
-    runNukeStrikes(currentTargets());
+    runNukeStrikes();
     // A target with our nuke in flight: its squad starts so as to arrive around the impact
     for (const target of currentTargets()) if (!hasMission(target) && !missionHeldByNuke(target)) startMission(target);
     for (const { name, mission } of missionsInOrder()) {

@@ -130,10 +130,9 @@ declare global {
             aggressionDecayed?: number;
             /**
              * Nukes (nukeStrike.ts): false never fills nor fires a nuker; unset fills them, fires only when told
-             * (a room "W8N3" or a room and impact point "W8N3:25,25": one strike, cleared once launched); true
-             * also fires on the automatic targets whose strike pays (roi.ts nukeWorthIt)
+             * (a room "W8N3" or a room and impact point "W8N3:25,25": one strike, cleared once launched)
              */
-            nuke?: boolean | string;
+            nuke?: false | string;
             /** Our nukes in flight, by target room */
             nukes?: { [room: string]: { x: number; y: number; landTime: number; from: string; value: number } };
             /** Rooms looted after a successful attack (loot.ts) */

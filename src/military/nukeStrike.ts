@@ -2,28 +2,21 @@
  * Nuke strikes (our design, 2026-11-15). `Memory.military.nuke`:
  * - false: no nuker is filled (dispatcher/destinations.ts) nor fired, the labs make no ghodium for it;
  * - unset (default): nukers are filled, a nuke is only fired when told: "W8N3" (best impact from what is seen
- *   of the room) or "W8N3:25,25" (that tile), one strike, the setting cleared once the nuke is launched;
- * - true: also fires on the current military targets (military.ts currentTargets: each has a strategic reason,
- *   strategy.ts, or was set by hand), players only (a stronghold's loot would burn), one nuke in flight per
- *   room, when the best impact (nukeTarget.ts) destroys MIN_ROI times what the nuke costs (roi.ts nukeCost).
+ *   of the room) or "W8N3:25,25" (that tile), one strike, the setting cleared once the nuke is launched.
+ * No automatic strike: every launch needs the user's go (the opt-in `true` was removed on 2026-11-15, never used).
  * The closest loaded nuker in range (NUKE_RANGE rooms) fires. A mission on a room with our nuke in flight waits
  * until SQUAD_LEAD_TICKS before the impact (military.ts), and our creeps keep out of that room until it lands
  * (defense/nukes.ts evacuateFromNukes reads `Memory.military.nukes`): every creep in the room dies at impact.
  */
 
 import { BORDER_GUARD_TICKS } from "../defense/nukeDefense";
-import { energyPrice } from "../modules/MarketManager";
 import { log } from "../utils/logger";
 import { countStat } from "../utils/stats";
 import { hostileRoom, militaryMemory } from "./intel";
 import { bestImpact, EnemyStructure, Impact, impactAt, missionWaits, NUKE_RANGE } from "./nukeTarget";
-import { nukeCost, nukeWorthIt } from "./roi";
 
-const STRIKE_EVERY = 100;
 /** A strike set by hand is tried this often (waiting for a loaded nuker or a sight of the room) */
 const FORCED_EVERY = 10;
-/** A layout seen longer ago is not trusted by an automatic strike (ramparts grow, structures get rebuilt) */
-const LAYOUT_MAX_AGE = 5000;
 
 /** Ticks before our nuke lands on `room`, undefined without one in flight */
 export function strikeTimeToLand(room: string): number | undefined {
@@ -70,8 +63,8 @@ function closestNuker(nukers: StructureNuker[], room: string): StructureNuker | 
     return _.min(inRange, n => Game.map.getRoomLinearDistance(n.room.name, room)) as StructureNuker | undefined;
 }
 
-/** Valued structures of a player room: seen now, else the military intel's layout (`maxAge` ticks at most) */
-function structuresOf(room: string, maxAge: number): EnemyStructure[] | null {
+/** Valued structures of a player room: seen now, else the military intel's layout (of any age) */
+function structuresOf(room: string): EnemyStructure[] | null {
     const visible = Game.rooms[room];
     if (visible) {
         const ramparts = new Map<number, number>();
@@ -81,7 +74,7 @@ function structuresOf(room: string, maxAge: number): EnemyStructure[] | null {
             .map(s => ({ x: s.pos.x, y: s.pos.y, type: s.structureType, hits: s.hits, rampartHits: ramparts.get(s.pos.x + 50 * s.pos.y) ?? 0 }));
     }
     const intel = hostileRoom(room);
-    if (!intel?.layout || Game.time - intel.t > maxAge) return null;
+    if (!intel?.layout) return null;
     return intel.layout.map(([type, x, y, rampartHits]) => ({ type, x, y, rampartHits }));
 }
 
@@ -124,33 +117,17 @@ function forcedStrike(value: string): void {
     if (!forced) return fail("expected a room or room:x,y");
     const nuker = closestNuker(loadedNukers(), forced.room);
     if (!nuker) return fail(`no loaded nuker within ${NUKE_RANGE} rooms`);
-    const structures = structuresOf(forced.room, Infinity) ?? [];
+    const structures = structuresOf(forced.room) ?? [];
     const impact = forced.x !== undefined ? impactAt(structures, forced.x, forced.y!) : bestImpact(structures);
     if (!impact) return fail("nothing of value known in the room: give the impact tile");
     if (launch(nuker, forced.room, impact, "by hand")) delete memory.nuke;
 }
 
-/** Every FORCED_EVERY ticks (strike set by hand) or STRIKE_EVERY ticks (automatic), from military.ts */
-export function runNukeStrikes(targets: string[]): void {
+/** Every tick from military.ts: drops landed strikes, tries a strike set by hand every FORCED_EVERY ticks */
+export function runNukeStrikes(): void {
     const memory = militaryMemory();
     for (const room in memory.nukes ?? {}) if (memory.nukes![room].landTime < Game.time) delete memory.nukes![room];
     if (memory.nukes && Object.keys(memory.nukes).length === 0) delete memory.nukes;
     const setting = memory.nuke;
-    if (typeof setting === "string") {
-        if (Game.time % FORCED_EVERY === 0) forcedStrike(setting);
-        return;
-    }
-    if (setting !== true || Game.time % STRIKE_EVERY !== 0) return;
-    const nukers = loadedNukers();
-    if (nukers.length === 0) return;
-    const cost = nukeCost(energyPrice(RESOURCE_GHODIUM));
-    for (const room of targets) {
-        if (strikeTimeToLand(room) !== undefined || !hostileRoom(room)?.owner) continue;
-        const nuker = closestNuker(nukers, room);
-        const structures = nuker && structuresOf(room, LAYOUT_MAX_AGE);
-        if (!nuker || !structures) continue;
-        const impact = bestImpact(structures);
-        if (!impact || !nukeWorthIt(impact.value, cost)) continue;
-        if (launch(nuker, room, impact, `automatic, cost ${Math.round(cost)}`)) return;
-    }
+    if (typeof setting === "string" && Game.time % FORCED_EVERY === 0) forcedStrike(setting);
 }

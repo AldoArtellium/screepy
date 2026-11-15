@@ -14,7 +14,7 @@ import { fileURLToPath } from "node:url";
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const OUT = join(tmpdir(), "screepy-nukes-build");
 const require = createRequire(import.meta.url);
-const SOURCES = [join(ROOT, "src", "defense", "nukeDefense.ts"), join(ROOT, "src", "military", "nukeTarget.ts"), join(ROOT, "src", "military", "roi.ts")];
+const SOURCES = [join(ROOT, "src", "defense", "nukeDefense.ts"), join(ROOT, "src", "military", "nukeTarget.ts")];
 
 try {
     execFileSync(
@@ -94,7 +94,6 @@ check("spawn hold covers a full body and the longest evacuation", d.SPAWN_HOLD_T
 
 // ------------------------------------------------------------------ offense
 const t = require(join(OUT, "military", "nukeTarget.js"));
-const roi = require(join(OUT, "military", "roi.js"));
 const enemy = [
     { x: 20, y: 20, type: "spawn", rampartHits: 0 },
     { x: 21, y: 21, type: "tower", rampartHits: 0 },
@@ -114,13 +113,6 @@ check("one nuke alone leaves the 7M rampart", t.impactAt([{ x: 22, y: 20, type: 
 check("50M rampart: nothing to destroy, no impact", t.bestImpact([{ x: 10, y: 40, type: "terminal", rampartHits: 50000000 }]) === null);
 check("unvalued structures only: no impact", t.bestImpact([{ x: 10, y: 10, type: "road", rampartHits: 0 }]) === null);
 check("impact on a room corner stays in the room", (() => { const i = t.bestImpact([{ x: 0, y: 1, type: "spawn", rampartHits: 0 }]); return i && i.x >= 0 && i.y >= 0; })());
-
-const cost = roi.nukeCost(5);
-check("nuke cost: 300k energy + 5k G at 5 energy each", cost === 325000, `${cost}`);
-check("spawn + tower + storage pay a nuke", roi.nukeWorthIt(best.value, cost));
-check("a lone tower doesn't", !roi.nukeWorthIt(80000, cost));
-check("two spawns alone fall just short (300k vs 305k)", !roi.nukeWorthIt(300000, roi.nukeCost(1)));
-check("two spawns and a tower pay", roi.nukeWorthIt(380000, roi.nukeCost(1)));
 
 check("mission waits while the nuke is far", t.missionWaits(40000));
 check("mission starts in the last ticks before the impact", !t.missionWaits(t.SQUAD_LEAD_TICKS));
