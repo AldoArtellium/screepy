@@ -118,5 +118,16 @@ check("refilled faster than drained: never", etaToEmpty(3000, -2) === Infinity);
         drainDecision({ ...base, inTicks: 100, hitTicks: 50, rate: MIN_RATE * 2 }, FORECAST_PATIENCE, 2900, 400) === "wait");
 }
 
+// The quad spawned on a good drain, then the owner refills while it waits at the border (shard0 W29N4
+// 2026-11-14: 3 towers kept between 500 and 900 by fillers): the drain that stalls ends the mission
+{
+    let f = recordPoke(sampleEnergy(undefined, 1000, 2400), true);
+    f = sampleEnergy(seenAt(f, 1100), 1100, 1500);
+    check("draining 9 a tick: spawn within a lead of 200", drainDecision(f, 1100, 1500, 200) === "spawn", f.rate);
+    for (const now of [1200, 1300, 1400, 1500]) f = sampleEnergy(seenAt(f, now), now, 2400);
+    check("refilled back to 2400: rate below MIN_RATE", f.rate < MIN_RATE, f.rate);
+    check("refilled after the patience: noProgress", drainDecision(f, 1000 + FORECAST_PATIENCE, 2400, 200) === "noProgress");
+}
+
 console.log(failures === 0 ? "\nall checks passed" : `\n${failures} check(s) failed`);
 process.exit(failures === 0 ? 0 : 1);

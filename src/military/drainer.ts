@@ -5,7 +5,8 @@
  * it heals on our side. It rests off the border below REST_HITS until READY_HITS. Meanwhile the mission
  * measures the towers' net drain (drainForecast.ts) and spawns the quad once the towers are predicted
  * empty by its arrival, or gives up with the drainer alone spent. It keeps draining while the quad
- * forms and travels (the quad has no poker of its own then, quad.ts drain). Our design.
+ * forms, travels and waits at the border (the only drain: the quad has no poker of its own, quad.ts
+ * waitForDrain), and a drain the refills cancel then still ends the mission. Our design.
  */
 
 import { needsBoosting } from "../labs/boosts";
@@ -127,7 +128,8 @@ function leadTime(quad: QuadMemory): number {
 
 /**
  * Runs the mission's drainers and samples the towers while one stands in the target room (vision);
- * while probing, the decision: "spawn" the quad, give up ("noFire", "noProgress") or "wait"
+ * while probing or waiting at the border, the decision: "spawn" the quad (probing only), give up
+ * ("noFire", "noProgress") or "wait"
  */
 export function runDrainers(name: string, quad: QuadMemory): DrainDecision {
     // Not boosted (military.ts boosts), but walked to the labs by an older request: CreepRunner moves it
@@ -143,10 +145,13 @@ export function runDrainers(name: string, quad: QuadMemory): DrainDecision {
         quad.probe = sampleEnergy(quad.probe, Game.time, energy);
         quad.probeEnergy = energy;
     }
-    if (quad.state !== "probe") return "wait";
+    // Decided while probing and while the quad waits at the border (only the giving up then: it goes
+    // in once it sees the towers empty, quad.ts)
+    if (quad.state !== "probe" && quad.state !== "wait") return "wait";
     // The drainer never got to the target (blocked, killed on the way): no forecast to wait for
     if (!quad.probe && Game.time - (quad.probeSince ?? Game.time) >= PROBE_TIMEOUT) return "noProgress";
     // Only with a drainer at work: a forecast left from a dead one would decide on old samples
     if (!quad.probe || quad.probeEnergy === undefined || drainers.length === 0) return "wait";
-    return drainDecision(quad.probe, Game.time, quad.probeEnergy, leadTime(quad));
+    const decision = drainDecision(quad.probe, Game.time, quad.probeEnergy, leadTime(quad));
+    return quad.state === "probe" || decision !== "spawn" ? decision : "wait";
 }

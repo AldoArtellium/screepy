@@ -90,35 +90,6 @@ export function canTank(heal: number, towers: number, frontMultiplier: number): 
     return towers * TOWER_POWER_ATTACK * frontMultiplier <= heal;
 }
 
-/**
- * Ticks a border drain gets to bring the towers' energy below DRAIN_PROGRESS of its level at the last
- * checkpoint. One poker draws a shot of every tower each other tick (5 energy per tick per tower): a
- * full tower left alone is halved in ~100 ticks.
- */
-export const DRAIN_PATIENCE = 300;
-export const DRAIN_PROGRESS = 0.5;
-
-/** Towers' energy at the last drain checkpoint */
-export interface DrainWatch {
-    since: number;
-    energy: number;
-}
-
-/**
- * Drain progress from the towers' total energy seen now: a new checkpoint each time it falls below
- * DRAIN_PROGRESS of the last one; stalled after DRAIN_PATIENCE ticks without. shard0 2026-11-14: two
- * quads poked Blindfold's W29N4 and W28N3 (3 towers each, 112k and 140k in storage, tower fillers)
- * for their whole life, the towers never below 500 energy.
- */
-export function watchDrain(
-    watch: DrainWatch | undefined,
-    now: number,
-    energy: number
-): { watch: DrainWatch; stalled: boolean } {
-    if (!watch || energy < watch.energy * DRAIN_PROGRESS) return { watch: { since: now, energy }, stalled: false };
-    return { watch, stalled: now - watch.since >= DRAIN_PATIENCE };
-}
-
 /** Hostile towers of a room that can still shoot (enough energy for one shot) */
 export function enemyTowers(room: Room | undefined): StructureTower[] {
     if (!room) return [];

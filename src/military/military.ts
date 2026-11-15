@@ -494,15 +494,12 @@ function runMilitary(): void {
     }
     for (const name in memory.quads ?? {}) {
         const quad = memory.quads![name];
-        // A drain the owner out-refills (quad.ts drain): abandoned, the room left alone FAILURE_MEMORY ticks
         // A safe mode first: the drain it stalls is not a failure (shard0 W25N7 2026-11-14)
         const quadEnd = isNeutralized(quad.targetRoom, quad, quadCreeps(name))
             ? "success"
             : safeModeOn(quad.targetRoom)
               ? "safeMode"
-              : quad.drainStalled
-                ? "abandoned"
-                : endReason(quad);
+              : endReason(quad);
         if (quadEnd) {
             finish("quad", name, quad, quadEnd);
             continue;
@@ -510,11 +507,14 @@ function runMilitary(): void {
         // Our nuke lands soon: the creeps follow the evacuation (CreepRunner), nothing is decided meanwhile
         if (squadsOutForNuke(quad.targetRoom)) continue;
         trackDrainer(name, quad);
+        // A drain the owner out-refills, while probing or while the quad waits at the border: abandoned,
+        // the room left alone FAILURE_MEMORY ticks
         const decision = runDrainers(name, quad);
         if (decision === "noFire" || decision === "noProgress") {
             countStat(`military:drain:${decision}`);
             const why = decision === "noFire" ? "the towers never fire at the exit tile" : "the refills keep up";
-            log.info("Military", `${name}: ${why}, abandoned before spawning the quad`);
+            const when = quad.state === "probe" ? "before spawning the quad" : "with the quad waiting";
+            log.info("Military", `${name}: ${why}, abandoned ${when}`);
             finish("quad", name, quad, "abandoned");
             continue;
         }
@@ -603,9 +603,15 @@ function offersBoosted(room: Room, mission: Mission, role: string): boolean {
 function missingMember(room: Room): MissingMember | null {
     for (const { kind, name, mission } of missionsInOrder()) {
         if (!mission.bases.includes(room.name)) continue;
-        // One drainer at a time: alone while probing, and replaced while the quad forms (one that dies of
-        // age before the quad gets there would leave the towers to refill)
-        const probing = kind === "quad" && (mission.state === "probe" || (mission.state === "forming" && !!(mission as QuadMemory).probe));
+        // One drainer at a time: alone while probing, replaced while the quad forms or travels after a
+        // probe (one that dies before the quad gets there would leave the towers to refill) and while it
+        // waits at the border (the quad has no other drain: it would wait for good)
+        const state = mission.state;
+        const probing =
+            kind === "quad" &&
+            (state === "probe" ||
+                state === "wait" ||
+                ((state === "forming" || state === "travel") && !!(mission as QuadMemory).probe));
         if (probing) {
             const drainers = drainerCreeps(name).length + claimedRoles(name).filter(r => r === DRAINER).length;
             if (drainers === 0) return { name, role: DRAINER, started: false, type: kind };
