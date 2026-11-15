@@ -543,7 +543,7 @@ async function sampleNuke(server, userId, spec, phase) {
   const { db } = server.common.storage;
   const objects = await db["rooms.objects"].find({ room: spec.room });
   const near = (o) => Math.max(Math.abs(o.x - spec.x), Math.abs(o.y - spec.y)) <= 2;
-  const ours = objects.filter((o) => o.user === userId && o.type !== "creep" && o.type !== "constructionSite" && o.type !== "controller");
+  const ours = objects.filter((o) => o.user === userId && !["creep", "constructionSite", "controller", "tombstone", "ruin", "energy"].includes(o.type));
   const sample = {
     structures: ours.filter((o) => o.type !== "rampart").map((o) => ({ id: o._id, type: o.type, near: near(o) })),
     ramparts: ours.filter((o) => o.type === "rampart" && near(o)).map((o) => ({ x: o.x, y: o.y, hits: o.hits })),

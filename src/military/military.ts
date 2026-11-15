@@ -12,7 +12,7 @@
  * Our design; see docs/decisions/military.md.
  */
 
-import { missionHeldByNuke, runNukeStrikes } from "./nukeStrike";
+import { missionHeldByNuke, runNukeStrikes, squadsOutForNuke } from "./nukeStrike";
 import { duoCreeps, effectiveEnergy, quadCreeps } from "../core/roomState";
 import { boostableParts, boostsFor, boostsWith, canBoost, cancelBoost } from "../labs/boosts";
 import { performRecycle } from "../roles/recycle";
@@ -496,6 +496,7 @@ function runMilitary(): void {
         }
         const duoEnd = isNeutralized(duo.targetRoom, duo, duoCreeps(name)) ? "success" : endReason(duo);
         if (duoEnd) finish("duo", name, duo, duoEnd);
+        else if (squadsOutForNuke(duo.targetRoom)) continue;
         else {
             escalateBoosts("duo", name, duo);
             runDuo(name, duo);
@@ -516,6 +517,8 @@ function runMilitary(): void {
             finish("quad", name, quad, quadEnd);
             continue;
         }
+        // Our nuke lands soon: the creeps follow the evacuation (CreepRunner), nothing is decided meanwhile
+        if (squadsOutForNuke(quad.targetRoom)) continue;
         trackDrainer(name, quad);
         const decision = runDrainers(name, quad);
         if (decision === "noFire" || decision === "noProgress") {

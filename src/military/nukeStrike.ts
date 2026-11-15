@@ -11,6 +11,7 @@
  * (defense/nukes.ts evacuateFromNukes reads `Memory.military.nukes`): every creep in the room dies at impact.
  */
 
+import { BORDER_GUARD_TICKS } from "../defense/nukeDefense";
 import { energyPrice } from "../modules/MarketManager";
 import { log } from "../utils/logger";
 import { countStat } from "../utils/stats";
@@ -29,6 +30,18 @@ export function strikeTimeToLand(room: string): number | undefined {
     const strike = Memory.military?.nukes?.[room];
     if (!strike || strike.landTime < Game.time) return undefined;
     return strike.landTime - Game.time;
+}
+
+/**
+ * Our nuke lands on `room` within the border guard: the squads of its missions are left to the evacuation
+ * (defense/nukes.ts, run by the CreepRunner before this module, whose moves would override it). Mockup: a
+ * drainer on the target's exit tile died at impact before this.
+ */
+export function squadsOutForNuke(room: string): boolean {
+    const timeToLand = strikeTimeToLand(room);
+    const out = timeToLand !== undefined && timeToLand <= BORDER_GUARD_TICKS;
+    if (out) countStat("nuke:squadsOut");
+    return out;
 }
 
 /** A mission on `room` waits for our nuke to come closer (nukeTarget.ts missionWaits) */
