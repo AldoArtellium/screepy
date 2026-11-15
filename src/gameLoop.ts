@@ -19,6 +19,7 @@ import { spawnManagerModule } from "modules/SpawnManager";
 import { trafficManagerModule } from "modules/TrafficManager";
 import { roomPlannerModule } from "planner/RoomPlanner";
 import { remoteMiningModule } from "remote/RemoteMining";
+import { factoryModule } from "resources/factory";
 import { reportsModule } from "modules/Reports";
 import { historyModule } from "utils/history";
 import { log } from "utils/logger";
@@ -62,6 +63,8 @@ export const gameLoop = () => {
     { name: "Military", fn: militaryModule, priority: "always" },
     // Market (Hivemind trade): sells surpluses, buys missing base minerals; nothing before a terminal
     { name: "MarketManager", fn: marketManagerModule, runEvery: 20, priority: "low" },
+    // Factory (RCL 7+): bars from mineral surpluses when they sell for more, decompression for the labs
+    { name: "Factory", fn: factoryModule, priority: "low" },
     // Terminal sends between owned rooms (Hivemind resources process); nothing below 2 terminals
     { name: "TerminalTransfers", fn: terminalTransfersModule, runEvery: 5 },
     // Memory of dead creeps (every 100 ticks) and unused rooms (every 1000)

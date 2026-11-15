@@ -27,6 +27,16 @@ function minSellPrice(history: PriceData): number {
     return history.average + history.stdDev / 2;
 }
 
+/**
+ * Sell order size: the volume step (10 000, 1000, ... from the traded volume, Hivemind) capped by what we
+ * hold. Not in Hivemind (it sells minerals only above 20k): the 5% listing fee is paid on the whole order,
+ * and shard0 paid 19.5M for a 1000 concentrate order at 389k with 1 concentrate held, 5.4M for 10 000
+ * condensate with 74 (money history, ticks 79019065-79054992).
+ */
+export function sellOrderAmount(volumeStep: number, stock: number): number {
+    return Math.max(0, Math.min(volumeStep, Math.floor(stock)));
+}
+
 /** Sell order price: 1% below the cheapest competitor, at least average + dev / 2, at most 1.5 x average + 2 x dev */
 export function sellOrderPrice(history: PriceData, cheapestCompetitor: number | undefined): number {
     const greedy = history.average * 1.5 + history.stdDev * 2;

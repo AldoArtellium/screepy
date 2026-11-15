@@ -25,6 +25,7 @@ import { bestStorageSource, bestStorageTarget } from "../core/resources";
 import { cacheEmptyTasks, DispatchContext, Dispatcher, TaskProvider } from "./Dispatcher";
 import { requiredBoostType } from "../labs/boosts";
 import { productOf } from "../labs/reactions";
+import { factoryComponents, factoryOf } from "../resources/factory";
 
 /** Without storage, Hivemind counts 10 000 of "virtual" room for dropped resources */
 const DEFAULT_STORAGE_LIMIT = 10000;
@@ -398,6 +399,39 @@ class LabSource extends StoreSource {
 }
 
 /**
+ * Factory output (Hivemind resource-source/factory.ts): what the current job doesn't need (products,
+ * components of an earlier job) beyond 1.5 x the request, priority 3 above 1000 else 2, -1 per creep on it
+ */
+class FactorySource extends StoreSource {
+    readonly type = "factory";
+
+    highestPriority(): number {
+        return 3;
+    }
+
+    tasks(context: DispatchContext): Order[] {
+        const room = context.creep.room;
+        const factory = factoryOf(room);
+        if (!factory || factory.store.getUsedCapacity() === 0) return [];
+        return cacheEmptyTasks(`factorySource:${room.name}:${context.resourceType ?? ""}`, () => {
+            const tasks: Order[] = [];
+            const requested = factoryComponents(room);
+            for (const key in factory.store) {
+                const resourceType = key as ResourceConstant;
+                if (context.resourceType && context.resourceType !== resourceType) continue;
+                const stored = factory.store[resourceType] ?? 0;
+                const needed = requested[resourceType] ?? 0;
+                if (stored === 0 || (needed > 0 && stored <= needed * 1.5)) continue;
+                const extra = stored - needed;
+                const priority = (extra > 1000 ? 3 : 2) - creepsWithOrder(room, this.type, factory.id).length;
+                tasks.push({ type: this.type, target: factory.id, resourceType, amount: extra, priority, weight: extra / stored });
+            }
+            return tasks;
+        });
+    }
+}
+
+/**
  * Neutral links (storage link) while the link network holds more than it wants: 5, -1 beyond 10
  * tiles, -2 per creep already on it (Hivemind resource-source/link.ts)
  */
@@ -436,6 +470,7 @@ class LinkSource extends StoreSource {
 export const sourceDispatcher = new Dispatcher([
     new ContainerSource(),
     new DropSource(),
+    new FactorySource(),
     new GraveSource(),
     new LabSource(),
     new LinkSource(),

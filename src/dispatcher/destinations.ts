@@ -22,6 +22,7 @@ import {
 import { cacheEmptyTasks, DispatchContext, Dispatcher, TaskProvider } from "./Dispatcher";
 import { bestStorageTarget, resourceAmount, stopTradePreparation, TERMINAL_MIN_ENERGY } from "../core/resources";
 import { isLabUsedForBoosting } from "../labs/boosts";
+import { factoryComponents, factoryOf } from "../resources/factory";
 
 type EnergyStructure = StructureSpawn | StructureExtension | StructureTower | StructureContainer | StructureStorage | StructureTerminal | StructureLink;
 
@@ -471,6 +472,45 @@ class LabDestination extends StructureDestination {
     }
 }
 
+/**
+ * Factory components of the current job (Hivemind resource-destination/factory.ts): what it lacks of
+ * FILL_TIME ticks of production, priority 3, -1 below 100, -1 below 10, weight missing / requested
+ */
+class FactoryDestination extends StructureDestination {
+    readonly type = "factory";
+
+    highestPriority(): number {
+        return 3;
+    }
+
+    tasks(context: DispatchContext): Order[] {
+        const room = context.creep.room;
+        const factory = factoryOf(room);
+        if (!factory || factory.store.getFreeCapacity() < 100) return [];
+        return cacheEmptyTasks(`factoryDestination:${room.name}:${context.resourceType ?? ""}`, () => {
+            const tasks: Order[] = [];
+            const requested = factoryComponents(room);
+            for (const resourceType in requested) {
+                if (context.resourceType && context.resourceType !== resourceType) continue;
+                const missing = requested[resourceType] - (factory.store[resourceType as ResourceConstant] ?? 0);
+                if (missing <= 0) continue;
+                let priority = 3;
+                if (missing < 100) priority--;
+                if (missing < 10) priority--;
+                tasks.push({
+                    type: this.type,
+                    target: factory.id,
+                    resourceType: resourceType as ResourceConstant,
+                    amount: missing,
+                    priority,
+                    weight: missing / requested[resourceType]
+                });
+            }
+            return tasks;
+        });
+    }
+}
+
 /** No storage yet: drop the energy on the base center, where the storage will be */
 class DropDestination implements TaskProvider {
     readonly type = "drop";
@@ -514,6 +554,7 @@ export const destinationDispatcher = new Dispatcher([
     new BayDestination(),
     new ControllerContainerDestination(),
     new DropDestination(),
+    new FactoryDestination(),
     new LabDestination(),
     new LinkDestination(),
     new SpawnDestination(),

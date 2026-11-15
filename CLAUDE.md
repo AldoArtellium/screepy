@@ -89,6 +89,7 @@ The ModuleManager runs modules in order with a CPU budget (80% of the limit): `m
 | RemoteMining | every tick (selection every 20) | Remote sources each owned room mines, CPU budget |
 | Expansion | every 5 | Claims and bootstraps new rooms (`src/expansion/`) |
 | MarketManager | every 20 | Sells surpluses, buys missing minerals |
+| Factory | every tick (priority low) | Bars from mineral surpluses that sell for more, decompression for the labs (`src/resources/`) |
 | TerminalTransfers | every 5 | Terminal sends between owned rooms |
 | Labs | every tick | Boosts, then reactions (`src/labs/`) |
 | Military | every tick | Targets, squads, looting (`src/military/`) |
@@ -116,7 +117,7 @@ Convention everywhere (`src/core/options.ts` `getBestOption`): **higher priority
 
 ### Resources: terminal, market, labs (`docs/decisions/resources.md`)
 
-Minerals, terminal transfers, market pricing (`market/pricing.ts`), reactions by The International's reverse chain (`labs/chain.ts`), boosts (`labs/boosts.ts`, requests expire 150 ticks after spawn), upgrader boosts at RCL 6-7.
+Minerals, terminal transfers, market pricing (`market/pricing.ts`), reactions by The International's reverse chain (`labs/chain.ts`), boosts (`labs/boosts.ts`, requests expire 150 ticks after spawn), upgrader boosts at RCL 6-7, factory (`resources/factoryPlan.ts`: bars when they sell for 1.2x their inputs, built only where the room's mineral pays).
 
 ### Defense (`docs/decisions/defense.md`)
 

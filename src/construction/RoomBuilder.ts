@@ -22,6 +22,7 @@ import { lowestWallStrength, MAX_WALL_HEALTH } from "../defense/RoomDefense";
 import { countStat } from "../utils/stats";
 import { jitter } from "../utils/jitter";
 import { constructionEnabled, constructionSettingsKey } from "./settings";
+import { factoryWanted } from "../resources/factory";
 import { cleanStaleSites } from "./siteCleanup";
 
 /** Construction sites per room, existing ones included */
@@ -162,7 +163,8 @@ function buildEndgameStructures(ctx: RoomContext): void {
     if (!ctx.canCreate()) return;
     if (constructionEnabled("observer")) buildAllowed(ctx, "observer", STRUCTURE_OBSERVER);
     if (!ctx.canCreate()) return;
-    if (constructionEnabled("factory")) buildAllowed(ctx, "factory", STRUCTURE_FACTORY);
+    // Only where the room's own mineral pays a bar (resources/factory.ts factoryWanted)
+    if (constructionEnabled("factory") && factoryWanted(ctx.room)) buildAllowed(ctx, "factory", STRUCTURE_FACTORY);
 }
 
 /**
@@ -292,7 +294,8 @@ function completionKey(room: Room): string {
         roads.length,
         roadSum,
         rampartsPaused(room) ? 1 : 0,
-        constructionSettingsKey()
+        constructionSettingsKey(),
+        (room.controller?.level ?? 0) >= 7 && factoryWanted(room) ? 1 : 0
     ].join("|");
 }
 

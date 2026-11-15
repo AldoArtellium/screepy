@@ -26,7 +26,8 @@ import { isFullOn, myRoomsWithTerminal, prepareForTrading, resourceAmount, total
 import { DemandTarget, mineralNeeds, upgradeValuePerMineral } from "../labs/chain";
 import { OFFENSE_CREDIT_FLOOR, offenseMaxPrice } from "../military/boostDemand";
 import { demandTargetsOf, labResources } from "../labs/reactions";
-import { buyOrdersAbovePrice, buyOrdersToCancel, forcedBuyPays, instantSellPays, PriceData, prefersInstantSell, repricedSellPrice, sellOrderPrice, spendableCredits } from "../market/pricing";
+import { buyOrdersAbovePrice, buyOrdersToCancel, sellOrderAmount, forcedBuyPays, instantSellPays, PriceData, prefersInstantSell, repricedSellPrice, sellOrderPrice, spendableCredits } from "../market/pricing";
+import { factoryInputs } from "../resources/factory";
 import { log } from "../utils/logger";
 
 /** Lowest buy price (Hivemind minTradeValue) */
@@ -59,6 +60,8 @@ const priceCache: Map<string, { until: number; data: PriceData | null }> = new M
 const worthCache: Map<string, { until: number; worth: number }> = new Map();
 
 let availableCredits = 0;
+/** Resources a factory's current job takes, not sold this run (resources/factory.ts factoryInputs) */
+let factoryKeeps: Set<string> = new Set();
 let dealsThisTick = 0;
 let dealTick = -1;
 const usedTerminals: Set<string> = new Set();
@@ -120,6 +123,27 @@ function priceData(resourceType: ResourceConstant): PriceData | null {
     }
     priceCache.set(resourceType, { until: Game.time + PRICE_CACHE_TICKS, data });
     return data;
+}
+
+/** Best buy order of other players per resource, heap cache (resources/factory.ts recipe margins) */
+const bestBuyCache: Map<string, { until: number; price: number | undefined }> = new Map();
+
+/**
+ * What a resource is worth to the factory (resources/factory.ts): an input at the higher of the average and
+ * the best buy order (what selling it now pays), a product at the lower (what selling it surely pays)
+ */
+export function tradeValue(resourceType: ResourceConstant, side: "input" | "product"): number | undefined {
+    const average = priceData(resourceType)?.average;
+    let cached = bestBuyCache.get(resourceType);
+    if (!cached || cached.until <= Game.time) {
+        const orders = Game.market.getAllOrders({ type: ORDER_BUY, resourceType }).filter(o => o.amount >= 100 && !Game.market.orders[o.id]);
+        cached = { until: Game.time + PRICE_CACHE_TICKS, price: orders.length > 0 ? _.max(orders, o => o.price).price : undefined };
+        bestBuyCache.set(resourceType, cached);
+    }
+    const best = cached.price;
+    if (average === undefined) return side === "input" ? best : undefined;
+    if (best === undefined) return side === "input" ? average : undefined;
+    return side === "input" ? Math.max(average, best) : Math.min(average, best);
 }
 
 /** Market average price of a resource (history and order book, cached), undefined without data (expansion/mineralValue.ts) */
@@ -317,7 +341,8 @@ function trySell(resourceType: ResourceConstant, rooms: string[]): void {
         return;
     }
     const offer = sellOrderPrice(history, cheapest);
-    const amount = maxOrderAmount(resourceType);
+    // What this room holds: the order is filled from its terminal only
+    const amount = sellOrderAmount(maxOrderAmount(resourceType), resourceAmount(room, resourceType));
     if (amount <= 0) return;
     // Listing fee: 5% of the order value
     if (Game.market.credits < amount * offer * 0.05) {
@@ -336,8 +361,11 @@ function trySell(resourceType: ResourceConstant, rooms: string[]): void {
 function manageBaseMineral(resourceType: ResourceConstant, states: ResourceStates, needs: MineralNeeds): void {
     const n = states.rooms.length;
     const total = states.total[resourceType] ?? 0;
-    if (total > (n * STORAGE_CAPACITY) / 20) instaSell(resourceType, states.rooms);
-    if (total > (n * STORAGE_CAPACITY) / 50) trySell(resourceType, states.rooms);
+    // A factory compressing it: the bar sells for more (resources/factory.ts)
+    if (!factoryKeeps.has(resourceType)) {
+        if (total > (n * STORAGE_CAPACITY) / 20) instaSell(resourceType, states.rooms);
+        if (total > (n * STORAGE_CAPACITY) / 50) trySell(resourceType, states.rooms);
+    }
     const need = needs[resourceType];
     if (!need || need.amount < MIN_BUY) {
         // Buy orders of an earlier demand (or of the 10k-per-room rule before 2026-11-04)
@@ -495,10 +523,12 @@ export const marketManagerModule = (): void => {
     // Offensive-only minerals spend the credits above the offensive floor (manageBaseMineral)
     offenseBudget = Math.max(0, Game.market.credits - OFFENSE_CREDIT_FLOOR);
 
+    factoryKeeps = factoryInputs();
     for (const resourceType of RESOURCES_ALL) {
         if (resourceTier(resourceType) === 1) manageBaseMineral(resourceType, states, needs);
         else if (recipes[resourceType]) manageCompound(resourceType, states);
-        else if (isCommodity(resourceType)) manageSurplus(resourceType, states, 0, 0);
+        // Bars and battery the factory doesn't take, commodities it can't make anything of
+        else if (isCommodity(resourceType) && !factoryKeeps.has(resourceType)) manageSurplus(resourceType, states, 0, 0);
     }
     manageSurplus(RESOURCE_POWER, states, 20000, 10000);
     manageSurplus(RESOURCE_OPS, states, 10000, 5000);
