@@ -59,6 +59,16 @@ export function sampleEnergy(forecast: DrainForecast | undefined, now: number, e
     return { ...forecast, at: now, energy, seen: now, rate };
 }
 
+/**
+ * A new wait of the quad at the border (first one, or back from a retreat): the patience and the rate
+ * window start over from now. The old rate holds the fight's and the retreat's refills, and a patience
+ * counted from the first probe sample would end the mission on the wait's first tick. The hit counts are
+ * kept: towers that fired at the drainer still do.
+ */
+export function restartPatience(forecast: DrainForecast, now: number, energy: number): DrainForecast {
+    return { ...forecast, since: now, at: now, energy, seen: now, rate: undefined };
+}
+
 /** One tick of the drainer in the target room, hit or not */
 export function recordPoke(forecast: DrainForecast, hit: boolean): DrainForecast {
     return { ...forecast, inTicks: forecast.inTicks + 1, hitTicks: forecast.hitTicks + (hit ? 1 : 0) };

@@ -9,9 +9,12 @@
  *
  * Settings: `Memory.reports = false` (or `{ enabled: false }`) turns everything off;
  * `Memory.reports = { interval: 500, alerts: false }` changes the interval, turns the alerts off.
- * Counters, room states, the CPU and the lowest bucket come from the history (utils/history.ts
- * historyWindow: from the last snapshot at or before the previous report); `Memory.reportState`
- * only keeps the report tick, the GCL then and the alerts.
+ * Rates (income, RCL progress, storage change), the CPU and the lowest bucket come from the history
+ * (utils/history.ts historyWindow: from the last snapshot at or before the previous report). Event
+ * counts (global resets, safe modes, deaths, spawns, losses, errors, throttled creeps) are exact
+ * deltas since the previous report: the window can start up to a snapshot interval before it and
+ * would count those events twice. `Memory.reportState` keeps the report tick, the GCL and the event
+ * counters then, and the alerts.
  */
 import { STARVED_TICKS } from "../remote/RemoteMining";
 import { rate, short } from "../utils/format";
@@ -31,6 +34,8 @@ interface ReportState {
     /** Tick of the last report (the baseline of the next one) */
     time: number;
     gcl: { level: number; progress: number };
+    /** Event counter values at the last report (eventCounters); absent in a state from before 2026-11-15 */
+    events?: { [name: string]: number };
     /** Last alert check, rooms that had a spawn then, last tick of each alert (rate limit) */
     alertCheck: number;
     hadSpawn: string[];
@@ -63,10 +68,44 @@ function settings(): ReportSettings | null {
     return value.enabled === false ? null : value;
 }
 
+/** Counters reported as event counts since the last report: plain keys and prefixes */
+const EVENTS = ["globalReset", "safeMode", "memory:deadCreep", "military:lost"];
+const EVENT_PREFIXES = ["roleError:", "throttled:", "spawned:"];
+
+function eventCounters(): { [name: string]: number } {
+    const counters = Memory.stats?.counters ?? {};
+    const result: { [name: string]: number } = {};
+    for (const name in counters) {
+        const tracked = EVENTS.includes(name) || EVENT_PREFIXES.some(p => name.startsWith(p));
+        if (tracked) result[name] = Math.round(counters[name]);
+    }
+    return result;
+}
+
+/**
+ * Event counts since the last report (a counter that went down was reset: its value is the increase).
+ * Without a baseline (state from before 2026-11-15), the history window's deltas, once.
+ */
+function eventDeltas(state: ReportState, window: HistoryWindow): { [name: string]: number } {
+    const current = eventCounters();
+    if (!state.events) {
+        const fallback: { [name: string]: number } = {};
+        for (const name in current) fallback[name] = Math.round(window.counters[name] ?? 0);
+        return fallback;
+    }
+    const result: { [name: string]: number } = {};
+    for (const name in current) {
+        const before = state.events[name] ?? 0;
+        result[name] = current[name] >= before ? current[name] - before : current[name];
+    }
+    return result;
+}
+
 function newState(): ReportState {
     return {
         time: Game.time,
         gcl: { level: Game.gcl.level, progress: Math.round(Game.gcl.progress) },
+        events: eventCounters(),
         alertCheck: Game.time,
         hadSpawn: [],
         alerts: {}
@@ -77,22 +116,30 @@ function newState(): ReportState {
 interface ReportContext {
     state: ReportState;
     window: HistoryWindow;
+    /** Event counts since the last report (eventDeltas) */
+    events: { [name: string]: number };
     /** Ticks since the last report */
     ticks: number;
     /** Ticks the history window covers */
     windowTicks: number;
 }
 
+/** Counter delta over the history window (rates) */
 function counter(context: ReportContext, name: string): number {
     return Math.round(context.window.counters[name] ?? 0);
 }
 
-/** Total and "a 3, b 2" of the counter deltas with a prefix, biggest first */
+/** Event count since the last report */
+function events(context: ReportContext, name: string): number {
+    return context.events[name] ?? 0;
+}
+
+/** Total and "a 3, b 2" of the event counts with a prefix since the last report, biggest first */
 function byPrefix(context: ReportContext, prefix: string): [number, string] {
     const entries: [string, number][] = [];
-    for (const name in context.window.counters) {
+    for (const name in context.events) {
         if (!name.startsWith(prefix)) continue;
-        const value = counter(context, name);
+        const value = events(context, name);
         if (value > 0) entries.push([name.slice(prefix.length), value]);
     }
     entries.sort((a, b) => b[1] - a[1]);
@@ -173,7 +220,7 @@ function incomeLines(context: ReportContext): string[] {
 
 /** Mean and highest tick CPU over the history window, bucket, global resets */
 function cpuLine(context: ReportContext): string {
-    const resets = counter(context, "globalReset");
+    const resets = events(context, "globalReset");
     const cpu = context.window.cpu;
     const usage = cpu ? `${cpu.mean.toFixed(1)} avg, ${cpu.max.toFixed(1)} max` : "n/a";
     return (
@@ -205,7 +252,7 @@ function healthLines(context: ReportContext): string[] {
     const [throttledCount, throttled] = byPrefix(context, "throttled:");
     if (throttledCount > 0) lines.push(`Throttled ${throttledCount}: ${throttled}`);
     const [spawned] = byPrefix(context, "spawned:");
-    lines.push(`Creeps ${Object.keys(Game.creeps).length} | spawned ${spawned}, died ${counter(context, "memory:deadCreep")}`);
+    lines.push(`Creeps ${Object.keys(Game.creeps).length} | spawned ${spawned}, died ${events(context, "memory:deadCreep")}`);
     return lines;
 }
 
@@ -226,9 +273,9 @@ function remoteLines(): string[] {
 
 /** Defense: safe modes, rooms where dangerous hostiles were seen since the last report, squad losses */
 function defenseLines(context: ReportContext): string[] {
-    const safeModes = counter(context, "safeMode");
+    const safeModes = events(context, "safeMode");
     const hostileRooms = Object.keys(Memory.rooms ?? {}).filter(r => (Memory.rooms[r].enemies?.lastSeen ?? 0) > context.state.time);
-    const lost = counter(context, "military:lost");
+    const lost = events(context, "military:lost");
     const underSafeMode = myRooms()
         .filter(r => !!r.controller!.safeMode)
         .map(r => `${r.name} ${short(r.controller!.safeMode!)}t`);
@@ -281,10 +328,11 @@ export function buildReport(state: ReportState, window: HistoryWindow): string {
     const context: ReportContext = {
         state,
         window,
+        events: eventDeltas(state, window),
         ticks: Math.max(1, Game.time - state.time),
         windowTicks: Math.max(1, Game.time - window.start)
     };
-    // Rates since the last report (GCL), the rest over the history window (from its snapshot at or before the last report)
+    // GCL rate and event counts since the last report, the other rates over the history window (from its snapshot at or before the last report)
     const header = `Report tick ${Game.time} (last report ${context.ticks} ticks ago, history since tick ${window.start})`;
     return [
         header,
@@ -386,4 +434,5 @@ export const reportsModule = (): void => {
     // Baseline of the next report
     state.time = Game.time;
     state.gcl = { level: Game.gcl.level, progress: Math.round(Game.gcl.progress) };
+    state.events = eventCounters();
 };

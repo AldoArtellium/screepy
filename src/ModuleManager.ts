@@ -46,12 +46,25 @@ const runIntervals = new Map<string, number>();
 /**
  * Recent CPU per tick of a module: its average per run (avgCpu) spread over its nominal interval,
  * so a module running every N ticks is not N times more expensive than one running every tick.
- * Bucket throttling stretches the interval further: this is an upper bound then.
+ * Bucket throttling stretches the interval further: this is an upper bound then. Undefined for a name
+ * not registered in this global (a removed module's frozen avgCpu).
  */
 export function moduleCpuPerTick(name: string): number | undefined {
+  const interval = runIntervals.get(name);
   const avgCpu = Memory.moduleState?.[name]?.avgCpu;
-  if (avgCpu === undefined) return undefined;
-  return avgCpu / (runIntervals.get(name) ?? 1);
+  if (interval === undefined || avgCpu === undefined) return undefined;
+  return avgCpu / interval;
+}
+
+/** Memory.moduleState of modules no longer in the loop was pruned in this global */
+let statePruned = false;
+
+/** Drops the state of modules removed from the loop (their avgCpu would stay frozen forever) */
+function pruneModuleState(modules: Module[]): void {
+  if (statePruned || !Memory.moduleState) return;
+  statePruned = true;
+  const names = new Set(modules.map(m => m.name));
+  for (const name in Memory.moduleState) if (!names.has(name)) delete Memory.moduleState[name];
 }
 
 function getModuleState(name: string): ModuleState {
@@ -71,6 +84,7 @@ function recordError(name: string, error: unknown) {
 
 export function runModuleManager(modules: Module[], cpuLimit: number) {
   const start = Game.cpu.getUsed();
+  pruneModuleState(modules);
 
   // Find ONE module to force-run (the most starved one past DEFAULT_MAX_SKIPS)
   let moduleToForce: string | null = null;

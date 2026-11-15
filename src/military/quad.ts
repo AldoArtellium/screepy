@@ -40,6 +40,7 @@ import {
     towerPower,
     verdict
 } from "./combat";
+import { restartPatience } from "./drainForecast";
 import { coverOf, isHostileBarrier, isMine, landing, pickTarget, travelCallback } from "./duo";
 import { hostileRoom } from "./intel";
 
@@ -88,6 +89,8 @@ export interface QuadMemory {
      */
     probe?: import("./drainForecast").DrainForecast;
     probeEnergy?: number;
+    /** Towers last seen able to shoot (tanksTowers out of sight: the same count as in sight) */
+    probeTowers?: number;
     /** Tick the mission started probing (drainer.ts PROBE_TIMEOUT) */
     probeSince?: number;
     /** The drainer being tracked and its death by age (an earlier death counts as a loss) */
@@ -157,10 +160,16 @@ function frontMultiplier(group: Creep[]): number {
     return attackers.length ? Math.max(...attackers.map(c => damageMultiplier(c.body))) : 1;
 }
 
-/** Boosted enough to out-heal the target's towers on its front: no border drain (combat.ts canTank) */
+/**
+ * Boosted enough to out-heal the target's towers on its front: no border drain (combat.ts canTank). Out
+ * of sight, the towers last seen able to shoot, not every tower of the intel: the drainer gives vision
+ * every other tick, and two counts made the quad go back and forth between wait and travel.
+ */
 function tanksTowers(group: Creep[], quad: QuadMemory): boolean {
     const room = Game.rooms[quad.targetRoom];
-    const towers = room ? enemyTowers(room).length : (hostileRoom(quad.targetRoom)?.towers ?? 1);
+    const towers = room
+        ? enemyTowers(room).length
+        : quad.probeTowers ?? hostileRoom(quad.targetRoom)?.towers ?? 1;
     return canTank(_.sum(group, c => healPower(c.body)), towers, frontMultiplier(group));
 }
 
@@ -785,7 +794,11 @@ export function runQuad(name: string, quad: QuadMemory): void {
 
     // Shootable tower energy last seen, for the ticks out of sight (towersLeft)
     const seen = Game.rooms[quad.targetRoom];
-    if (seen) quad.probeEnergy = _.sum(enemyTowers(seen), t => t.store.energy);
+    if (seen) {
+        const shooting = enemyTowers(seen);
+        quad.probeEnergy = _.sum(shooting, t => t.store.energy);
+        quad.probeTowers = shooting.length;
+    }
 
     let note = "";
     if (quad.state === "forming") gather(quad, group, full);
@@ -814,6 +827,9 @@ export function runQuad(name: string, quad: QuadMemory): void {
                 quad.state = "wait";
                 // A quad that never probed: the drainer's time limit to reach the target starts now
                 quad.probeSince ??= Game.time;
+                // Each wait gets its own patience (drainForecast.ts restartPatience)
+                const probe = quad.probe;
+                if (probe) quad.probe = restartPatience(probe, Game.time, quad.probeEnergy ?? probe.energy);
             } else if (quad.state === "wait" && !mustWait) quad.state = "travel";
             if (quad.state === "wait") waitForDrain(quad, group);
             else travel(group, quad.targetRoom);

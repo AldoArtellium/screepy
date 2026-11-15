@@ -276,7 +276,10 @@ function killerOption(home: Room, source: RemoteSource): RemoteOption | null {
 
 function reserverOption(home: Room, source: RemoteSource): RemoteOption | null {
     const intel = intelManager.getIntel(source.room);
-    if (!intel || intel.owner || !canReserveFrom(home, source.room)) return null;
+    if (!intel || intel.owner || !intel.controllerPos) return null;
+    // A 1-CLAIM reserver at 650+ still clears another owner's reservation (an invader core's): attackController
+    const reservedByOther = !!intel.reserver && intel.reserver !== Memory.username;
+    if (!canReserveFrom(home, source.room) && !(reservedByOther && home.energyCapacityAvailable >= 650)) return null;
     const positions = intel.reservePositions ?? 0;
     const body = reserverBody(home);
     if (body.length === 0) return null;

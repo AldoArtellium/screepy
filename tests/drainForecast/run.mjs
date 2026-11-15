@@ -34,7 +34,7 @@ try {
 Object.assign(globalThis, { CREEP_SPAWN_TIME: 3 });
 
 const {
-    sampleEnergy, recordPoke, wasHit, etaToEmpty, quadLeadTime, drainDecision,
+    sampleEnergy, recordPoke, wasHit, etaToEmpty, quadLeadTime, drainDecision, restartPatience,
     RATE_WINDOW, NO_FIRE_TICKS, FORECAST_PATIENCE, MIN_RATE, SAMPLE_GAP,
 } = require(join(OUT, "military", "drainForecast.js"));
 
@@ -127,6 +127,24 @@ check("refilled faster than drained: never", etaToEmpty(3000, -2) === Infinity);
     for (const now of [1200, 1300, 1400, 1500]) f = sampleEnergy(seenAt(f, now), now, 2400);
     check("refilled back to 2400: rate below MIN_RATE", f.rate < MIN_RATE, f.rate);
     check("refilled after the patience: noProgress", drainDecision(f, 1000 + FORECAST_PATIENCE, 2400, 200) === "noProgress");
+}
+
+// A second wait, back from a retreat: the probe started long before and the fight's refills pulled the
+// rate down. Without a restart the wait's first tick ends the mission; with it the drain gets its patience.
+{
+    let f = recordPoke(sampleEnergy(undefined, 1000, 2400), true);
+    for (const now of [1100, 1200, 1300]) f = sampleEnergy(seenAt(f, now), now, 2400 + (now - 1000));
+    const back = 1000 + 2 * FORECAST_PATIENCE;
+    check("stale probe at a second wait: noProgress at once", drainDecision(f, back, 2700, 200) === "noProgress", f.rate);
+    const restarted = restartPatience(f, back, 2700);
+    check("restarted: patience from now, no rate, hits kept",
+        restarted.since === back && restarted.at === back && restarted.energy === 2700 && restarted.rate === undefined &&
+            restarted.hitTicks === 1, JSON.stringify(restarted));
+    check("restarted: waits on its first tick", drainDecision(restarted, back + 1, 2700, 200) === "wait");
+    let g = restarted;
+    for (const now of [back + 100, back + 200, back + 300, back + 400, back + 500]) g = sampleEnergy(seenAt(g, now), now, 2700);
+    check("restarted, still refilled after its own patience: noProgress",
+        drainDecision(g, back + FORECAST_PATIENCE, 2700, 200) === "noProgress", g.rate);
 }
 
 console.log(failures === 0 ? "\nall checks passed" : `\n${failures} check(s) failed`);
