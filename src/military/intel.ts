@@ -41,6 +41,8 @@ export interface HostileRoom {
     downgrade?: number;
     upgradeBlocked?: number;
     safeModeAvailable?: number;
+    /** Tick the safe mode cooldown ends: no safe mode can be activated before (safeMode.ts) */
+    safeModeCooldown?: number;
 }
 
 export interface AutoTargetEntry {
@@ -90,10 +92,13 @@ declare global {
             maxSieges?: number;
             /** Sieges of fallen player rooms' controllers (siege.ts) */
             sieges?: { [room: string]: import("./siege").SiegeMemory };
-            /** Finished missions and sieges ("retargeted": the target changed, not a failure; "taken": siege won) */
+            /**
+             * Finished missions and sieges ("retargeted": the target changed, not a failure; "safeMode": the
+             * owner safe-moded the room, not a failure; "taken": siege won)
+             */
             log?: {
                 room: string;
-                result: "success" | "abandoned" | "retargeted" | "taken";
+                result: "success" | "abandoned" | "retargeted" | "safeMode" | "taken";
                 time: number;
                 losses: number;
                 squad?: string;
@@ -174,6 +179,7 @@ function controllerState(controller: StructureController): Partial<HostileRoom> 
     return {
         downgrade: Game.time + controller.ticksToDowngrade,
         ...(controller.upgradeBlocked && { upgradeBlocked: Game.time + controller.upgradeBlocked }),
+        ...(controller.safeModeCooldown && { safeModeCooldown: Game.time + controller.safeModeCooldown }),
         safeModeAvailable: controller.safeModeAvailable
     };
 }
