@@ -7,6 +7,7 @@
 
 import { structuresOfType, tickCache } from "../core/roomState";
 import { jitter } from "../utils/jitter";
+import { myRooms } from "../utils/owned";
 import { RoomPlan } from "../planner/RoomPlan";
 import { roomPlanner } from "../planner/RoomPlanner";
 import { activePower, boostFactor, towerPower } from "../military/combat";
@@ -56,10 +57,6 @@ const BOOST_ATTRIBUTE: Partial<Record<BodyPartConstant, string>> = {
     [HEAL]: "heal",
     [WORK]: "dismantle"
 };
-
-function myRooms(): Room[] {
-    return tickCache("myRooms", () => _.filter(Game.rooms, r => !!r.controller?.my));
-}
 
 /** Hostile creeps of other players (no allies yet), towers' and guardians' candidates */
 export function hostileCreeps(room: Room): Creep[] {
