@@ -9,6 +9,7 @@
 import { followPath, stayInPlace } from "../core/movement";
 import { trafficManager } from "../modules/TrafficManager";
 import { isRemoteRoomMined, remotePath, remoteSources } from "../remote/RemoteMining";
+import { keeperScan } from "../remote/keeperDangerCache";
 import { keeperTarget } from "../remote/keepers";
 import { KEEPER_KILLER } from "../remote/remoteSpawnRole";
 import { countStat } from "../utils/stats";
@@ -54,12 +55,9 @@ export function runKeeperKiller(creep: Creep): void {
     // left alone, remote paths keep away from it: RemoteMining remoteCostMatrix)
     const guarded = creep.room.find(FIND_SOURCES).map(s => s.pos);
     const near = (pos: RoomPosition) => guarded.some(s => s.inRangeTo(pos, GUARD_RANGE));
-    const lairs = creep.room.find(FIND_HOSTILE_STRUCTURES, {
-        filter: s => s.structureType === STRUCTURE_KEEPER_LAIR && near(s.pos)
-    }) as StructureKeeperLair[];
-    const keepers = creep.room.find(FIND_HOSTILE_CREEPS, {
-        filter: c => c.owner.username === "Source Keeper" && (near(c.pos) || lairs.some(l => l.pos.inRangeTo(c, GUARD_RANGE)))
-    });
+    const scan = keeperScan(creep.room);
+    const lairs = scan.lairs.filter(l => near(l.pos));
+    const keepers = scan.keepers.filter(c => near(c.pos) || lairs.some(l => l.pos.inRangeTo(c, GUARD_RANGE)));
 
     const previous = lastKeeper.get(creep.name);
     if (previous && !Game.getObjectById(previous)) {

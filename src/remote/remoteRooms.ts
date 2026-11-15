@@ -17,6 +17,7 @@
  */
 
 import { isKeeperRoom } from "../utils/rooms";
+import { NPC_OWNERS } from "./keepers";
 
 export interface RemoteRoomInfo {
     owner?: string;
@@ -34,10 +35,9 @@ export interface ContestEntry {
 /** Ticks a contested room stays blocked after the last sighting (jittered +-10% by the caller) */
 export const CONTEST_TTL = 20000;
 
-const NPCS = ["Invader", "Source Keeper"];
 
 function isPlayer(username: string | undefined, me: string | undefined): username is string {
-    return !!username && username !== me && !NPCS.includes(username);
+    return !!username && username !== me && !NPC_OWNERS.includes(username);
 }
 
 export function isContested(entry: ContestEntry | undefined, time: number): boolean {
@@ -127,7 +127,7 @@ export interface SeizeFacts {
 
 /** Another player's remote we may take: a player, not fighting us, a minable room within reach */
 export function seizeCandidate(facts: SeizeFacts, now: number, hostileThreshold: number): boolean {
-    if (NPCS.includes(facts.player)) return false;
+    if (NPC_OWNERS.includes(facts.player)) return false;
     if (facts.owned || facts.keeper || facts.sources <= 0) return false;
     if (facts.distance > SEIZE_RANGE) return false;
     if (facts.aggression >= hostileThreshold) return false;

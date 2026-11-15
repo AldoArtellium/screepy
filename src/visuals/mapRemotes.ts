@@ -15,7 +15,17 @@
 
 import { creepsByRole } from "../core/roomState";
 import { hasInvaderCore } from "../modules/RoomIntel";
-import { canReserveFrom, isRemoteUnderAttack, maintenanceWork, remotePath, RemoteSource, STARVED_TICKS } from "../remote/RemoteMining";
+import {
+    hasRemoteRoads,
+    isRemoteUnderAttack,
+    keeperEscort,
+    maintenanceWork,
+    remotePath,
+    RemoteSource,
+    remoteSources,
+    sourceEnergyCapacity,
+    STARVED_TICKS
+} from "../remote/RemoteMining";
 import { sourceNet } from "../remote/remoteIncome";
 import { clampX, LABEL_PRIORITY, labelSize, labelStyle, MapLabels } from "./mapLabels";
 import { Cell, MapPanel } from "./mapPanel";
@@ -48,15 +58,19 @@ function pathPoints(path: RoomPosition[]): RoomPosition[] {
     return points;
 }
 
-/** Net energy per tick of a selected source, as the selection prices it */
+/**
+ * Net energy per tick of a selected source, as the selection prices it (keeper sources at 4000 with
+ * their share of the killer, shared between the room's selected sources)
+ */
 function sourceIncome(home: Room, source: RemoteSource): number {
-    const roads = home.controller!.level > 3 && !!(home.storage || home.terminal);
-    const capacity = canReserveFrom(home, source.room) ? SOURCE_ENERGY_CAPACITY : SOURCE_ENERGY_NEUTRAL_CAPACITY;
+    const roads = hasRemoteRoads(home);
+    const roomSources = remoteSources(home.name).filter(s => s.room === source.room).length;
     return sourceNet({
-        generation: capacity / ENERGY_REGEN_TIME,
+        generation: sourceEnergyCapacity(home, source) / ENERGY_REGEN_TIME,
         distance: source.travelTime,
         roads,
-        maintenanceWork: roads ? maintenanceWork(source) : 0
+        maintenanceWork: roads ? maintenanceWork(source) : 0,
+        ...keeperEscort(home, source.room, roomSources)
     });
 }
 

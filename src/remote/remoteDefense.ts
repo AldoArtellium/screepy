@@ -11,7 +11,7 @@
  * level 1+) are left to the military module.
  */
 
-import { buildBody, MoveMode } from "../core/bodyBuilder";
+import { buildBody, MoveMode, spawnEnergyLimit } from "../core/bodyBuilder";
 import { creepsByRole, effectiveEnergy } from "../core/roomState";
 import { BoostEffect, BoostPlan, boostableParts, boostsWith, canBoost, operationalLabs } from "../labs/boosts";
 import { tierOf } from "../military/boostNeed";
@@ -20,6 +20,7 @@ import type { SpawnOption } from "../spawning/spawnRoles";
 import { log } from "../utils/logger";
 import { countStat } from "../utils/stats";
 import { seizedFrom } from "./remoteSeize";
+import { NPC_OWNERS } from "./keepers";
 import {
     isRemoteUnderAttack,
     remoteEnemyData,
@@ -128,7 +129,6 @@ function groupOptions(home: Room): DefenseOption[] {
     return options;
 }
 
-const NPC_OWNERS = ["Invader", "Source Keeper"];
 
 /**
  * A mini brawler against the unarmed creeps (harvesters, reservers, haulers) of the player whose remote
@@ -188,7 +188,7 @@ export function remoteDefenseOptions(home: Room): DefenseOption[] {
         const recent = home.memory.recentDefender?.[room] ?? -Infinity;
         if (Game.time - recent < DEFENDER_DELAY) continue;
         if (creepsByRole(home.name, REMOTE_DEFENDER).some(c => c.memory.targetRoom === room)) continue;
-        const energy = energyLimit(home);
+        const energy = spawnEnergyLimit(home);
         const response = defenseResponse(enemies, miniBrawlerBody(energy), blinkyBody(energy, 6), blinkyBody(energy));
         if (response) {
             options.push({ role: REMOTE_DEFENDER, priority: 3, weight: 1, targetRoom: room, response });
@@ -237,15 +237,11 @@ function boostStock(home: Room): BoostStock {
 function boostedDefense(home: Room, enemies: ReturnType<typeof remoteEnemyData>) {
     if (!canBoost(home)) return null;
     const labs = operationalLabs(home).length;
-    return boostedResponse(enemies, defenseCandidates(energyLimit(home)), boostStock(home), labs);
-}
-
-function energyLimit(room: Room): number {
-    return Math.min(room.energyCapacityAvailable, Math.max(room.energyCapacityAvailable * 0.9, room.energyAvailable));
+    return boostedResponse(enemies, defenseCandidates(spawnEnergyLimit(home)), boostStock(home), labs);
 }
 
 export function remoteDefenderBody(home: Room, option: DefenseOption): BodyPartConstant[] {
-    const energy = energyLimit(home);
+    const energy = spawnEnergyLimit(home);
     const common = { moveMode: MoveMode.PLAINS, moveBufferRatio: 0.4, energyLimit: energy };
     if (option.response === DefenseResponse.ATTACKER) return buildBody({ weights: { [ATTACK]: 1 }, ...common });
     if (option.response === DefenseResponse.MINI_BRAWLER) return miniBrawlerBody(energy);

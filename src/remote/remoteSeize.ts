@@ -14,7 +14,7 @@ import { intelManager } from "../modules/IntelManager";
 import { log } from "../utils/logger";
 import { isKeeperRoom } from "../utils/rooms";
 import { countStat } from "../utils/stats";
-import { isContested, pickSeizes, SEIZE_TTL, SeizeFacts, seizeCandidate, seizeStatus } from "./remoteRooms";
+import { isContested, pickSeizes, SEIZE_FAILURE_MEMORY, SEIZE_TTL, SeizeFacts, seizeCandidate, seizeStatus } from "./remoteRooms";
 
 declare global {
     interface Memory {
@@ -103,7 +103,7 @@ export function updateSeizes(mined: Set<string>): void {
         log.info("RemoteSeize", `${room} seize from ${entry.player} ${status} (aggression ${Math.round(aggression)})`);
     }
     for (const room in Memory.remoteSeizeFailed ?? {})
-        if (Game.time - Memory.remoteSeizeFailed![room] > 50000) delete Memory.remoteSeizeFailed![room];
+        if (Game.time - Memory.remoteSeizeFailed![room] >= SEIZE_FAILURE_MEMORY) delete Memory.remoteSeizeFailed![room];
     if (off || !spareBudget(mined)) return;
     const homes = defendingRooms();
     if (homes.length === 0) return;

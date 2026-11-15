@@ -10,6 +10,7 @@ import { isFast } from "../defense/RoomDefense";
 import { trafficManager } from "../modules/TrafficManager";
 import { isRoomUnderAttack } from "../modules/RoomIntel";
 import { groupMembers, missingBoosts, REMOTE_DEFENDER, waitingForGroup } from "../remote/remoteDefense";
+import { SOURCE_KEEPER } from "../remote/keepers";
 import { countStat } from "../utils/stats";
 import { performRecycle } from "./recycle";
 import { registerRole } from "./registry";
@@ -45,7 +46,7 @@ export function runRemoteDefender(creep: Creep): void {
 
     const inTarget = creep.room.name === targetRoom;
     const hostiles = creep.room.find(FIND_HOSTILE_CREEPS, {
-        filter: c => c.owner.username !== "Source Keeper" && (inTarget || c.pos.inRangeTo(creep, ENGAGE_RANGE))
+        filter: c => c.owner.username !== SOURCE_KEEPER &&(inTarget || c.pos.inRangeTo(creep, ENGAGE_RANGE))
     });
     const enemy = creep.pos.findClosestByRange(hostiles);
     if ((!enemy || !enemy.pos.inRangeTo(creep, ENGAGE_RANGE)) && regroup(creep)) return;

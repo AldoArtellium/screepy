@@ -6,6 +6,7 @@
 
 import { energyPrice } from "../modules/MarketManager";
 import { remoteSources } from "../remote/RemoteMining";
+import { NPC_OWNERS, SOURCE_KEEPER } from "../remote/keepers";
 import {
     aggressionFromEvents,
     AGGRESSION_DECAY,
@@ -145,7 +146,6 @@ const RECORD_EVERY = 10;
 const FORGET_AFTER = 50000;
 const INFAMY_DECAY_EVERY = 1000;
 const INFAMY_DECAY = 0.95;
-const NPC = ["Invader", "Source Keeper"];
 
 export function militaryMemory(): NonNullable<Memory["military"]> {
     if (!Memory.military) Memory.military = { duos: {} };
@@ -230,7 +230,7 @@ function recordRoom(room: Room, ours: Set<string>): void {
             s.structureType === STRUCTURE_WALL || (s.structureType === STRUCTURE_RAMPART && !(s as StructureRampart).my)
     });
     const collapse = core?.effects?.find(e => e.effect === EFFECT_COLLAPSE_TIMER);
-    const power = combatPower(room.find(FIND_HOSTILE_CREEPS, { filter: c => c.owner.username !== "Source Keeper" }));
+    const power = combatPower(room.find(FIND_HOSTILE_CREEPS, { filter: c => c.owner.username !== SOURCE_KEEPER }));
     const towers = structures.filter((s): s is StructureTower => s.structureType === STRUCTURE_TOWER);
     memory.rooms = memory.rooms ?? {};
     memory.rooms[room.name] = {
@@ -264,7 +264,7 @@ function recordInfamy(ours: Set<string>): void {
         const room = Game.rooms[roomName];
         if (!room) continue;
         for (const creep of room.find(FIND_HOSTILE_CREEPS)) {
-            if (NPC.includes(creep.owner.username) || seenCreeps.has(creep.id)) continue;
+            if (NPC_OWNERS.includes(creep.owner.username) || seenCreeps.has(creep.id)) continue;
             seenCreeps.add(creep.id);
             const fighter = creep.body.some(p => p.type === ATTACK || p.type === RANGED_ATTACK || p.type === WORK);
             memory.infamy = memory.infamy ?? {};
@@ -331,7 +331,7 @@ function recordAggression(ours: Set<string>): void {
                 memory.aggression[player] = (memory.aggression[player] ?? 0) + damage[player];
             }
         }
-        const armed = room.find(FIND_HOSTILE_CREEPS, { filter: c => !NPC.includes(c.owner.username) && isArmed(c) });
+        const armed = room.find(FIND_HOSTILE_CREEPS, { filter: c => !NPC_OWNERS.includes(c.owner.username) && isArmed(c) });
         if (armed.length === 0) continue;
         armedRooms[roomName] = {
             tick: Game.time,

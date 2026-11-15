@@ -6,6 +6,10 @@
  * sat at ~20 of 70. See docs/decisions/economy.md.
  */
 
+export const SOURCE_KEEPER = "Source Keeper";
+/** Owners of NPC creeps and reservations: never another player */
+export const NPC_OWNERS = ["Invader", SOURCE_KEEPER];
+
 /**
  * The keeper killer fights at range 3: RANGED_ATTACK and HEAL (killerParts). Harabi's melee ATTACK19
  * HEAL6 MOVE25 (the spec's recipe) loses to the engine (@screeps/engine 2026-11-14): HEAL cancels a melee

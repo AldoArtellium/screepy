@@ -28,7 +28,6 @@ import {
     INTENT_CPU,
     cpuAverage,
     escortShare,
-    keeperGeneration,
     reserverCost,
     roomEnergyPerCreep,
     SourceCrew,
@@ -681,7 +680,7 @@ function selectRemotes(): void {
         const cap = updateSourceCap(home);
         const rooms: HomeSelection["rooms"] = {};
         const reserved = (roomName: string) => canReserveFrom(home, roomName);
-        const roads = home.controller!.level > 3 && !!(home.storage || home.terminal);
+        const roads = hasRemoteRoads(home);
         const candidateNames = candidateRooms(home);
         // Paths due are searched closest source first, so the farther ones merge into their trunk
         // the same way on every pass
@@ -702,10 +701,7 @@ function selectRemotes(): void {
         for (const roomName of candidateNames) {
             const intel = intelManager.getIntel(roomName)!;
             const candidates: Candidate[] = [];
-            // Keeper rooms and the sector center: 4000 per regeneration, no controller to reserve
-            const strong = isKeeperOrCenter(roomName, intel.hasSourceKeepers);
-            const capacity = reserved(roomName) ? SOURCE_ENERGY_CAPACITY : SOURCE_ENERGY_NEUTRAL_CAPACITY;
-            const generation = strong ? keeperGeneration() : capacity / ENERGY_REGEN_TIME;
+            const generation = remoteSourceCapacity(home, roomName) / ENERGY_REGEN_TIME;
             const reachable: { source: NonNullable<typeof intel.sources>[number]; path: RoomPosition[] }[] = [];
             for (const source of intel.sources!) {
                 // Measured to lose energy for this home (remoteBalance.ts)
@@ -715,9 +711,7 @@ function selectRemotes(): void {
             }
             // A keeper room's killer, shared between its reachable sources
             const escorted = isKeeperRemote(roomName);
-            const killer = killerParts(home.energyCapacityAvailable);
-            const killerEnergy = killer ? partsCost(killer) : 0;
-            const killerBodyParts = killer ? killer.ranged + killer.heal + killer.move : 0;
+            const escort = keeperEscort(home, roomName, reachable.length);
             let net = 0;
             for (const { source, path } of reachable) {
                 const economy = {
@@ -726,8 +720,7 @@ function selectRemotes(): void {
                     roads,
                     // maintenanceWork() for a path not selected yet
                     maintenanceWork: roads ? upkeepWork(path.filter(p => !isOwnedRoom(p.roomName)).length, path.length) : 0,
-                    escort: escorted ? escortShare(killerEnergy, reachable.length) : 0,
-                    escortParts: escorted ? killerBodyParts / reachable.length : 0
+                    ...escort
                 };
                 const sourceIncome = sourceNet(economy);
                 // A source that barely pays for its creeps is left out
@@ -1099,10 +1092,35 @@ export function canReserveFrom(home: Room, remoteRoom: string): boolean {
     return home.energyCapacityAvailable >= (positions > 1 ? 650 : 1300);
 }
 
+/**
+ * Energy per regeneration of a remote room's sources, as the selection prices them: 4000 in keeper
+ * rooms and sector centers (no controller to reserve), 3000 when a reserver can be spawned, else 1500
+ */
+export function remoteSourceCapacity(home: Room, roomName: string): number {
+    const keepers = intelManager.getIntel(roomName)?.hasSourceKeepers;
+    if (isKeeperOrCenter(roomName, keepers)) return SOURCE_ENERGY_KEEPER_CAPACITY;
+    return canReserveFrom(home, roomName) ? SOURCE_ENERGY_CAPACITY : SOURCE_ENERGY_NEUTRAL_CAPACITY;
+}
+
 export function sourceEnergyCapacity(home: Room, source: RemoteSource): number {
-    const keepers = intelManager.getIntel(source.room)?.hasSourceKeepers;
-    if (isKeeperOrCenter(source.room, keepers)) return SOURCE_ENERGY_KEEPER_CAPACITY;
-    return canReserveFrom(home, source.room) ? SOURCE_ENERGY_CAPACITY : SOURCE_ENERGY_NEUTRAL_CAPACITY;
+    return remoteSourceCapacity(home, source.room);
+}
+
+/** Storage era: the home builds remote roads, its remote creeps get road bodies */
+export function hasRemoteRoads(home: Room): boolean {
+    return home.controller!.level > 3 && !!(home.storage || home.terminal);
+}
+
+/**
+ * A keeper room source's share of the room's killer, shared between its `sources` mined sources
+ * (remoteIncome SourceEconomy escort / escortParts); nothing outside keeper rooms
+ */
+export function keeperEscort(home: Room, roomName: string, sources: number): { escort: number; escortParts: number } {
+    if (!isKeeperRemote(roomName)) return { escort: 0, escortParts: 0 };
+    const killer = killerParts(home.energyCapacityAvailable);
+    if (!killer) return { escort: 0, escortParts: 0 };
+    const parts = killer.ranged + killer.heal + killer.move;
+    return { escort: escortShare(partsCost(killer), sources), escortParts: parts / Math.max(1, sources) };
 }
 
 /**

@@ -5,7 +5,7 @@
  * keeperKiller first (2026-11-14, docs/decisions/economy.md). See docs/hivemind/hivemind-remote.md §6.
  */
 
-import { bodyCost, buildBody, MoveMode } from "../core/bodyBuilder";
+import { bodyCost, buildBody, MoveMode, spawnEnergyLimit } from "../core/bodyBuilder";
 import { activeParts, creepsByRole, effectiveEnergy } from "../core/roomState";
 import { ENEMY_STRENGTH_NORMAL, enemyStrength } from "../defense/RoomDefense";
 import { intelManager } from "../modules/IntelManager";
@@ -15,6 +15,7 @@ import type { SpawnOption, SpawnRole } from "../spawning/spawnRoles";
 import {
     canReserveFrom,
     hasRemoteContainer,
+    hasRemoteRoads,
     isKeeperRemote,
     isRemoteUnderAttack,
     needsRepairs,
@@ -64,10 +65,6 @@ type RemoteOption = SpawnOption & {
 /** Each source's pending harvester option (heap): first tick it was offered, replacement deadline */
 const harvesterWanted = new Map<string, { since: number; deadline?: number }>();
 
-function energyLimit(room: Room): number {
-    return Math.min(room.energyCapacityAvailable, Math.max(room.energyCapacityAvailable * 0.9, room.energyAvailable));
-}
-
 /** CARRY needed to bring a source's output home: 2 * travel * energy per tick / 50 */
 function requiredCarry(home: Room, source: RemoteSource): number {
     const capacity = sourceEnergyCapacity(home, source);
@@ -83,7 +80,7 @@ function harvesterSize(home: Room, source: RemoteSource): number {
 }
 
 function haulerMove(home: Room): MoveMode {
-    return home.controller!.level > 3 && (home.storage || home.terminal) ? MoveMode.ROAD : MoveMode.PLAINS;
+    return hasRemoteRoads(home) ? MoveMode.ROAD : MoveMode.PLAINS;
 }
 
 function haulerBody(home: Room, size: number): BodyPartConstant[] {
@@ -91,7 +88,7 @@ function haulerBody(home: Room, size: number): BodyPartConstant[] {
         weights: { [CARRY]: 1 },
         partLimits: { [CARRY]: size },
         moveMode: haulerMove(home),
-        energyLimit: energyLimit(home)
+        energyLimit: spawnEnergyLimit(home)
     });
 }
 
@@ -120,7 +117,7 @@ function harvesterBody(home: Room, option: RemoteOption): BodyPartConstant[] {
         // Road bodies only once the home builds remote roads (storage era): off roads they walk at half speed
         moveMode: established && !fleeing && haulerMove(home) === MoveMode.ROAD ? MoveMode.ROAD : MoveMode.PLAINS,
         carryContentLevel: 0,
-        energyLimit: energyLimit(home)
+        energyLimit: spawnEnergyLimit(home)
     });
 }
 
@@ -162,7 +159,7 @@ function builderDue(home: Room, source: RemoteSource): boolean {
     return hasRemoteHarvesters(home, source) && needsRepairs(source);
 }
 
-function builderBody(home: Room, size: number, energy = energyLimit(home)): BodyPartConstant[] {
+function builderBody(home: Room, size: number, energy = spawnEnergyLimit(home)): BodyPartConstant[] {
     return buildBody({
         weights: { [CARRY]: 5, [WORK]: 2 },
         partLimits: { [WORK]: size },
@@ -279,12 +276,8 @@ function killerOption(home: Room, source: RemoteSource): RemoteOption | null {
 
 function reserverOption(home: Room, source: RemoteSource): RemoteOption | null {
     const intel = intelManager.getIntel(source.room);
-    if (!intel?.controllerPos || intel.owner) return null;
+    if (!intel || intel.owner || !canReserveFrom(home, source.room)) return null;
     const positions = intel.reservePositions ?? 0;
-    const reservedByOther = !!intel.reserver && intel.reserver !== Memory.username;
-    if (home.energyCapacityAvailable < 1300 && !(home.energyCapacityAvailable >= 650 && (positions > 1 || reservedByOther))) {
-        return null;
-    }
     const body = reserverBody(home);
     if (body.length === 0) return null;
     const spawnTime = body.length * CREEP_SPAWN_TIME;

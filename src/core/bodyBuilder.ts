@@ -51,6 +51,11 @@ export function buildBody(options: BodyOptions): BodyPartConstant[] {
     return sortParts(counts, options);
 }
 
+/** Energy to size a body with: what the room holds, at least 90% of its capacity, never above it */
+export function spawnEnergyLimit(room: Room): number {
+    return Math.min(room.energyCapacityAvailable, Math.max(room.energyCapacityAvailable * 0.9, room.energyAvailable));
+}
+
 export function bodyCost(body: BodyPartConstant[]): number {
     return _.sum(body, part => BODYPART_COST[part]);
 }
