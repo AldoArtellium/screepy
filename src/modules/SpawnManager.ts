@@ -7,6 +7,7 @@
  * compete with the economy options on the same priority scale (higher = sooner).
  */
 
+import { nukeHoldsSpawn } from "../defense/nukes";
 import { bodyCost } from "../core/bodyBuilder";
 import { getBestOption } from "../core/options";
 import { creepsByRole, mySpawns } from "../core/roomState";
@@ -134,6 +135,7 @@ class SpawnManager {
             if (!room.controller?.my) continue;
             const spawns = mySpawns(room);
             if (spawns.length === 0) continue;
+            if (nukeHoldsSpawn(room)) continue;
             this.manageRoom(room, spawns);
         }
     }

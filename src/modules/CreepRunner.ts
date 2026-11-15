@@ -24,6 +24,7 @@ import "../roles/reserver";
 import "../roles/siegeGuard";
 import "../roles/transporter";
 import "../roles/upgrader";
+import { evacuateFromNukes } from "../defense/nukes";
 import { needsBoosting, overrideForBoosting } from "../labs/boosts";
 import { getRoleHandler } from "../roles/registry";
 import { log } from "../utils/logger";
@@ -99,6 +100,8 @@ export const creepRunnerModule = () => {
             countStat("creep:noRole");
             continue;
         }
+        // Every creep in a room dies when a nuke lands: out in time, whatever the role
+        if (evacuateFromNukes(creep)) continue;
         if (isThrottled(creep, role)) {
             countStat(`throttled:${role}`);
             continue;

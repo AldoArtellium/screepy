@@ -200,6 +200,20 @@ const PRESET = opt("preset", null);
  */
 const STRONGHOLD = opt("stronghold", null);
 /**
+ * Incoming nukes: "ROOM:TARGET:LAUNCH:FLIGHT", several separated by ";", e.g. --nuke W7N3:spawn:200:15000.
+ * TARGET is "x,y" or the type of a structure of ours in ROOM (spawn, storage, tower...: the first one found at
+ * launch). The nuke object appears at tick LAUNCH (user "3", launched from "W0N0") and lands FLIGHT ticks
+ * later (the engine's nuke processor: every creep of the room dies, 10M / 5M damage within range 2). The
+ * report adds `nukes`: target, our structures lost by type, creeps killed, rampart hits on the hit tiles.
+ */
+const NUKES = (opt("nuke", "") || "")
+  .split(";")
+  .filter(Boolean)
+  .map((spec) => {
+    const [room, target, launch, flight] = spec.split(":");
+    return { room, target, launch: Number(launch), flight: Number(flight || 50000) };
+  });
+/**
  * Leftover structures (room cleanup and dismantler tests): JSON array or "@file", each entry
  * { type, room?, x, y | dx, dy (from our spawn spot) | line: "y=43" / "x=10", hits?, owner?: true,
  *   store?, structureType? (construction sites) }. room defaults to the start room; a line covers every
@@ -233,6 +247,22 @@ const MINERALS = Object.fromEntries(
   })
 );
 const LABS = flag("labs");
+/**
+ * --nuker: with a plan-based preset (rcl8, plan8), a loaded nuker (300000 energy, 5000 G, no cooldown) on the
+ * plan's nuker tile. --nuke-flight N: nukes land N ticks after their launch instead of NUKE_LAND_TIME (50000),
+ * for the engine and the bot alike (nodelay.cjs patches the constant in every engine process).
+ */
+const NUKER = flag("nuker");
+const NUKE_FLIGHT = opt("nuke-flight", null);
+{
+  // Before the engine processes start (they read it in nodelay.cjs); this process is patched at once
+  const { NUKE_LAND_TIME_FILE, patchNukeLandTime } = require("./nodelay.cjs");
+  fs.mkdirSync(path.dirname(NUKE_LAND_TIME_FILE), { recursive: true });
+  if (NUKE_FLIGHT) {
+    fs.writeFileSync(NUKE_LAND_TIME_FILE, String(Number(NUKE_FLIGHT)));
+    patchNukeLandTime(Number(NUKE_FLIGHT));
+  } else fs.rmSync(NUKE_LAND_TIME_FILE, { force: true });
+}
 const QUICK_PRESET = PRESET && PRESETS[PRESET] ? PRESET : null;
 const PLAN_PRESET = PRESET && !QUICK_PRESET ? PRESET : null;
 /**
@@ -488,6 +518,58 @@ async function structuresLeft(server, ids) {
   return { placed: ids.length, left: objects.length, byType };
 }
 
+/** Launches a nuke of NUKES (see there) */
+async function launchNuke(server, userId, spec) {
+  const { db } = server.common.storage;
+  let x;
+  let y;
+  if (/^\d+,\d+$/.test(spec.target)) {
+    [x, y] = spec.target.split(",").map(Number);
+  } else {
+    const target = await db["rooms.objects"].findOne({ room: spec.room, user: userId, type: spec.target });
+    if (!target) throw new Error(`--nuke: no ${spec.target} of ours in ${spec.room} at launch`);
+    ({ x, y } = target);
+  }
+  const time = Number(await server.world.gameTime);
+  spec.x = x;
+  spec.y = y;
+  spec.landTime = time + spec.flight;
+  await db["rooms.objects"].insert({ type: "nuke", room: spec.room, x, y, landTime: spec.landTime, launchRoomName: "W0N0" });
+  log(`Nuke launched on ${spec.room} ${x},${y}, lands at game time ${spec.landTime}`);
+}
+
+/** Our structures near a nuke (range 3) and creeps of the room, before and after the impact */
+async function sampleNuke(server, userId, spec, phase) {
+  const { db } = server.common.storage;
+  const objects = await db["rooms.objects"].find({ room: spec.room });
+  const near = (o) => Math.max(Math.abs(o.x - spec.x), Math.abs(o.y - spec.y)) <= 2;
+  const ours = objects.filter((o) => o.user === userId && o.type !== "creep" && o.type !== "constructionSite" && o.type !== "controller");
+  const sample = {
+    structures: ours.filter((o) => o.type !== "rampart").map((o) => ({ id: o._id, type: o.type, near: near(o) })),
+    ramparts: ours.filter((o) => o.type === "rampart" && near(o)).map((o) => ({ x: o.x, y: o.y, hits: o.hits })),
+    creeps: objects.filter((o) => o.type === "creep" && o.user === userId).map((o) => o.name)
+  };
+  spec[phase] = sample;
+}
+
+function nukeReport(spec) {
+  if (!spec.before) return { target: `${spec.room} ${spec.x},${spec.y}`, landed: false };
+  const report = { target: `${spec.room} ${spec.x},${spec.y}`, landTime: spec.landTime, landed: !!spec.after };
+  report.creepsInRoomBefore = spec.before.creeps.length;
+  report.rampartsBefore = spec.before.ramparts;
+  if (!spec.after) return report;
+  const left = new Set(spec.after.structures.map((o) => o.id));
+  const lost = {};
+  for (const o of spec.before.structures) if (!left.has(o.id)) lost[o.type] = (lost[o.type] || 0) + 1;
+  const inRadius = {};
+  for (const o of spec.before.structures) if (o.near) inRadius[o.type] = (inRadius[o.type] || 0) + 1;
+  report.inRadius = inRadius;
+  report.lost = lost;
+  report.creepsKilled = spec.before.creeps.filter((n) => !spec.alive.has(n)).length;
+  report.rampartsAfter = spec.after.ramparts;
+  return report;
+}
+
 /** Invader stronghold (see STRONGHOLD) */
 async function setupStronghold(server, fixture, spec) {
   const [room, levelText] = spec.split(":");
@@ -567,6 +649,12 @@ async function applyPlanPreset(server, user, memory) {
     for (const pos of ordered) {
       if (labs >= maxLabs) break;
       if (await insert(pos, { type: "lab", hits: 500, hitsMax: 500, mineralAmount: 0, store: { energy: 0 }, storeCapacity: 5000, storeCapacityResource: { energy: 2000 }, cooldown: 0, actionLog: { runReaction: null, reverseReaction: null } })) labs++;
+    }
+  }
+  if (NUKER && rcl === 8) {
+    const pos = planPositions(plan, "nuker")[0];
+    if (pos && (await insert(pos, { type: "nuker", hits: 1000, hitsMax: 1000, store: { energy: 300000, G: 5000 }, storeCapacityResource: { energy: 300000, G: 5000 }, cooldownTime: 0 }))) {
+      log(`Loaded nuker at ${pos.x},${pos.y}`);
     }
   }
   let ext = 0;
@@ -1147,6 +1235,18 @@ async function main() {
         log(`Raid of tick ${raid.tick} over after ${tick - raid.tick} ticks`);
       }
     }
+    for (const spec of NUKES) {
+      if (tick === spec.launch) await launchNuke(server, user.id, spec);
+      if (!spec.landTime) continue;
+      const now = Number(await server.world.gameTime);
+      // Last sample before the processor's impact tick (landTime - 1), then the survivors right after
+      if (!spec.before && now >= spec.landTime - 2) await sampleNuke(server, user.id, spec, "before");
+      if (!spec.after && now >= spec.landTime + 1) {
+        await sampleNuke(server, user.id, spec, "after");
+        spec.alive = new Set((await db["rooms.objects"].find({ type: "creep", user: user.id })).map((c) => c.name));
+        log(`Nuke on ${spec.room}: ${JSON.stringify(nukeReport(spec))}`);
+      }
+    }
     if (ENEMY_REFILL && enemy) await refillEnemyTowers(server, enemy, tick);
     if (ENEMY_REMOTE && enemy) await reserveEnemyRemote(server, enemy, tick);
     if (SIEGE && !siegeTrack.safeModeCleared && tick >= Number(SIEGE.split(":")[1] || 1) - 10) {
@@ -1336,6 +1436,7 @@ async function main() {
     keepers: keeperTrack,
     enemy: enemy ? { ...(await enemyStatus(server, enemy)), controllerLog: controllerTrack.changes } : null,
     stronghold: stronghold ? await strongholdStatus(server, stronghold) : null,
+    nukes: NUKES.map(nukeReport),
     leftovers: leftovers ? await structuresLeft(server, leftovers) : null,
     stats,
     errors: moduleErrors,

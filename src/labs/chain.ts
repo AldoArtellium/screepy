@@ -164,6 +164,16 @@ export function chainDeficits(targets: [ResourceConstant, number][], have: (r: R
 }
 
 /**
+ * What is left of `resource` once the targets' chain took its share: the stock minus what the targets
+ * need of it, the other compounds in stock counted (a GH stock spares the G it was made from). The nuker's
+ * ghodium (military/nukes.ts) only takes this.
+ */
+export function spareOf(targets: [ResourceConstant, number][], have: (r: ResourceConstant) => number, resource: ResourceConstant): number {
+    const need = chainDeficits(targets, r => (r === resource ? 0 : have(r)))[resource] ?? 0;
+    return Math.max(0, have(resource) - Math.max(0, need));
+}
+
+/**
  * What the terminal transfers can bring from the other rooms: their amounts, except the reagents of
  * their own reaction under way (low there, never sent: two rooms both making G from ZK + UL waited
  * for each other's reagent for good)

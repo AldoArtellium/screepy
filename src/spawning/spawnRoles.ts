@@ -4,6 +4,7 @@
  * See docs/hivemind/hivemind-spawning.md for the exact rules and their sources.
  */
 
+import { nukeRepairWork } from "../defense/nukes";
 import { buildBody, MoveMode } from "../core/bodyBuilder";
 import { Option } from "../core/options";
 import {
@@ -408,7 +409,15 @@ const transporter: SpawnRole = {
 
 // ------------------------------------------------------------------ builder
 
+const NUKE_REPAIR_MIN_ENERGY = 10000;
+
 function neededBuilderWork(room: Room): number {
+    // Ramparts over what an incoming nuke would destroy (defense/nukes.ts), while the stock can feed them
+    const nuke = effectiveEnergy(room) >= NUKE_REPAIR_MIN_ENERGY ? nukeRepairWork(room) : 0;
+    return Math.max(nuke, economyBuilderWork(room));
+}
+
+function economyBuilderWork(room: Room): number {
     const sites = room.find(FIND_MY_CONSTRUCTION_SITES).length;
     const hasStorage = !!(room.storage || room.terminal);
     const noBuilderNeeded = room.memory.noBuilderNeeded;

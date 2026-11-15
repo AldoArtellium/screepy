@@ -9,6 +9,7 @@ import { whenInRange } from "../core/movement";
 import { clearOrder, creepsWithOrder, effectiveEnergy, Order, setOrder, tickCache } from "../core/roomState";
 import { desiredWallStrength, ENEMY_STRENGTH_NONE, ENEMY_STRENGTH_NORMAL, enemyStrength } from "../defense/RoomDefense";
 import { roomPlanner } from "../planner/RoomPlanner";
+import { nukeRampartTarget } from "../defense/nukes";
 import { buildEnergy, countCreep, countWork, repairEnergy, upgradeEnergy } from "../utils/history";
 import { performRecycle } from "./recycle";
 import { registerRole } from "./registry";
@@ -144,6 +145,8 @@ function calculateBuilderTarget(creep: Creep): void {
 /** Hits to repair up to: walls and ramparts get the room's wanted strength (on-ramps a tenth of it) */
 function maxHits(structure: Structure): number {
     if (structure.structureType !== STRUCTURE_WALL && structure.structureType !== STRUCTURE_RAMPART) return structure.hitsMax;
+    const nuke = nukeRampartTarget(structure);
+    if (nuke !== undefined) return Math.max(nuke, desiredWallStrength(structure.room));
     const wanted = desiredWallStrength(structure.room);
     const plan = roomPlanner.getPlan(structure.room.name);
     if (structure.structureType === STRUCTURE_RAMPART && plan?.has(structure.pos, "rampart.ramp")) return wanted / 10;
@@ -157,7 +160,10 @@ function repairTargets(room: Room): Structure[] {
         return room.find(FIND_STRUCTURES).filter(s => {
             if (!s.hits || s.hits >= maxHits(s)) return false;
             if (s.structureType === STRUCTURE_ROAD) return !plan || plan.has(s.pos, "road");
-            if (s.structureType === STRUCTURE_RAMPART) return (s as StructureRampart).my && (!plan || plan.has(s.pos, "rampart"));
+            if (s.structureType === STRUCTURE_RAMPART) {
+                if (!(s as StructureRampart).my) return false;
+                return !plan || plan.has(s.pos, "rampart") || nukeRampartTarget(s) !== undefined;
+            }
             if (s.structureType === STRUCTURE_WALL) return !plan || plan.has(s.pos, "wall");
             return !("my" in s) || (s as OwnedStructure).my;
         });
@@ -169,6 +175,15 @@ function repairOptions(creep: Creep): BuilderOption[] {
     const options: BuilderOption[] = [];
     for (const target of repairTargets(room)) {
         const option: BuilderOption = { type: "repair", object: target, priority: 3, weight: 1 - target.hits / target.hitsMax };
+        const nuke = nukeRampartTarget(target);
+        if (nuke !== undefined) {
+            // Above every other repair and build but spawns: the structure under it is lost at impact otherwise
+            option.priority = 5;
+            option.weight = 1 - target.hits / nuke;
+            option.maxHealth = maxHits(target);
+            options.push(option);
+            continue;
+        }
         const isDefense = target.structureType === STRUCTURE_WALL || target.structureType === STRUCTURE_RAMPART;
         if (isDefense) {
             modifyDefenseOption(room, target, option);

@@ -1,8 +1,9 @@
 /**
  * Construction settings (Hivemind settings.default.ts constructNukers, constructPowerSpawns, constructObservers,
- * constructFactories). The bot fills, fires or uses none of these structures yet except the factory, so the others are
- * off by default: the plan keeps their tiles, nothing is built there. `Memory.construction = { nuker: true }` turns one
- * on. The factory is on, built only where the room's mineral pays a bar (resources/factory.ts factoryWanted).
+ * constructFactories). The nuker is on since 2026-11-15 (filled by dispatcher/destinations.ts, fired by
+ * military/nukeStrike.ts) and the factory, built only where the room's mineral pays a bar (resources/factory.ts
+ * factoryWanted); the bot uses none of the others yet, so they are off by default: the plan keeps their tiles,
+ * nothing is built there. `Memory.construction = { powerSpawn: true }` turns one on, `{ nuker: false }` off.
  */
 
 export type ConstructionSetting = "nuker" | "powerSpawn" | "observer" | "factory";
@@ -15,7 +16,7 @@ declare global {
 }
 
 const DEFAULTS: { [setting in ConstructionSetting]: boolean } = {
-    nuker: false,
+    nuker: true,
     powerSpawn: false,
     observer: false,
     factory: true

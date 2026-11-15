@@ -12,6 +12,7 @@
  * Our design; see docs/decisions/military.md.
  */
 
+import { missionHeldByNuke, runNukeStrikes } from "./nukeStrike";
 import { duoCreeps, effectiveEnergy, quadCreeps } from "../core/roomState";
 import { boostableParts, boostsFor, boostsWith, canBoost, cancelBoost } from "../labs/boosts";
 import { performRecycle } from "../roles/recycle";
@@ -465,7 +466,9 @@ function runMilitary(): void {
     }
     if (Game.time % AUTO_TARGET_EVERY === 0) updateAutoTargets();
     runBaits();
-    for (const target of currentTargets()) if (!hasMission(target)) startMission(target);
+    runNukeStrikes(currentTargets());
+    // A target with our nuke in flight: its squad starts so as to arrive around the impact
+    for (const target of currentTargets()) if (!hasMission(target) && !missionHeldByNuke(target)) startMission(target);
     for (const { name, mission } of missionsInOrder()) {
         refreshBases(name, mission);
         resolveTakeover(mission);

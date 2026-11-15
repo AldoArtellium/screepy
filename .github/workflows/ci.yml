@@ -89,6 +89,9 @@ jobs:
       - name: Threat score check
         run: node tests/threat/run.mjs
 
+      - name: Nukes check
+        run: node tests/nukes/run.mjs
+
       - name: Boosts and reactions check
         run: node tests/boosts/run.mjs
 
