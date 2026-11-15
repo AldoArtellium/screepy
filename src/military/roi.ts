@@ -14,6 +14,8 @@
  * Our design (Harabi's "ROI-driven target selection" with energy on both sides).
  */
 
+import { NUKE_ENERGY, NUKE_GHODIUM } from "./nukeTarget";
+
 export const ATTRITION = 2;
 /** Net energy per tick of a remote source (typical `sourceNet` of mined sources: 3-9) */
 export const REMOTE_NET = 3;
@@ -21,6 +23,19 @@ export const REMOTE_NET = 3;
 export const REMOTE_HORIZON = 10000;
 export const MIN_ROI = 1;
 export const CURRENT_BONUS = 1.5;
+
+/**
+ * A nuke (military/nukeStrike.ts): its energy and its ghodium at the market price in energy (1 without prices,
+ * like the loot). Worth a launch when what it destroys (nukeTarget.ts bestImpact, STRUCTURE_WORTH) is MIN_ROI
+ * times that: a spawn, a tower and a storage without strong ramparts (380k) against ~305-350k.
+ */
+export function nukeCost(ghodiumPrice: number): number {
+    return NUKE_ENERGY + NUKE_GHODIUM * ghodiumPrice;
+}
+
+export function nukeWorthIt(value: number, cost: number): boolean {
+    return cost > 0 && value / cost >= MIN_ROI;
+}
 
 /** Spawn cost of the squad with its replacements, and their boosts (`boostCost`: one squad's, sizing.ts planSquad) */
 export function squadCost(memberCosts: number[], attrition = ATTRITION, boostCost = 0): number {

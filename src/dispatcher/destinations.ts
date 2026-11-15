@@ -20,9 +20,10 @@ import {
     structuresOfType
 } from "../core/roomState";
 import { cacheEmptyTasks, DispatchContext, Dispatcher, TaskProvider } from "./Dispatcher";
-import { bestStorageTarget, resourceAmount, stopTradePreparation, TERMINAL_MIN_ENERGY } from "../core/resources";
+import { bestStorageTarget, resourceAmount, resourceLevel, stopTradePreparation, TERMINAL_MIN_ENERGY } from "../core/resources";
 import { isLabUsedForBoosting } from "../labs/boosts";
 import { factoryComponents, factoryOf } from "../resources/factory";
+import { spareGhodium } from "../labs/reactions";
 
 type EnergyStructure = StructureSpawn | StructureExtension | StructureTower | StructureContainer | StructureStorage | StructureTerminal | StructureLink;
 
@@ -511,6 +512,40 @@ class FactoryDestination extends StructureDestination {
     }
 }
 
+/**
+ * Nuker (Hivemind resource-destination/nuker.ts, priority 1: filled when nothing else waits): energy only
+ * while the room's energy level is high or above (core/resources.ts resourceLevel), ghodium only above
+ * what the labs' targets need (labs/reactions.ts spareGhodium). Nothing while nukes are off
+ * (Memory.military.nuke = false).
+ */
+class NukerDestination extends StructureDestination {
+    readonly type = "nuker";
+
+    highestPriority(): number {
+        return 1;
+    }
+
+    tasks(context: DispatchContext): Order[] {
+        const room = context.creep.room;
+        if (Memory.military?.nuke === false || (room.controller?.level ?? 0) < 8) return [];
+        return cacheEmptyTasks(`nuker:${room.name}:${context.resourceType ?? ""}`, () => {
+            const nuker = structuresOfType<StructureNuker>(room, STRUCTURE_NUKER).find(n => n.my);
+            if (!nuker) return [];
+            const tasks: Order[] = [];
+            const wants = (resourceType: ResourceConstant) => !context.resourceType || context.resourceType === resourceType;
+            const energy = nuker.store.getFreeCapacity(RESOURCE_ENERGY) ?? 0;
+            if (energy > 0 && wants(RESOURCE_ENERGY) && ["high", "excessive"].includes(resourceLevel(room, RESOURCE_ENERGY))) {
+                tasks.push({ type: this.type, target: nuker.id, resourceType: RESOURCE_ENERGY, amount: energy, priority: 1, weight: energy / NUKER_ENERGY_CAPACITY });
+            }
+            const ghodium = Math.min(nuker.store.getFreeCapacity(RESOURCE_GHODIUM) ?? 0, wants(RESOURCE_GHODIUM) ? spareGhodium(room) : 0);
+            if (ghodium > 0) {
+                tasks.push({ type: this.type, target: nuker.id, resourceType: RESOURCE_GHODIUM, amount: ghodium, priority: 1, weight: ghodium / NUKER_GHODIUM_CAPACITY });
+            }
+            return tasks;
+        });
+    }
+}
+
 /** No storage yet: drop the energy on the base center, where the storage will be */
 class DropDestination implements TaskProvider {
     readonly type = "drop";
@@ -557,6 +592,7 @@ export const destinationDispatcher = new Dispatcher([
     new FactoryDestination(),
     new LabDestination(),
     new LinkDestination(),
+    new NukerDestination(),
     new SpawnDestination(),
     new StorageDestination(),
     new TerminalDestination(),

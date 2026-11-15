@@ -6,6 +6,7 @@
  */
 
 import { log } from "../utils/logger";
+import { nukeDefenseModule } from "./nukes";
 import { countStat } from "../utils/stats";
 import {
     activeTowers,
@@ -143,6 +144,7 @@ function isEnemyCloseToImportantStructures(room: Room): boolean {
 }
 
 export const defenseModule = (): void => {
+    nukeDefenseModule();
     for (const room of myRooms()) {
         updateThreat(room);
         manageTowers(room);

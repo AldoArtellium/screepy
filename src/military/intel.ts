@@ -14,6 +14,20 @@ import {
     decayAggression
 } from "./playerThreat";
 import { lootValue } from "./roi";
+import { STRUCTURE_WORTH } from "../defense/nukeDefense";
+
+/** Structures in a player room's layout: those a nuke is worth spending on (not extensions or links) */
+const LAYOUT_MIN_WORTH = 8000;
+
+function roomLayout(room: Room): [string, number, number, number][] {
+    const ramparts = new Map<number, number>();
+    const valued: Structure[] = [];
+    for (const s of room.find(FIND_STRUCTURES)) {
+        if (s.structureType === STRUCTURE_RAMPART) ramparts.set(s.pos.x + 50 * s.pos.y, s.hits);
+        else if ((STRUCTURE_WORTH[s.structureType] ?? 0) >= LAYOUT_MIN_WORTH && !(s as OwnedStructure).my) valued.push(s);
+    }
+    return valued.map(s => [s.structureType, s.pos.x, s.pos.y, ramparts.get(s.pos.x + 50 * s.pos.y) ?? 0]);
+}
 
 export interface HostileRoom {
     /** Tick of the record */
@@ -43,6 +57,8 @@ export interface HostileRoom {
     safeModeAvailable?: number;
     /** Tick the safe mode cooldown ends: no safe mode can be activated before (safeMode.ts) */
     safeModeCooldown?: number;
+    /** Player room: its valued structures (nukeTarget.ts) as [type, x, y, hits of the rampart over it] */
+    layout?: [string, number, number, number][];
 }
 
 export interface AutoTargetEntry {
@@ -113,6 +129,14 @@ declare global {
             aggression?: { [player: string]: number };
             /** Tick of the last aggression decay */
             aggressionDecayed?: number;
+            /**
+             * Nukes (nukeStrike.ts): false never fills nor fires a nuker; unset fills them, fires only when told
+             * (a room "W8N3" or a room and impact point "W8N3:25,25": one strike, cleared once launched); true
+             * also fires on the automatic targets whose strike pays (roi.ts nukeWorthIt)
+             */
+            nuke?: boolean | string;
+            /** Our nukes in flight, by target room */
+            nukes?: { [room: string]: { x: number; y: number; landTime: number; from: string; value: number } };
             /** Rooms looted after a successful attack (loot.ts) */
             loot?: { [room: string]: import("./loot").LootMission };
         };
@@ -217,7 +241,8 @@ function recordRoom(room: Room, ours: Set<string>): void {
         ...(collapse && { collapse: Game.time + collapse.ticksRemaining }),
         damage: power.damage,
         heal: power.heal,
-        ...(loot > 0 && { loot })
+        ...(loot > 0 && { loot }),
+        ...(hostileOwner && { layout: roomLayout(room) })
     };
 }
 

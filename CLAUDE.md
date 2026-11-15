@@ -43,6 +43,7 @@ npm run test:mockup -- --enemy W8N3:3[:defenders[:ringHits]] --enemy-refill 10  
 npm run test:mockup -- --stronghold W7N4:1 | --siege W7N3:1500 | --blockers W7N3:8:500
 npm run test:mockup -- --claim W8N3:2 | --gcl 2 | --structures @file.json | --set-rcl 5
 npm run test:mockup -- --save-state s.json | --load-state s.json   # save / resume a world
+npm run test:mockup -- --nuke W7N3:spawn:300:12000 | --preset rcl8 --nuker --nuke-flight 3000   # incoming nuke / loaded nuker, short flights
 CODES="before=a.js after=dist/main.js" RUNS=2 JOBS=6 bash scripts/mockup/compare.sh   # bundles x rooms x runs
 ```
 
@@ -122,7 +123,7 @@ Minerals, terminal transfers, market pricing (`market/pricing.ts`), reactions by
 
 ### Defense (`docs/decisions/defense.md`)
 
-`enemyStrength`, threat-scaled rampart targets, towers by threat score (`defense/threatModel.ts`), harmless blockers shot, guardians, safe mode, owned room defense spawns.
+`enemyStrength`, threat-scaled rampart targets, towers by threat score (`defense/threatModel.ts`), harmless blockers shot, guardians, safe mode, owned room defense spawns, incoming nukes (`defense/nukeDefense.ts`: ramparts over what is worth saving, evacuation, no spawn or site before the impact).
 
 ### Expansion (`docs/decisions/expansion.md`)
 
@@ -130,7 +131,7 @@ From an RCL 5+ room with GCL to spare and CPU that fits (`expansionCpuFits`); cl
 
 ### Military (`docs/decisions/military.md`)
 
-Our own design. Automatic targets need a strategic reason (`strategy.ts`: aggressor, expansion, territory, encroacher, stronghold), then a return on investment of at least 1: value (loot, remote income freed, infamy of an aggressor) over cost (spawn energy and boosts of the squad, x2 for replacements, `roi.ts`). Duos and quads (`duo.ts`, `quad.ts`), a drainer first against towers the quad can't tank, the quad spawned once they are predicted empty (`drainer.ts`, `drainForecast.ts`), boosts dosed to the target (`boostNeed.ts`), routes that avoid other players and keeper rooms (`route.ts`), CPU guard (`cpuGuard.ts`), looting after a success (`loot.ts`). `Memory.military = { attack, auto, squad, boosts, maxMissions, maxSeizes }` overrides. Since the CPU unlock (2026-11-05, freeze lifted by the user): up to `maxMissions` simultaneous missions (`targets` list), colony missions (every base within 4 rooms of the rally spawns members, 2026-11-14), controller takeover after a player room's fall (a guard and a CLAIM attacker every 1000 ticks until the controller is neutral, `siege.ts`, `Memory.military.takeover`/`maxSieges`), an offensive boost demand for targets blocked only by the stock (`boostDemand.ts`, 100k credit floor), and remote seizes of other players' remotes while they don't fight back (`remote/remoteSeize.ts`).
+Our own design. Automatic targets need a strategic reason (`strategy.ts`: aggressor, expansion, territory, encroacher, stronghold), then a return on investment of at least 1: value (loot, remote income freed, infamy of an aggressor) over cost (spawn energy and boosts of the squad, x2 for replacements, `roi.ts`). Duos and quads (`duo.ts`, `quad.ts`), a drainer first against towers the quad can't tank, the quad spawned once they are predicted empty (`drainer.ts`, `drainForecast.ts`), boosts dosed to the target (`boostNeed.ts`), routes that avoid other players and keeper rooms (`route.ts`), CPU guard (`cpuGuard.ts`), looting after a success (`loot.ts`). `Memory.military = { attack, auto, squad, boosts, maxMissions, maxSeizes }` overrides. Since the CPU unlock (2026-11-05, freeze lifted by the user): up to `maxMissions` simultaneous missions (`targets` list), colony missions (every base within 4 rooms of the rally spawns members, 2026-11-14), controller takeover after a player room's fall (a guard and a CLAIM attacker every 1000 ticks until the controller is neutral, `siege.ts`, `Memory.military.takeover`/`maxSieges`), an offensive boost demand for targets blocked only by the stock (`boostDemand.ts`, 100k credit floor), and remote seizes of other players' remotes while they don't fight back (`remote/remoteSeize.ts`). Nukes (`nukeTarget.ts`, `nukeStrike.ts`): filled from surpluses, fired by hand (`Memory.military.nuke = "ROOM"`) or, with `true`, on targets whose strike pays; the target's mission waits for the impact.
 
 ### Platform (`docs/decisions/platform.md`)
 

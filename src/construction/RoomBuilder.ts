@@ -24,6 +24,7 @@ import { jitter } from "../utils/jitter";
 import { constructionEnabled, constructionSettingsKey } from "./settings";
 import { factoryWanted } from "../resources/factory";
 import { cleanStaleSites } from "./siteCleanup";
+import { incomingNukes, nukeRampartPositions, nukeSiteAllowed } from "../defense/nukes";
 
 /** Construction sites per room, existing ones included */
 const MAX_ROOM_SITES = 5;
@@ -45,8 +46,10 @@ class RoomContext {
     readonly siteCount: number;
     readonly rcl: number;
     readonly terrain: RoomTerrain;
+    readonly nuked: boolean;
 
     constructor(readonly room: Room, readonly plan: RoomPlan) {
+        this.nuked = incomingNukes(room).length > 0;
         this.siteCount = room.find(FIND_MY_CONSTRUCTION_SITES).length;
         this.rcl = room.controller?.level ?? 0;
         this.terrain = room.getTerrain();
@@ -61,6 +64,11 @@ class RoomContext {
         if (pos.lookFor(LOOK_STRUCTURES).some(s => s.structureType === type)) return true;
         if (pos.lookFor(LOOK_CONSTRUCTION_SITES).some(s => s.structureType === type)) return true;
         if (!this.canCreate()) return false;
+        // Incoming nuke: nothing but ramparts in its radius, nothing at all right before the impact
+        if (this.nuked && !nukeSiteAllowed(pos, type)) {
+            this.deferred = true;
+            return true;
+        }
         if (_.size(Game.constructionSites) >= MAX_GLOBAL_SITES) {
             this.deferred = true;
             return false;
@@ -189,8 +197,16 @@ function manageLinks(ctx: RoomContext): void {
     ctx.buildPlanned("link", STRUCTURE_LINK);
 }
 
+/** Ramparts over the structures an incoming nuke would destroy (defense/nukes.ts), before anything else */
+function manageNukeRamparts(ctx: RoomContext): void {
+    if (!ctx.nuked) return;
+    for (const pos of nukeRampartPositions(ctx.room)) if (!ctx.tryBuild(pos, STRUCTURE_RAMPART)) return;
+}
+
 function manageStructures(ctx: RoomContext): void {
     const room = ctx.room;
+    manageNukeRamparts(ctx);
+    if (!ctx.canCreate()) return;
     const onlySpawn = _.size(Game.spawns) === 1 ? _.values<StructureSpawn>(Game.spawns)[0] : null;
     if (onlySpawn?.room.name === room.name && ctx.rcl < 4) manageExtensions(ctx);
     if (!ctx.canCreate()) return;
@@ -323,7 +339,7 @@ export const roomBuilderModule = () => {
         if (!plan || underAttack(room)) continue;
         // A room without spawn waits for the best variation: its first construction site fixes the plan
         if (!roomPlanner.isFinal(room.name) && room.find(FIND_MY_SPAWNS).length === 0) continue;
-        if (isStillComplete(room, plan)) {
+        if (incomingNukes(room).length === 0 && isStillComplete(room, plan)) {
             countStat("roomBuilder:idle");
             continue;
         }

@@ -67,7 +67,7 @@ const BOOSTS = {
 Object.assign(globalThis, RESOURCES, { REACTIONS: reactions, BOOSTS, LAB_REACTION_AMOUNT: 5, LAB_BOOST_MINERAL: 30, UPGRADE_CONTROLLER_POWER: 1, CREEP_LIFE_TIME: 1500 });
 
 const { pickBoost } = require(join(OUT, "boostChoice.js"));
-const { findChainReaction, chainDeficits, reactionTargets, importableFrom, demandTargets, mineralNeeds, baseMineralsIn, upgradeValuePerMineral } = require(join(OUT, "chain.js"));
+const { spareOf, findChainReaction, chainDeficits, reactionTargets, importableFrom, demandTargets, mineralNeeds, baseMineralsIn, upgradeValuePerMineral } = require(join(OUT, "chain.js"));
 
 let failures = 0;
 function check(name, actual, expected) {
@@ -133,6 +133,12 @@ check("chain: G waits for ZK in use elsewhere -> ZK from imported Z and K instea
 // ---- deficits: reagents pushed down the chain, stock deducted
 const deficit = chainDeficits([["GH", 3000]], stock({ GH: 1000, G: 500 }));
 check("deficits: GH 2000 missing, G 1500, ZK and UL 1500", [deficit.GH, deficit.G, deficit.ZK, deficit.UL, deficit.Z], [2000, 1500, 1500, 1500, 1500]);
+
+// ---- spare: what the nuker may take once the chain had its share
+check("spare: G beyond a GH target (3000 GH need 3000 G)", spareOf([["GH", 3000]], stock({ G: 5000 }), "G"), 2000);
+check("spare: GH in stock spares its G", spareOf([["GH", 3000]], stock({ G: 5000, GH: 3000 }), "G"), 5000);
+check("spare: the labs short of G: none", spareOf([["GH", 3000]], stock({ G: 1000 }), "G"), 0);
+check("spare: no target uses G: all of it", spareOf([["XUH2O", 3000]], stock({ G: 4000 }), "G"), 4000);
 
 // ---- demand targets: what the market may buy for
 const kinds = targets => targets.map(t => `${t.compound}:${t.kind}`);

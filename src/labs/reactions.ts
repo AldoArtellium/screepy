@@ -11,7 +11,7 @@ import { currentTargets } from "../military/military";
 import { log } from "../utils/logger";
 import { countStat } from "../utils/stats";
 import { isLabUsedForBoosting, operationalLabs } from "./boosts";
-import { chainDeficits, DemandTarget, demandTargets, findChainReaction, importableFrom, productOf, reagentsOf } from "./chain";
+import { chainDeficits, DemandTarget, demandTargets, findChainReaction, importableFrom, productOf, reagentsOf, spareOf } from "./chain";
 
 export { productOf, reagentsOf };
 
@@ -39,6 +39,30 @@ declare global {
  * W28N3 took the credits from 271k to 174k in 1300 ticks with forced buys in every lab room.
  */
 export function demandTargetsOf(room: Room): DemandTarget[] {
+    const targets = labDemandTargets(room);
+    const missing = nukerGhodiumMissing(room);
+    // The nuker's ghodium last of all, from what the rooms hold (kind "stock": never bought)
+    if (missing > 0) targets.push({ compound: RESOURCE_GHODIUM, amount: missing, kind: "stock" });
+    return targets;
+}
+
+/** Ghodium the room's nuker still lacks (none while nukes are off: Memory.military.nuke = false) */
+function nukerGhodiumMissing(room: Room): number {
+    if (Memory.military?.nuke === false) return 0;
+    const nuker = room.find<StructureNuker>(FIND_MY_STRUCTURES, { filter: { structureType: STRUCTURE_NUKER } })[0];
+    return nuker ? nuker.store.getFreeCapacity(RESOURCE_GHODIUM) ?? 0 : 0;
+}
+
+/** Ghodium in the storage and terminal above what the labs' targets need (the nuker's share) */
+export function spareGhodium(room: Room): number {
+    const have = labResources(room);
+    const targets = labDemandTargets(room).map(t => [t.compound, t.amount] as [ResourceConstant, number]);
+    const spare = spareOf(targets, r => have[r] ?? 0, RESOURCE_GHODIUM);
+    const withdrawable = (room.storage?.store[RESOURCE_GHODIUM] ?? 0) + (room.terminal?.store[RESOURCE_GHODIUM] ?? 0);
+    return Math.min(spare, withdrawable);
+}
+
+function labDemandTargets(room: Room): DemandTarget[] {
     const homeThreat = enemyStrength(room) >= ENEMY_STRENGTH_NORMAL;
     const mission = currentTargets().length > 0;
     const militaryWanted = Memory.military?.auto !== false && roomThreat(room) > 0;
