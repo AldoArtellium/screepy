@@ -4,6 +4,7 @@
  * (Hivemind containSingleRoomCreep, MIT, src/role/role.ts).
  */
 
+import "../roles/bait";
 import "../roles/brawler";
 import "../roles/builder";
 import "../roles/claimer";
@@ -47,6 +48,7 @@ const THROTTLE: { [role: string]: [stopAt: number, throttleAt: number] } = {
     claimer: [0, 0],
     pioneer: [0, 0],
     siegeGuard: [0, 0],
+    bait: [0, 0],
     controllerAttacker: [0, 0]
 };
 

@@ -45,6 +45,8 @@ import { BASES_REFRESH, BaseCandidate, colonyBases, energyBase, offersMember } f
 import { chooseAutoTargets, releaseFallen } from "./targets";
 import { militaryCpuAverage, militaryCpuTooHigh } from "./cpuGuard";
 import { decisionBucket } from "../utils/throttle";
+import { refillEngaged } from "./safeMode";
+import { runBaits } from "./bait";
 
 export { militaryMemory } from "./intel";
 
@@ -177,7 +179,7 @@ function missionsInOrder(): MissionEntry[] {
         .map(x => x.entry);
 }
 
-function finish(kind: "duo" | "quad", name: string, mission: Mission, result: "success" | "abandoned" | "retargeted"): void {
+function finish(kind: "duo" | "quad", name: string, mission: Mission, result: "success" | MissionEnd): void {
     if (result === "success") {
         startLooting(mission.targetRoom, mission.spawnRoom);
         // Before releaseFallen: the siege reads the owner from the intel
@@ -276,11 +278,20 @@ function isEngaged(target: string): boolean {
 /** Average CPU per tick of this module (heap, military/cpuGuard.ts) */
 let moduleCpu: number | undefined;
 
+type MissionEnd = "abandoned" | "retargeted" | "safeMode";
+
+/** The target's safe mode is on (military intel): the squad can't hurt anything there */
+function safeModeOn(roomName: string): boolean {
+    return (hostileRoom(roomName)?.safeMode ?? 0) > Game.time;
+}
+
 /**
- * Losses, a CPU cost the account can't carry (cpuGuard.ts) or the target changed (not a failure: the room
- * is not left alone for it, targets.ts recentlyFailed)
+ * The target's safe mode (not a failure: the room comes back in the window after it, targets.ts), losses,
+ * a CPU cost the account can't carry (cpuGuard.ts) or the target changed (not a failure: the room is not
+ * left alone for it, targets.ts recentlyFailed)
  */
-function endReason(mission: { targetRoom: string; losses: number }): "abandoned" | "retargeted" | null {
+function endReason(mission: { targetRoom: string; losses: number }): MissionEnd | null {
+    if (safeModeOn(mission.targetRoom)) return "safeMode";
     if (mission.losses >= MAX_LOSSES) return "abandoned";
     if (militaryCpuTooHigh(moduleCpu, Game.cpu.limit, decisionBucket())) {
         countStat("military:cpuAbandon");
@@ -431,9 +442,9 @@ function updateAutoTargets(): void {
         countStat(`military:target:${auto.reason}`);
         log.info("Military", `Automatic target: ${auto.room} (${auto.reason}, value ${auto.value} for a squad of ${auto.cost} energy)`);
     }
-    for (const entry of entries)
-        if (next.length < max && !next.includes(entry) && hasMission(entry.room)) next.push(entry);
-    if (next.length > 0) memory.targets = next;
+    // Only the safe mode releases them here: a room whose last spawn fell still has towers or ramparts to clear
+    const kept = refillEngaged(next, entries, max, hasMission, safeModeOn);
+    if (kept.length > 0) memory.targets = kept;
     else delete memory.targets;
 }
 
@@ -453,6 +464,7 @@ function runMilitary(): void {
         delete memory.target;
     }
     if (Game.time % AUTO_TARGET_EVERY === 0) updateAutoTargets();
+    runBaits();
     for (const target of currentTargets()) if (!hasMission(target)) startMission(target);
     for (const { name, mission } of missionsInOrder()) {
         refreshBases(name, mission);
@@ -489,11 +501,14 @@ function runMilitary(): void {
     for (const name in memory.quads ?? {}) {
         const quad = memory.quads![name];
         // A drain the owner out-refills (quad.ts drain): abandoned, the room left alone FAILURE_MEMORY ticks
+        // A safe mode first: the drain it stalls is not a failure (shard0 W25N7 2026-11-14)
         const quadEnd = isNeutralized(quad.targetRoom, quad, quadCreeps(name))
             ? "success"
-            : quad.drainStalled
-              ? "abandoned"
-              : endReason(quad);
+            : safeModeOn(quad.targetRoom)
+              ? "safeMode"
+              : quad.drainStalled
+                ? "abandoned"
+                : endReason(quad);
         if (quadEnd) {
             finish("quad", name, quad, quadEnd);
             continue;

@@ -68,6 +68,9 @@ jobs:
       - name: Military siege check
         run: node tests/militarySiege/run.mjs
 
+      - name: Safe mode check
+        run: node tests/safeMode/run.mjs
+
       - name: Combat check
         run: node tests/combat/run.mjs
 
