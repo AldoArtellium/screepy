@@ -205,6 +205,22 @@ check("a lair spawning soon makes its source a danger", inKeeperDanger({ x: 16, 
 const later = keeperDangers([], [{ x: 14, y: 47, ticksToSpawn: 40 }], guardedSources);
 check("a lair far from spawning does not", !inKeeperDanger({ x: 16, y: 42 }, later));
 
+// Civilians never step back into a keeper's reach. shard0 2026-11-15: fled out of range 3 once hit, then the
+// path stepped back in the next tick, hit again on every pickup attempt until the killer cleared the keeper
+const { safeStepTargets } = keepers;
+const keeper = [{ x: 10, y: 10 }];
+const at4 = { x: 14, y: 10, roomName: "W26N4" };
+const into3 = { x: 13, y: 10, roomName: "W26N4" };
+const along4 = { x: 14, y: 11, roomName: "W26N4" };
+check("out of reach: the step into range 3 is dropped, the creep stays", safeStepTargets(at4, [into3], keeper)[0] === at4);
+check("out of reach: safe alternatives kept", safeStepTargets(at4, [into3, along4], keeper).length === 1 && safeStepTargets(at4, [into3, along4], keeper)[0] === along4);
+check("inside the reach: every target kept to flee", safeStepTargets(into3, [{ x: 12, y: 10, roomName: "W26N4" }], keeper).length === 1);
+check("a step into the next room is kept", safeStepTargets(at4, [{ x: 13, y: 10, roomName: "W25N4" }], keeper).length === 1 && safeStepTargets(at4, [{ x: 13, y: 10, roomName: "W25N4" }], keeper)[0] !== at4);
+const onlyStep = [into3];
+check("a single step dropped is a change (not the same array)", safeStepTargets(at4, onlyStep, keeper) !== onlyStep);
+const safeSteps = [along4];
+check("nothing dropped: the same array", safeStepTargets(at4, safeSteps, keeper) === safeSteps);
+check("no danger: unchanged", safeStepTargets(at4, [into3], []).length === 1 && safeStepTargets(at4, [into3], [])[0] === into3);
 // Killer relief: a successor once no killer outlives its arrival (spawn time + travel)
 check("no killer: one needed", killerNeeded([], 150));
 check("one spawning: none needed", !killerNeeded([{ spawning: true, ticksToLive: undefined }], 150));

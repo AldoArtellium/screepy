@@ -158,6 +158,21 @@ export function inKeeperDanger(pos: Point, dangers: Point[]): boolean {
 }
 
 /**
+ * The move targets a civilian keeps: out of a keeper's reach it never steps into it (only the safe
+ * targets, else it stays put); inside, every target stays so it can flee. shard0 2026-11-15: civilians
+ * fled out of range 3 of a keeper once hit, then their path stepped back in the next tick, hit again
+ * on every pickup attempt until the killer cleared the keeper (mockup W6N4: harvesters 28,7 <-> 27,6,
+ * hit every other tick). Targets in another room (`roomName` set and different from the creep's) are
+ * kept: the dangers are the creep's room's. Nothing dropped: the same array (callers compare references).
+ */
+export function safeStepTargets<T extends Point & { roomName?: string }>(from: T, targets: T[], dangers: Point[]): T[] {
+    if (dangers.length === 0 || inKeeperDanger(from, dangers)) return targets;
+    const safe = targets.filter(t => (t.roomName !== undefined && t.roomName !== from.roomName) || !inKeeperDanger(t, dangers));
+    if (safe.length === targets.length) return targets;
+    return safe.length > 0 ? safe : [from];
+}
+
+/**
  * A keeper room's harvesters are spawned only while a killer is in the room. shard0 2026-11-14: with
  * "spawning or alive", harvesters (69 ticks to spawn) reached W26N4 before their killer (150 ticks):
  * W27N5 spawned 24 remote harvesters in 700 ticks and its storage fell from 49k to 21k.

@@ -5,31 +5,15 @@
  * Source keepers (2026-11-14, keeper mining): a keeper guards its source and only strikes within 3, so
  * civilians step out of range 3 of a live keeper or of a lair spawning within 10 ticks (keepers.ts),
  * and come back once the room's keeperKiller has cleared it; they used to flee every keeper at 5.
+ * They never step back in on their own: the TrafficManager drops such steps (keepers.ts safeStepTargets).
  */
 
 import { trafficManager } from "../modules/TrafficManager";
-import { inKeeperDanger, keeperDangers, KEEPER_FLEE_RANGE } from "../remote/keepers";
+import { roomKeeperDangers, SOURCE_KEEPER } from "../remote/keeperDangerCache";
+import { inKeeperDanger, KEEPER_FLEE_RANGE } from "../remote/keepers";
 import { countStat } from "../utils/stats";
 
 const FLEE_RANGE = 5;
-const KEEPER = "Source Keeper";
-
-/** Keeper rooms' dangers by room, per tick (heap) */
-const dangerCache: Map<string, { tick: number; dangers: { x: number; y: number }[] }> = new Map();
-
-function roomKeeperDangers(room: Room): { x: number; y: number }[] {
-    const cached = dangerCache.get(room.name);
-    if (cached?.tick === Game.time) return cached.dangers;
-    const keepers = room.find(FIND_HOSTILE_CREEPS, { filter: c => c.owner.username === KEEPER }).map(c => c.pos);
-    const lairStructures = room.find(FIND_HOSTILE_STRUCTURES, {
-        filter: s => s.structureType === STRUCTURE_KEEPER_LAIR
-    }) as StructureKeeperLair[];
-    const lairs = lairStructures.map(l => ({ x: l.pos.x, y: l.pos.y, ticksToSpawn: l.ticksToSpawn }));
-    const sources = lairs.length > 0 ? room.find(FIND_SOURCES).map(s => s.pos) : [];
-    const dangers = keepers.length + lairs.length > 0 ? keeperDangers(keepers, lairs, sources) : [];
-    dangerCache.set(room.name, { tick: Game.time, dangers });
-    return dangers;
-}
 
 function fleeFrom(creep: Creep, goals: { pos: RoomPosition; range: number }[], home?: RoomPosition): void {
     const result = PathFinder.search(creep.pos, goals, { flee: true, maxRooms: 2 });
@@ -41,7 +25,7 @@ function fleeFrom(creep: Creep, goals: { pos: RoomPosition; range: number }[], h
 export function fleeIfThreatened(creep: Creep, home?: RoomPosition): boolean {
     const threats = creep.pos.findInRange(FIND_HOSTILE_CREEPS, FLEE_RANGE, {
         filter: c =>
-            c.owner.username !== KEEPER && c.getActiveBodyparts(ATTACK) + c.getActiveBodyparts(RANGED_ATTACK) > 0
+            c.owner.username !== SOURCE_KEEPER && c.getActiveBodyparts(ATTACK) + c.getActiveBodyparts(RANGED_ATTACK) > 0
     });
     if (threats.length > 0) {
         fleeFrom(creep, threats.map(c => ({ pos: c.pos, range: FLEE_RANGE + 2 })), home);
