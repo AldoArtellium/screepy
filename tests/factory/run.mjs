@@ -92,6 +92,12 @@ check("H surplus is not compressed at these prices", hOnly === null, hOnly);
 const noPrice = chooseFactoryJob(recipes, { stock: r => ({ K: 90000, energy: 100000 })[r] ?? 0, labDeficit: () => 0, inputValue: () => undefined, productValue: () => undefined });
 check("no compression without prices", noPrice === null, noPrice);
 
+// Hysteresis: a margin of 1.15 starts nothing but keeps a compression under way
+const edge = { inputValue: r => ({ K: 100, energy: 10 })[r], productValue: r => (r === "keanium_bar" ? 598 : undefined) };
+const edgeState = { ...edge, stock: r => ({ K: 35095, energy: 46144 })[r] ?? 0, labDeficit: () => 0 };
+check("margin 1.15 starts no compression", chooseFactoryJob(recipes, edgeState) === null);
+check("margin 1.15 keeps the compression under way", chooseFactoryJob(recipes, edgeState, "keanium_bar")?.product === "keanium_bar");
+
 // Decompression for the labs, batteries for energy
 const unpack = chooseFactoryJob(recipes, state({ utrium_bar: 1000, energy: 50000 }, { U: 1200 }));
 check("a looted utrium bar is decompressed for the labs' U deficit", unpack?.product === "U" && unpack.batches === 3, unpack);

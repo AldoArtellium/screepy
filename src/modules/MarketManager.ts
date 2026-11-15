@@ -324,7 +324,7 @@ function repriceSellOrders(orders: Order[], history: PriceData, cheapestCompetit
  * Sells to the best buy order instead when it pays as much, or while credits are low; lowers our order
  * when a competitor undercuts it (not in Hivemind, see market/pricing.ts).
  */
-function trySell(resourceType: ResourceConstant, rooms: string[], stock: number): void {
+function trySell(resourceType: ResourceConstant, rooms: string[]): void {
     const room = roomHighestOn(resourceType, rooms);
     const history = priceData(resourceType);
     if (!room || !history) return;
@@ -341,7 +341,8 @@ function trySell(resourceType: ResourceConstant, rooms: string[], stock: number)
         return;
     }
     const offer = sellOrderPrice(history, cheapest);
-    const amount = sellOrderAmount(maxOrderAmount(resourceType), stock);
+    // What this room holds: the order is filled from its terminal only
+    const amount = sellOrderAmount(maxOrderAmount(resourceType), resourceAmount(room, resourceType));
     if (amount <= 0) return;
     // Listing fee: 5% of the order value
     if (Game.market.credits < amount * offer * 0.05) {
@@ -363,7 +364,7 @@ function manageBaseMineral(resourceType: ResourceConstant, states: ResourceState
     // A factory compressing it: the bar sells for more (resources/factory.ts)
     if (!factoryKeeps.has(resourceType)) {
         if (total > (n * STORAGE_CAPACITY) / 20) instaSell(resourceType, states.rooms);
-        if (total > (n * STORAGE_CAPACITY) / 50) trySell(resourceType, states.rooms, total);
+        if (total > (n * STORAGE_CAPACITY) / 50) trySell(resourceType, states.rooms);
     }
     const need = needs[resourceType];
     if (!need || need.amount < MIN_BUY) {
@@ -457,14 +458,14 @@ function manageCompound(resourceType: ResourceConstant, states: ResourceStates):
     const history = priceData(resourceType);
     if (!worth || !history || history.average <= worth) return;
     instaSell(resourceType, states.rooms);
-    trySell(resourceType, states.rooms, states.total[resourceType] ?? 0);
+    trySell(resourceType, states.rooms);
 }
 
 /** Power above 20k (instant) / 10k (order) per room, ops above 10k / 5k */
 function manageSurplus(resourceType: ResourceConstant, states: ResourceStates, instant: number, order: number): void {
     const total = states.total[resourceType] ?? 0;
     if (total > states.rooms.length * instant) instaSell(resourceType, states.rooms);
-    if (total > states.rooms.length * order) trySell(resourceType, states.rooms, total);
+    if (total > states.rooms.length * order) trySell(resourceType, states.rooms);
 }
 
 /** Storage 90% full and terminal 95% full: sell the terminal resource whose best offer beats its worth the most */

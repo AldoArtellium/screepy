@@ -12,7 +12,17 @@ import { demandTargetsOf, labResources } from "../labs/reactions";
 import { tradeValue } from "../modules/MarketManager";
 import { countStat } from "../utils/stats";
 import { log } from "../utils/logger";
-import { chooseFactoryJob, compressionPays, FactoryJob, FactoryRecipe, FactoryState, levelZeroRecipes, requestedComponents } from "./factoryPlan";
+import {
+    BARS,
+    chooseFactoryJob,
+    compressionPays,
+    FactoryJob,
+    FactoryRecipe,
+    FactoryState,
+    levelZeroRecipes,
+    recipeMargin,
+    requestedComponents
+} from "./factoryPlan";
 
 /** The job is chosen again after this many ticks (Hivemind getJobs: 50) */
 const JOB_TICKS = 100;
@@ -67,7 +77,7 @@ function factoryState(room: Room): FactoryState {
 export function factoryJob(room: Room): FactoryJob | null {
     const cached = jobs.get(room.name);
     if (cached && cached.until > Game.time && (!cached.job || cached.job.batches > 0)) return cached.job;
-    const job = room.terminal?.my ? chooseFactoryJob(recipes(), factoryState(room)) : null;
+    const job = room.terminal?.my ? chooseFactoryJob(recipes(), factoryState(room), cached?.job?.product) : null;
     jobs.set(room.name, { until: Game.time + JOB_TICKS, job });
     return job;
 }
@@ -89,6 +99,10 @@ export function factoryWanted(room: Room): boolean {
     const cached = wanted.get(room.name);
     if (cached && cached.until > Game.time) return cached.wanted;
     const mineral = room.find(FIND_MINERALS)[0]?.mineralType;
+    const bar = mineral ? BARS[mineral] : undefined;
+    const recipe = bar ? recipes().find(r => r.product === bar) : undefined;
+    // No price yet (cold heap after a reset): asked again next time instead of cached
+    if (recipe && recipeMargin(recipe, prices) === undefined) return false;
     const result = !!mineral && compressionPays(recipes(), mineral, prices);
     wanted.set(room.name, { until: Game.time + WANTED_TICKS, wanted: result });
     return result;
@@ -130,8 +144,9 @@ export const factoryModule = (): void => {
             job.batches--;
             countStat(`factory:${job.product}`, recipe.amount);
         } else {
+            // No job for JOB_TICKS: a factory full of products (ERR_FULL) waits for the transporters
             log.warn("Factory", `${room.name}: produce ${job.product}: ${result}`);
-            jobs.delete(room.name);
+            jobs.set(room.name, { until: Game.time + JOB_TICKS, job: null });
         }
     }
 };

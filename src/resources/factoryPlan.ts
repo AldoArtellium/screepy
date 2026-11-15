@@ -47,6 +47,8 @@ export const BARS: { [mineral: string]: string } = {
 export const KEEP_MINERAL = 20000;
 /** A bar is made only when it sells for at least this many times its inputs */
 export const MIN_MARGIN = 1.2;
+/** A compression under way continues down to this margin (no fill / empty cycles around MIN_MARGIN) */
+export const CONTINUE_MARGIN = 1.1;
 /** Energy below this: no compression; batteries are decompressed */
 export const ENERGY_LOW = 10000;
 /** Compression stops when the room's energy would fall below this */
@@ -105,7 +107,7 @@ export function compressionPays(recipes: FactoryRecipe[], mineral: string, state
 }
 
 /** The recipe to run in a room, or null */
-export function chooseFactoryJob(recipes: FactoryRecipe[], state: FactoryState): FactoryJob | null {
+export function chooseFactoryJob(recipes: FactoryRecipe[], state: FactoryState, current?: string): FactoryJob | null {
     const energy = state.stock("energy");
     // 1. Bars whose mineral the labs lack
     for (const mineral in BARS) {
@@ -132,7 +134,7 @@ export function chooseFactoryJob(recipes: FactoryRecipe[], state: FactoryState):
         const surplus = state.stock(mineral) - KEEP_MINERAL;
         if (surplus < (recipe.components[mineral] ?? Infinity)) continue;
         const margin = recipeMargin(recipe, state);
-        if (margin === undefined || margin < MIN_MARGIN) continue;
+        if (margin === undefined || margin < (recipe.product === current ? CONTINUE_MARGIN : MIN_MARGIN)) continue;
         const available = (r: string) => (r === mineral ? surplus : r === "energy" ? Math.max(0, energy - ENERGY_FLOOR) : state.stock(r));
         const batches = affordable(recipe, available);
         if (batches > 0 && (!best || margin > best.margin)) best = { job: { product: recipe.product, batches }, margin };
