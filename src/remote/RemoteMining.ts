@@ -106,7 +106,7 @@ declare global {
 }
 
 const SELECT_INTERVAL = 20;
-const MAX_ROOM_DISTANCE = 3;
+export const MAX_ROOM_DISTANCE = 3;
 const MAX_PATH_LENGTH = 200;
 const PATH_TTL = 5000;
 /** A failed path (no plan yet, blocked) is retried sooner than a found one */

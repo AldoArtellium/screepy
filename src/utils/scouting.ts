@@ -35,3 +35,8 @@ const PRESSURE_RESCOUT_FACTOR = 3;
 export function ownershipRescoutAge(base: number, cpuPressure: boolean): number {
     return cpuPressure ? base * PRESSURE_RESCOUT_FACTOR : base;
 }
+
+/** Rooms a home scouts within: 3, 5 from RCL 4 (expansion targets beyond 3 rooms score lower) */
+export function scoutRange(level: number): number {
+    return level >= 4 ? 5 : 3;
+}

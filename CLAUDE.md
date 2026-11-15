@@ -37,7 +37,7 @@ npm run test:mockup -- --dump-memory                   # Memory + segments at th
 npm run test:mockup -- --profile                       # wall ms/tick per stage
 npm run test:mockup -- --cpu-limit 13                  # lower the CPU limit (intents charged 0.2 like official)
 npm run test:mockup -- --preset rcl4|rcl5|rcl7         # fast-forwarded room (storage, extensions, containers)
-npm run test:mockup -- --preset rcl6|rcl8|plan5..plan8 --labs --minerals H:20000,X:10000   # plan-based, terminal, labs
+npm run test:mockup -- --preset rcl6|rcl8|plan5..plan8 --labs --observer --minerals H:20000,X:10000   # plan-based, terminal, labs, observer (RCL 8)
 npm run test:mockup -- --raid 9000:smallMelee+smallRanged,13500:smallMelee*@W7N4   # invader raids ("*" boosted)
 npm run test:mockup -- --enemy W8N3:3[:defenders[:ringHits]] --enemy-refill 10    # enemy base (enemy-bot.js)
 npm run test:mockup -- --stronghold W7N4:1 | --siege W7N3:1500 | --blockers W7N3:8:500
@@ -86,6 +86,7 @@ The ModuleManager runs modules in order with a CPU budget (80% of the limit): `m
 | Defense | every tick | Towers and safe mode (`src/defense/`) |
 | Links | every tick (transfer every 3) | Source, controller and storage links (`src/modules/Links.ts`) |
 | IntelManager | every tick | Static intel of every seen room (segments 1-2) |
+| Observer | every tick (list every 50) | One room per observer and tick among those needing intel (`intel/observerPlan.ts`) |
 | RemoteMining | every tick (selection every 20) | Remote sources each owned room mines, CPU budget |
 | Expansion | every 5 | Claims and bootstraps new rooms (`src/expansion/`) |
 | MarketManager | every 20 | Sells surpluses, buys missing minerals |
@@ -93,7 +94,7 @@ The ModuleManager runs modules in order with a CPU budget (80% of the limit): `m
 | TerminalTransfers | every 5 | Terminal sends between owned rooms |
 | Labs | every tick | Boosts, then reactions (`src/labs/`) |
 | Military | every tick | Targets, squads, looting (`src/military/`) |
-| ScoutManager | every 10 | Scouts rooms within 3-5 rooms of the closest owned room |
+| ScoutManager | every 10 | Scouts rooms within 3-5 rooms of the closest owned room, out of observer range |
 | MemoryCleanup | every tick (work on elapsed ticks) | Memory of dead creeps and abandoned rooms |
 | MiningStats | every tick | Share of source energy harvested |
 | RoomVisuals | every tick | Plan, panel, spawn overlay, world map layers (`src/visuals/`) |
