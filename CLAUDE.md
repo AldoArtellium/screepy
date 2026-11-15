@@ -37,7 +37,7 @@ npm run test:mockup -- --dump-memory                   # Memory + segments at th
 npm run test:mockup -- --profile                       # wall ms/tick per stage
 npm run test:mockup -- --cpu-limit 13                  # lower the CPU limit (intents charged 0.2 like official)
 npm run test:mockup -- --preset rcl4|rcl5|rcl7         # fast-forwarded room (storage, extensions, containers)
-npm run test:mockup -- --preset rcl6|rcl8|plan5..plan8 --labs --minerals H:20000,X:10000   # plan-based, terminal, labs
+npm run test:mockup -- --preset rcl6|rcl8|plan5..plan8 --labs --observer --minerals H:20000,X:10000   # plan-based, terminal, labs, observer (RCL 8)
 npm run test:mockup -- --raid 9000:smallMelee+smallRanged,13500:smallMelee*@W7N4   # invader raids ("*" boosted)
 npm run test:mockup -- --enemy W8N3:3[:defenders[:ringHits]] --enemy-refill 10    # enemy base (enemy-bot.js)
 npm run test:mockup -- --stronghold W7N4:1 | --siege W7N3:1500 | --blockers W7N3:8:500
