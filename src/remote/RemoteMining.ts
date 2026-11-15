@@ -668,102 +668,114 @@ function pickSources(entry: HomeSelection, owner: Record<string, string>, allowe
     }
 }
 
-function selectRemotes(): void {
-    const selected: { [key: string]: RemoteSource } = {};
-    const picked: { score: number; perCreep: number; travel: number; sources: RemoteSource[] }[] = [];
-    const homes: HomeSelection[] = [];
-    for (const name in Game.rooms) {
-        const home = Game.rooms[name];
-        if (!home.controller?.my || !roomPlanner.getPlan(home.name)) continue;
-        // A room without spawn (new expansion) mines nothing yet
-        if (home.find(FIND_MY_SPAWNS).length === 0) continue;
-        const cap = updateSourceCap(home);
-        const rooms: HomeSelection["rooms"] = {};
-        const reserved = (roomName: string) => canReserveFrom(home, roomName);
-        const roads = hasRemoteRoads(home);
-        const candidateNames = candidateRooms(home);
-        // Paths due are searched closest source first, so the farther ones merge into their trunk
-        // the same way on every pass
-        const storagePos = roomPlanner.getPlan(home.name)?.getLocations("storage")[0];
-        if (storagePos) {
-            const origin = worldTile(storagePos.roomName, storagePos.x, storagePos.y);
-            const sources = _.flatten(
-                candidateNames.map(r =>
-                    intelManager.getIntel(r)!.sources!.map(s => ({ tile: worldTile(r, s.x, s.y), roomName: r, x: s.x, y: s.y }))
-                )
-            );
-            const ordered = _.sortBy(
-                sources,
-                t => Math.max(Math.abs(t.tile.x - origin.x), Math.abs(t.tile.y - origin.y)) * 10000 + t.y * 50 + t.x
-            );
-            for (const t of ordered) pathFor(home, new RoomPosition(t.x, t.y, t.roomName));
-        }
-        for (const roomName of candidateNames) {
-            const intel = intelManager.getIntel(roomName)!;
-            const candidates: Candidate[] = [];
-            const generation = remoteSourceCapacity(home, roomName) / ENERGY_REGEN_TIME;
-            const reachable: { source: NonNullable<typeof intel.sources>[number]; path: RoomPosition[] }[] = [];
-            for (const source of intel.sources!) {
-                // Measured to lose energy for this home (remoteBalance.ts)
-                if (isRemoteExcluded(sourceKey(roomName, source.x, source.y), home.name)) continue;
-                const path = pathFor(home, new RoomPosition(source.x, source.y, roomName));
-                if (path && path.length > 0) reachable.push({ source, path });
-            }
-            // A keeper room's killer, shared between its reachable sources
-            const escorted = isKeeperRemote(roomName);
-            const escort = keeperEscort(home, roomName, reachable.length);
-            let net = 0;
-            for (const { source, path } of reachable) {
-                const economy = {
-                    generation,
-                    distance: path.length,
-                    roads,
-                    // maintenanceWork() for a path not selected yet
-                    maintenanceWork: roads ? upkeepWork(path.filter(p => !isOwnedRoom(p.roomName)).length, path.length) : 0,
-                    ...escort
-                };
-                const sourceIncome = sourceNet(economy);
-                // A source that barely pays for its creeps is left out
-                if (!worthMining(sourceIncome)) continue;
-                net += sourceIncome;
-                const key = sourceKey(roomName, source.x, source.y);
-                const previous = memory().sources[key];
-                candidates.push({
-                    source: {
-                        key,
-                        room: roomName,
-                        x: source.x,
-                        y: source.y,
-                        homeRoom: home.name,
-                        travelTime: path.length,
-                        free: source.free || 1,
-                        containerId: previous?.containerId ?? knownContainers.get(key),
-                        servedAt: previous?.homeRoom === home.name ? previous.servedAt : Game.time
-                    },
-                    net: sourceIncome,
-                    parts: sourceParts(economy),
-                    crew: sourceCreeps(economy, home.energyCapacityAvailable, source.free || 1)
-                });
-            }
-            // Hivemind scored a room without any path 3000/500: such a room is skipped here
-            if (candidates.length === 0) continue;
-            const reserver = reserved(roomName) ? reserverCost(_.min(candidates.map(c => c.source.travelTime))) : 0;
-            if (net - reserver <= 0) continue;
-            rooms[roomName] = { candidates, reserverCost: reserver, escorted };
-        }
-        // Best net energy per spawn part first: the room-level net income kept two far sources over
-        // a close one, and the spawn never got to the far ones' harvesters
-        const current = memory().sources;
-        const ranked = _.sortBy(
-            _.flatten(Object.values(rooms).map(r => r.candidates)),
-            c => (-c.net / c.parts) * (current[c.source.key]?.homeRoom === home.name ? KEEP_BONUS : 1)
-        );
-        homes.push({ home, cap, rooms, ranked, chosen: {}, count: 0 });
+type PickedRoom = { score: number; perCreep: number; travel: number; sources: RemoteSource[] };
+
+/**
+ * Searches the paths due closest source first, so the farther ones merge into their trunk the same
+ * way on every pass
+ */
+function searchPathsClosestFirst(home: Room, candidateNames: string[]): void {
+    const storagePos = roomPlanner.getPlan(home.name)?.getLocations("storage")[0];
+    if (!storagePos) return;
+    const origin = worldTile(storagePos.roomName, storagePos.x, storagePos.y);
+    const sources = _.flatten(
+        candidateNames.map(r =>
+            intelManager.getIntel(r)!.sources!.map(s => ({ tile: worldTile(r, s.x, s.y), roomName: r, x: s.x, y: s.y }))
+        )
+    );
+    const ordered = _.sortBy(
+        sources,
+        t => Math.max(Math.abs(t.tile.x - origin.x), Math.abs(t.tile.y - origin.y)) * 10000 + t.y * 50 + t.x
+    );
+    for (const t of ordered) pathFor(home, new RoomPosition(t.x, t.y, t.roomName));
+}
+
+/** A remote room's sources worth mining from a home, or undefined when the room does not pay */
+function roomCandidates(home: Room, roomName: string, roads: boolean): HomeSelection["rooms"][string] | undefined {
+    const intel = intelManager.getIntel(roomName)!;
+    const candidates: Candidate[] = [];
+    const generation = remoteSourceCapacity(home, roomName) / ENERGY_REGEN_TIME;
+    const reachable: { source: NonNullable<typeof intel.sources>[number]; path: RoomPosition[] }[] = [];
+    for (const source of intel.sources!) {
+        // Measured to lose energy for this home (remoteBalance.ts)
+        if (isRemoteExcluded(sourceKey(roomName, source.x, source.y), home.name)) continue;
+        const path = pathFor(home, new RoomPosition(source.x, source.y, roomName));
+        if (path && path.length > 0) reachable.push({ source, path });
     }
-    // Each remote room goes to one home (Hivemind: the room's origin, its closest owned room). Every
-    // home used to pick on its own: neighbours picked the same rooms, the later entry overwrote the
-    // other's sources and the duplicates took CPU budget slots (shard0: 5 rooms mined for a cap of 8,
-    // W29N5 dropped by W29N7 while its harvesters and reserver were still there)
+    // A keeper room's killer, shared between its reachable sources
+    const escorted = isKeeperRemote(roomName);
+    const escort = keeperEscort(home, roomName, reachable.length);
+    let net = 0;
+    for (const { source, path } of reachable) {
+        const economy = {
+            generation,
+            distance: path.length,
+            roads,
+            // maintenanceWork() for a path not selected yet
+            maintenanceWork: roads ? upkeepWork(path.filter(p => !isOwnedRoom(p.roomName)).length, path.length) : 0,
+            ...escort
+        };
+        const sourceIncome = sourceNet(economy);
+        // A source that barely pays for its creeps is left out
+        if (!worthMining(sourceIncome)) continue;
+        net += sourceIncome;
+        const key = sourceKey(roomName, source.x, source.y);
+        const previous = memory().sources[key];
+        candidates.push({
+            source: {
+                key,
+                room: roomName,
+                x: source.x,
+                y: source.y,
+                homeRoom: home.name,
+                travelTime: path.length,
+                free: source.free || 1,
+                containerId: previous?.containerId ?? knownContainers.get(key),
+                servedAt: previous?.homeRoom === home.name ? previous.servedAt : Game.time
+            },
+            net: sourceIncome,
+            parts: sourceParts(economy),
+            crew: sourceCreeps(economy, home.energyCapacityAvailable, source.free || 1)
+        });
+    }
+    // Hivemind scored a room without any path 3000/500: such a room is skipped here
+    if (candidates.length === 0) return undefined;
+    const reserver = canReserveFrom(home, roomName) ? reserverCost(_.min(candidates.map(c => c.source.travelTime))) : 0;
+    if (net - reserver <= 0) return undefined;
+    return { candidates, reserverCost: reserver, escorted };
+}
+
+/** A home's candidate remote rooms and its ranked sources, or undefined when it mines nothing */
+function collectHome(home: Room): HomeSelection | undefined {
+    if (!home.controller?.my || !roomPlanner.getPlan(home.name)) return undefined;
+    // A room without spawn (new expansion) mines nothing yet
+    if (home.find(FIND_MY_SPAWNS).length === 0) return undefined;
+    const cap = updateSourceCap(home);
+    const rooms: HomeSelection["rooms"] = {};
+    const roads = hasRemoteRoads(home);
+    const candidateNames = candidateRooms(home);
+    searchPathsClosestFirst(home, candidateNames);
+    for (const roomName of candidateNames) {
+        const room = roomCandidates(home, roomName, roads);
+        if (room) rooms[roomName] = room;
+    }
+    // Best net energy per spawn part first: the room-level net income kept two far sources over
+    // a close one, and the spawn never got to the far ones' harvesters
+    const current = memory().sources;
+    const ranked = _.sortBy(
+        _.flatten(Object.values(rooms).map(r => r.candidates)),
+        c => (-c.net / c.parts) * (current[c.source.key]?.homeRoom === home.name ? KEEP_BONUS : 1)
+    );
+    return { home, cap, rooms, ranked, chosen: {}, count: 0 };
+}
+
+/**
+ * Each remote room goes to one home (Hivemind: the room's origin, its closest owned room). Every
+ * home used to pick on its own: neighbours picked the same rooms, the later entry overwrote the
+ * other's sources and the duplicates took CPU budget slots (shard0: 5 rooms mined for a cap of 8,
+ * W29N5 dropped by W29N7 while its harvesters and reserver were still there)
+ */
+function assignRooms(homes: HomeSelection[]): void {
     const preferred: { [room: string]: string } = {};
     const best: { [room: string]: number } = {};
     for (const entry of homes) {
@@ -779,6 +791,11 @@ function selectRemotes(): void {
     for (const entry of homes) pickSources(entry, owner, roomName => preferred[roomName] === entry.home.name);
     // Deviation: a room its closest home has no slot for goes to another home in range (Hivemind leaves it)
     for (const entry of homes) pickSources(entry, owner, () => true);
+}
+
+/** Every room the homes picked, with its net income and energy per creep */
+function pickedRooms(homes: HomeSelection[]): PickedRoom[] {
+    const picked: PickedRoom[] = [];
     for (const entry of homes) {
         for (const roomName in entry.chosen) {
             const sources = entry.chosen[roomName];
@@ -790,17 +807,28 @@ function selectRemotes(): void {
             picked.push({ score, perCreep, travel: _.min(sources.map(s => s.travelTime)), sources });
         }
     }
-    // CPU budget: the rooms that pay the most energy per creep (CPU goes with creeps and their
-    // intents), closest first on ties. Hivemind keeps the closest rooms; the net income order kept
-    // farther two-source rooms, more creeps per CPU (W9N5 at 13 CPU lost 15%), and the closest order
-    // kept the remotes of a home at 450 capacity (shard0 W28N7: ~2x the creeps per energy of W29N7)
+    return picked;
+}
+
+/**
+ * CPU budget: the rooms that pay the most energy per creep (CPU goes with creeps and their
+ * intents), closest first on ties. Hivemind keeps the closest rooms; the net income order kept
+ * farther two-source rooms, more creeps per CPU (W9N5 at 13 CPU lost 15%), and the closest order
+ * kept the remotes of a home at 450 capacity (shard0 W28N7: ~2x the creeps per energy of W29N7).
+ * Sorts `picked` in place and returns the number of rooms kept.
+ */
+function budgetSelection(picked: PickedRoom[], selected: { [key: string]: RemoteSource }): number {
     updateBudget(new Set(Object.values(memory().sources).map(s => s.room)).size, picked.length);
     picked.sort((a, b) => b.perCreep - a.perCreep || a.travel - b.travel);
     const cap = memory().maxRooms ?? picked.length;
     for (const entry of picked.slice(0, cap)) {
         for (const source of entry.sources) selected[source.key] = source;
     }
-    // A source that changed home gets its new home's path in the store (remotePath reads it)
+    return cap;
+}
+
+/** A source that changed home gets its new home's path in the store (remotePath reads it) */
+function promotePaths(selected: { [key: string]: RemoteSource }): void {
     for (const source of Object.values(selected)) {
         const stored = paths()[source.key];
         if (!stored || cacheHome(stored) === source.homeRoom) continue;
@@ -812,6 +840,19 @@ function selectRemotes(): void {
         paths()[source.key] = mine;
         pathStore.touch();
     }
+}
+
+function selectRemotes(): void {
+    const selected: { [key: string]: RemoteSource } = {};
+    const homes: HomeSelection[] = [];
+    for (const name in Game.rooms) {
+        const entry = collectHome(Game.rooms[name]);
+        if (entry) homes.push(entry);
+    }
+    assignRooms(homes);
+    const picked = pickedRooms(homes);
+    const cap = budgetSelection(picked, selected);
+    promotePaths(selected);
     for (const source of Object.values(memory().sources)) {
         if (source.containerId) knownContainers.set(source.key, source.containerId);
     }

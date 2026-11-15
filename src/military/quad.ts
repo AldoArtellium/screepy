@@ -738,10 +738,8 @@ function engage(name: string, quad: QuadMemory, group: Creep[], room: Room): str
     return `hold, focus ${focus.structureType} ${cover(focus).hits}`;
 }
 
-/** Runs a quad for one tick */
-export function runQuad(name: string, quad: QuadMemory): void {
-    rangedUsed.clear();
-    const group = members(name);
+/** Records the quad's new members and counts the ones lost since the last tick */
+function trackMembers(name: string, quad: QuadMemory, group: Creep[]): void {
     for (const member of group) if (!quad.members.includes(member.name)) quad.members.push(member.name);
     for (const member of quad.members) {
         if (Game.creeps[member]) continue;
@@ -750,6 +748,29 @@ export function runQuad(name: string, quad: QuadMemory): void {
         log.info("Quad", `${name}: lost ${member} (state ${quad.state})`);
     }
     quad.members = quad.members.filter(m => Game.creeps[m]);
+}
+
+/** Gathers the quad at home (spawning refills the missing members), then sends it once full and boosted */
+function gather(quad: QuadMemory, group: Creep[], full: boolean): void {
+    for (const creep of group) {
+        // Getting boosted at the labs (CreepRunner moves it)
+        if (needsBoosting(creep)) continue;
+        if (creep.room.name !== quad.spawnRoom)
+            trafficManager.moveToRoom(creep, quad.spawnRoom, { priority: PRIORITY });
+        else {
+            const idle = trafficManager.findIdlePosition(creep);
+            trafficManager.requestMove(creep, idle ?? creep.pos, { range: 0, priority: PRIORITY });
+        }
+    }
+    attackQuad(group, null);
+    if (full && group.every(c => c.room.name === quad.spawnRoom && !needsBoosting(c))) quad.state = "travel";
+}
+
+/** Runs a quad for one tick */
+export function runQuad(name: string, quad: QuadMemory): void {
+    rangedUsed.clear();
+    const group = members(name);
+    trackMembers(name, quad, group);
     if (group.length === 0) return;
 
     healQuad(group);
@@ -767,21 +788,8 @@ export function runQuad(name: string, quad: QuadMemory): void {
     if (seen) quad.probeEnergy = _.sum(enemyTowers(seen), t => t.store.energy);
 
     let note = "";
-    if (quad.state === "forming") {
-        // Gather at home (spawning refills the missing members)
-        for (const creep of group) {
-            // Getting boosted at the labs (CreepRunner moves it)
-            if (needsBoosting(creep)) continue;
-            if (creep.room.name !== quad.spawnRoom)
-                trafficManager.moveToRoom(creep, quad.spawnRoom, { priority: PRIORITY });
-            else {
-                const idle = trafficManager.findIdlePosition(creep);
-                trafficManager.requestMove(creep, idle ?? creep.pos, { range: 0, priority: PRIORITY });
-            }
-        }
-        attackQuad(group, null);
-        if (full && group.every(c => c.room.name === quad.spawnRoom && !needsBoosting(c))) quad.state = "travel";
-    } else if (quad.state === "retreat") {
+    if (quad.state === "forming") gather(quad, group, full);
+    else if (quad.state === "retreat") {
         retreat(quad, group);
         attackQuad(group, null);
         const home = group.every(c => c.room.name === quad.stagingRoom && !onRoomEdge(c.pos));

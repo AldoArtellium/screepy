@@ -480,11 +480,8 @@ function traceDuo(name: string, duo: DuoMemory, attacker: Creep, healer: Creep, 
     );
 }
 
-/** Runs a duo for one tick */
-export function runDuo(name: string, duo: DuoMemory): void {
-    previousActions[name] = actions[name] ?? "";
-    actions[name] = "";
-    const { attacker, healer } = members(name);
+/** Records the duo's new members and counts the ones lost since the last tick */
+function trackMembers(name: string, duo: DuoMemory, attacker: Creep | undefined, healer: Creep | undefined): void {
     for (const member of [attacker, healer]) if (member && !duo.members.includes(member.name)) duo.members.push(member.name);
     for (const member of duo.members) {
         if (Game.creeps[member]) continue;
@@ -493,6 +490,28 @@ export function runDuo(name: string, duo: DuoMemory): void {
         log.info("Duo", `${name}: lost ${member} (state ${duo.state})`);
     }
     duo.members = duo.members.filter(m => Game.creeps[m]);
+}
+
+/**
+ * An advancing attacker standing still outside the target room (shard0 W29N3: 5-47 moves per 1000
+ * ticks while its healer moved ~900): its path is dropped and searched again
+ */
+function dropStuckPath(name: string, attacker: Creep, targetRoom: string): void {
+    if (attacker.room.name === targetRoom) return;
+    const state = still.get(name) ?? { pos: "", since: Game.time, seen: Game.time };
+    still.set(name, state);
+    if (stillFor(state, attacker.pos, Game.time, STILL_TICKS)) {
+        countStat("military:duoStuck");
+        paths.delete(name);
+    }
+}
+
+/** Runs a duo for one tick */
+export function runDuo(name: string, duo: DuoMemory): void {
+    previousActions[name] = actions[name] ?? "";
+    actions[name] = "";
+    const { attacker, healer } = members(name);
+    trackMembers(name, duo, attacker, healer);
 
     // A member getting boosted at the labs (CreepRunner moves it): the duo waits (timeout in labs/boosts.ts)
     if ((attacker && needsBoosting(attacker)) || (healer && needsBoosting(healer))) {
@@ -531,16 +550,7 @@ export function runDuo(name: string, duo: DuoMemory): void {
         }
     }
 
-    // An advancing attacker standing still outside the target room (shard0 W29N3: 5-47 moves per 1000
-    // ticks while its healer moved ~900): its path is dropped and searched again
-    if (attacker.room.name !== duo.targetRoom) {
-        const state = still.get(name) ?? { pos: "", since: Game.time, seen: Game.time };
-        still.set(name, state);
-        if (stillFor(state, attacker.pos, Game.time, STILL_TICKS)) {
-            countStat("military:duoStuck");
-            paths.delete(name);
-        }
-    }
+    dropStuckPath(name, attacker, duo.targetRoom);
     prune();
     const step = nextStep(attacker, name, duo, healer.pos);
     strike(attacker, step, duo.targetRoom);

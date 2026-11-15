@@ -466,24 +466,7 @@ function runMilitary(): void {
 
     for (const name in memory.duos) {
         const duo = memory.duos[name];
-        const upgrade = upgradePlan(duo);
-        if (upgrade) {
-            // The duo was sized on stale intel: the threat seen in the fight calls for a quad
-            delete memory.duos[name];
-            // A quad that doesn't tank the towers probes them with a drainer first, like a new mission
-            const probe = !upgrade.tanks && (hostileRoom(duo.targetRoom)?.towers ?? 1) > 0;
-            const quad: QuadMemory = {
-                ...duo,
-                members: [],
-                state: probe ? "probe" : "forming",
-                ...(probe && { probeSince: Game.time }),
-                boosts: upgrade.compounds,
-                boostLosses: duo.losses
-            };
-            memory.quads = { ...memory.quads, [`quad.${duo.targetRoom}`]: quad };
-            log.info("Military", `${name} lost ${duo.losses} creeps: a quad takes over (boosts ${describeBoosts(upgrade.compounds)})`);
-            continue;
-        }
+        if (upgradeDuo(memory, name, duo)) continue;
         const duoEnd = isNeutralized(duo.targetRoom, duo, duoCreeps(name)) ? "success" : endReason(duo);
         if (duoEnd) finish("duo", name, duo, duoEnd);
         else if (squadsOutForNuke(duo.targetRoom)) continue;
@@ -507,27 +490,58 @@ function runMilitary(): void {
         // Our nuke lands soon: the creeps follow the evacuation (CreepRunner), nothing is decided meanwhile
         if (squadsOutForNuke(quad.targetRoom)) continue;
         trackDrainer(name, quad);
-        // A drain the owner out-refills, while probing or while the quad waits at the border: abandoned,
-        // the room left alone FAILURE_MEMORY ticks
-        const decision = runDrainers(name, quad);
-        if (decision === "noFire" || decision === "noProgress") {
-            countStat(`military:drain:${decision}`);
-            const why = decision === "noFire" ? "the towers never fire at the exit tile" : "the refills keep up";
-            const when = quad.state === "probe" ? "before spawning the quad" : "with the quad waiting";
-            log.info("Military", `${name}: ${why}, abandoned ${when}`);
-            finish("quad", name, quad, "abandoned");
-            continue;
-        }
-        if (decision === "spawn") {
-            quad.state = "forming";
-            countStat("military:drainSpawn");
-            const eta = quad.probe?.rate ? Math.round((quad.probeEnergy ?? 0) / quad.probe.rate) : 0;
-            log.info("Military", `${name}: towers at ${quad.probeEnergy ?? 0} energy, empty in ~${eta} ticks: spawning the quad`);
-        }
+        if (decideProbe(name, quad)) continue;
         escalateBoosts("quad", name, quad);
         if (quad.state !== "probe") runQuad(name, quad);
     }
     runSieges();
+}
+
+/**
+ * The duo was sized on stale intel: the threat seen in the fight calls for a quad, which replaces it.
+ * Returns true when the duo was upgraded.
+ */
+function upgradeDuo(memory: NonNullable<Memory["military"]>, name: string, duo: DuoMemory): boolean {
+    const upgrade = upgradePlan(duo);
+    if (!upgrade) return false;
+    delete memory.duos[name];
+    // A quad that doesn't tank the towers probes them with a drainer first, like a new mission
+    const probe = !upgrade.tanks && (hostileRoom(duo.targetRoom)?.towers ?? 1) > 0;
+    const quad: QuadMemory = {
+        ...duo,
+        members: [],
+        state: probe ? "probe" : "forming",
+        ...(probe && { probeSince: Game.time }),
+        boosts: upgrade.compounds,
+        boostLosses: duo.losses
+    };
+    memory.quads = { ...memory.quads, [`quad.${duo.targetRoom}`]: quad };
+    log.info("Military", `${name} lost ${duo.losses} creeps: a quad takes over (boosts ${describeBoosts(upgrade.compounds)})`);
+    return true;
+}
+
+/**
+ * The drainers' decision: a drain the owner out-refills, while probing or while the quad waits at the
+ * border, is abandoned (the room left alone FAILURE_MEMORY ticks); towers predicted empty spawn the
+ * quad. Returns true when the mission was abandoned.
+ */
+function decideProbe(name: string, quad: QuadMemory): boolean {
+    const decision = runDrainers(name, quad);
+    if (decision === "noFire" || decision === "noProgress") {
+        countStat(`military:drain:${decision}`);
+        const why = decision === "noFire" ? "the towers never fire at the exit tile" : "the refills keep up";
+        const when = quad.state === "probe" ? "before spawning the quad" : "with the quad waiting";
+        log.info("Military", `${name}: ${why}, abandoned ${when}`);
+        finish("quad", name, quad, "abandoned");
+        return true;
+    }
+    if (decision === "spawn") {
+        quad.state = "forming";
+        countStat("military:drainSpawn");
+        const eta = quad.probe?.rate ? Math.round((quad.probeEnergy ?? 0) / quad.probe.rate) : 0;
+        log.info("Military", `${name}: towers at ${quad.probeEnergy ?? 0} energy, empty in ~${eta} ticks: spawning the quad`);
+    }
+    return false;
 }
 
 /** A drainer gone before its time is a loss of the mission (MAX_LOSSES, escalation) */
