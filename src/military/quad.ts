@@ -36,9 +36,10 @@ import {
     enemyTowers,
     healPower,
     hitsRatio,
-    incomingDamage,
-    towerPower,
-    verdict
+    incomingDamageOver,
+    observeTowerRefills,
+    SURVIVAL_TICKS,
+    towerPower
 } from "./combat";
 import { restartPatience } from "./drainForecast";
 import { coverOf, isHostileBarrier, isMine, landing, pickTarget, travelCallback } from "./duo";
@@ -652,15 +653,18 @@ function retreat(quad: QuadMemory, group: Creep[]): void {
 
 /**
  * A member can still walk out: its hits outlast the net damage (worst focus minus our healing) until
- * it reaches the closest exit, plus a margin (retreating later killed attackers two tiles from the exit)
+ * it reaches the closest exit, plus a margin (retreating later killed attackers two tiles from the exit),
+ * and SURVIVAL_TICKS (combat.ts verdict). The towers fire only the shots their energy pays
+ * (incomingDamageOver): one refilled a few energy a tick is one shot, not a volley every tick.
  */
 function canEscape(creep: Creep, group: Creep[], pos: RoomPosition = creep.pos): boolean {
-    if (verdict(creep, pos, group) === "doomed") return false;
-    const net = incomingDamage(pos) * damageMultiplier(creep.body) - availableHealing(pos, group);
-    if (net <= 0) return true;
+    const multiplier = damageMultiplier(creep.body);
+    const heal = availableHealing(pos, group);
+    const net = (ticks: number) => incomingDamageOver(pos, ticks) * multiplier - heal * ticks;
+    if (creep.hits <= net(SURVIVAL_TICKS)) return false;
     const { x, y } = pos;
     const toExit = Math.min(x, y, 49 - x, 49 - y);
-    return creep.hits > net * (toExit + ESCAPE_MARGIN);
+    return creep.hits > net(toExit + ESCAPE_MARGIN);
 }
 
 /** Combat trace: state changes, and every 10 ticks near the target */
@@ -798,6 +802,8 @@ export function runQuad(name: string, quad: QuadMemory): void {
         const shooting = enemyTowers(seen);
         quad.probeEnergy = _.sum(shooting, t => t.store.energy);
         quad.probeTowers = shooting.length;
+        // Refills seen, for the shots the towers have left (combat.ts incomingDamageOver, canEscape)
+        observeTowerRefills(seen);
     }
 
     let note = "";

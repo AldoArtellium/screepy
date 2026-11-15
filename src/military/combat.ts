@@ -9,7 +9,7 @@
 export type Verdict = "safe" | "rescue" | "doomed";
 
 /** Ticks a creep must be able to survive on a tile before it may step there */
-const SURVIVAL_TICKS = 3;
+export const SURVIVAL_TICKS = 3;
 
 /** Tower power at a range: 1 up to TOWER_OPTIMAL_RANGE, 1 - TOWER_FALLOFF at TOWER_FALLOFF_RANGE */
 export function towerPower(range: number): number {
@@ -111,6 +111,104 @@ export function incomingDamage(pos: RoomPosition): number {
         if (range <= 4) damage += RANGED_ATTACK_POWER * activeParts(enemy, RANGED_ATTACK);
     }
     return damage;
+}
+
+/** A damage source over several ticks: its damage per tick and the ticks it can keep it up */
+export interface DamageBurst {
+    damage: number;
+    ticks: number;
+}
+
+/** Damage the sources deal over `ticks` ticks, each for as long as it can (a tower: towerShots) */
+export function damageOver(sources: DamageBurst[], ticks: number): number {
+    return sources.reduce((sum, s) => sum + s.damage * Math.min(ticks, s.ticks), 0);
+}
+
+/** A tower's energy at its last sample, its largest refill seen at once and its last refill rate */
+export interface TowerRefill {
+    tick: number;
+    energy: number;
+    /** Largest refill between two samples */
+    burst: number;
+    /** Energy per tick of the last refill (its amount over the ticks since the refill before) */
+    rate: number;
+    /** Tick of the last refill */
+    refilled?: number;
+}
+
+/**
+ * Shots a tower can fire over `ticks` ticks: its energy, its largest refill seen at once and its refill
+ * rate over those ticks. A tower fed a few energy at a time holds about one shot; one seen refilled by a
+ * filler's carry or a stronghold's core (bursts of many shots) fires every tick.
+ */
+export function towerShots(energy: number, refill: TowerRefill | undefined, ticks: number): number {
+    const more = refill ? refill.burst + refill.rate * ticks : 0;
+    return Math.floor((energy + more) / TOWER_ENERGY_COST);
+}
+
+/** Samples further apart than this don't measure a refill (several refills and shots between them) */
+const REFILL_SAMPLE_GAP = 2;
+
+/** A new energy sample of a tower: a refill since the previous one (close enough) updates burst and rate */
+export function sampleRefill(previous: TowerRefill | undefined, tick: number, energy: number): TowerRefill {
+    if (!previous) return { tick, energy, burst: 0, rate: 0 };
+    if (previous.tick === tick) return previous;
+    const refill = tick - previous.tick <= REFILL_SAMPLE_GAP ? Math.max(0, energy - previous.energy) : 0;
+    if (refill === 0) return { ...previous, tick, energy };
+    const since = tick - (previous.refilled ?? previous.tick);
+    return { tick, energy, burst: Math.max(previous.burst, refill), rate: refill / since, refilled: tick };
+}
+
+/** Heap: enemy towers' refills, per tower id (lost on a global reset: towers then judged on energy alone) */
+const towerRefills = new Map<string, TowerRefill>();
+/** Heap: the largest tower refill seen at once per room */
+const roomBursts = new Map<string, number>();
+
+/** Samples the hostile towers of a visible room (quad.ts, every tick the target is in sight) */
+export function observeTowerRefills(room: Room): void {
+    if (towerRefills.size > 200) towerRefills.clear();
+    if (roomBursts.size > 50) roomBursts.clear();
+    const towers = room.find(FIND_HOSTILE_STRUCTURES, {
+        filter: s => s.structureType === STRUCTURE_TOWER
+    }) as StructureTower[];
+    let burst = roomBursts.get(room.name) ?? 0;
+    for (const tower of towers) {
+        const refill = sampleRefill(towerRefills.get(tower.id), Game.time, tower.store.energy);
+        towerRefills.set(tower.id, refill);
+        burst = Math.max(burst, refill.burst);
+    }
+    if (burst > 0) roomBursts.set(room.name, burst);
+}
+
+/** Largest refill seen at once on a tower of a room (heap, observeTowerRefills; 0 when none seen) */
+export function largestRefill(roomName: string): number {
+    return roomBursts.get(roomName) ?? 0;
+}
+
+/**
+ * Worst damage on a tile over the next `ticks` ticks (incomingDamage, towers capped by towerShots): a
+ * tower refilled a few energy a tick holds one shot, not one every tick (mockup W8N3 refilled 1 a tick,
+ * 2026-11-15: the quad retreated at full hits from that one shot, again and again, until its members aged)
+ */
+export function incomingDamageOver(pos: RoomPosition, ticks: number): number {
+    const room = Game.rooms[pos.roomName];
+    if (!room) return 0;
+    // Empty towers too: one seen refilled at once (a stronghold's core, a filler) fires again next tick
+    const towers = room.find(FIND_HOSTILE_STRUCTURES, {
+        filter: s => s.structureType === STRUCTURE_TOWER
+    }) as StructureTower[];
+    const sources: DamageBurst[] = towers.map(t => ({
+        damage: TOWER_POWER_ATTACK * towerPower(t.pos.getRangeTo(pos)),
+        ticks: towerShots(t.store.energy, towerRefills.get(t.id), ticks)
+    }));
+    for (const enemy of room.find(FIND_HOSTILE_CREEPS)) {
+        const range = enemy.pos.getRangeTo(pos);
+        let damage = 0;
+        if (range <= 2) damage += ATTACK_POWER * activeParts(enemy, ATTACK);
+        if (range <= 4) damage += RANGED_ATTACK_POWER * activeParts(enemy, RANGED_ATTACK);
+        if (damage > 0) sources.push({ damage, ticks: Infinity });
+    }
+    return damageOver(sources, ticks);
 }
 
 /** Healing our healers can give a creep standing on a tile (adjacent heal, else ranged heal), boosts included */

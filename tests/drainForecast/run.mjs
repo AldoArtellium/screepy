@@ -34,7 +34,7 @@ try {
 Object.assign(globalThis, { CREEP_SPAWN_TIME: 3 });
 
 const {
-    sampleEnergy, recordPoke, wasHit, etaToEmpty, quadLeadTime, drainDecision, restartPatience,
+    sampleEnergy, recordPoke, wasHit, etaToEmpty, quadLeadTime, drainDecision, restartPatience, refillsInBursts, BURST_REFILL,
     RATE_WINDOW, NO_FIRE_TICKS, FORECAST_PATIENCE, MIN_RATE, SAMPLE_GAP,
 } = require(join(OUT, "military", "drainForecast.js"));
 
@@ -146,6 +146,14 @@ check("refilled faster than drained: never", etaToEmpty(3000, -2) === Infinity);
     check("restarted, still refilled after its own patience: noProgress",
         drainDecision(g, back + FORECAST_PATIENCE, 2700, 200) === "noProgress", g.rate);
 }
+
+// Burst refills (drainer.ts, every state): a stronghold's core refills its tower 990 at once, the mockup's
+// player feeder 5 at a time
+check("no refill seen: drain goes on", !refillsInBursts(0));
+check("feeder of 5 at a time: drain goes on", !refillsInBursts(5));
+check("a shot's worth at once: drain goes on", !refillsInBursts(10));
+check("core refill of 990: hopeless", refillsInBursts(990));
+check("from BURST_REFILL: hopeless", refillsInBursts(BURST_REFILL) && !refillsInBursts(BURST_REFILL - 1));
 
 console.log(failures === 0 ? "\nall checks passed" : `\n${failures} check(s) failed`);
 process.exit(failures === 0 ? 0 : 1);

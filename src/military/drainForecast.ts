@@ -46,6 +46,19 @@ export interface DrainForecast {
 export type DrainDecision = "wait" | "spawn" | "noFire" | "noProgress";
 
 /**
+ * A tower refill seen at once from which the drain is hopeless (combat.ts largestRefill): mockup level 1
+ * stronghold W7N4 (2026-11-15), the core refills its tower from empty to 990-1000 every 200-300 ticks; the
+ * quad then held where it could still escape such a refill, short of the core, and retreated at each one
+ * until its members aged. The mockup's player feeder brings 5 at a time.
+ */
+export const BURST_REFILL = 200;
+
+/** The towers are refilled in bursts no drain keeps down */
+export function refillsInBursts(largestRefill: number): boolean {
+    return largestRefill >= BURST_REFILL;
+}
+
+/**
  * The towers' total energy seen now: a new window each RATE_WINDOW ticks, averaged with the last one. After
  * more than SAMPLE_GAP ticks unseen (drainer dead or resting) the window restarts from now: the refills of
  * the gap, with nobody draining, would count against the drain.

@@ -42,7 +42,7 @@ Object.assign(globalThis, {
     },
 });
 
-const { healPower, attackPower, activePower, towerPower, damageMultiplier, canTank } = require(join(OUT, "military", "combat.js"));
+const { healPower, attackPower, activePower, towerPower, damageMultiplier, canTank, damageOver, towerShots, sampleRefill } = require(join(OUT, "military", "combat.js"));
 
 let failures = 0;
 const check = (name, ok, detail) => {
@@ -95,6 +95,36 @@ check("LHO2 + GHO2 quad tanks one tower (300 vs 432)", canTank(heal("LHO2"), 1, 
 check("XLHO2 + GHO2 quad can't tank two towers (600 vs 576)", !canTank(heal("XLHO2"), 2, damageMultiplier(attacker("GHO2"))));
 check("XLHO2 + XGHO2 quad tanks two towers (360 vs 576)", canTank(heal("XLHO2"), 2, damageMultiplier(attacker("XGHO2"))));
 check("no tower: nothing to tank", canTank(0, 0, 1));
+
+// Damage over several ticks: a tower only for the shots its energy and its refills pay (quad.ts canEscape)
+check("9 energy, no refill seen: no shot", towerShots(9, undefined, 11) === 0);
+check("10 energy: one shot", towerShots(10, undefined, 11) === 1);
+check("790 energy: 79 shots", towerShots(790, undefined, 11) === 79);
+check("creeps every tick, towers capped", damageOver([{ damage: 600, ticks: 2 }, { damage: 90, ticks: Infinity }], 11) === 1200 + 990);
+
+// Refills: mockup W8N3 `--enemy-refill 1` gives 5 every 5 ticks, seen every other tick by the drainer
+let fed = sampleRefill(undefined, 100, 0);
+check("first sample: nothing measured", fed.burst === 0 && fed.rate === 0);
+check("same tick: unchanged", sampleRefill(fed, 100, 50) === fed);
+fed = sampleRefill(fed, 101, 5);
+check("refill of 5 a tick after the first sample", fed.burst === 5 && fed.rate === 5 && fed.refilled === 101, JSON.stringify(fed));
+fed = sampleRefill(fed, 103, 5);
+check("no refill: burst and rate kept", fed.burst === 5 && fed.rate === 5 && fed.energy === 5);
+fed = sampleRefill(fed, 105, 0);
+fed = sampleRefill(fed, 106, 5);
+check("5 more after 5 ticks: 1 a tick", fed.burst === 5 && fed.rate === 1, JSON.stringify(fed));
+check("samples too far apart: no refill measured", sampleRefill(fed, 120, 700).burst === 5);
+const filler = sampleRefill(sampleRefill(undefined, 200, 10), 201, 810);
+check("a filler's carry at once: burst 800", filler.burst === 800);
+check("tower seen fed by a filler: fires every tick", towerShots(10, filler, 23) >= 23);
+
+// An unboosted quad member 8 tiles from the exit (+3 margin, 11 ticks), healed 144 a tick: the W8N3 tower fed
+// 1 a tick holds 2 shots (one shot retreated it at full hits until its members aged, 2026-11-15)
+const escapeNet = (energy, refill, ticks) => damageOver([{ damage: 600, ticks: towerShots(energy, refill, ticks) }], ticks) - 144 * ticks;
+check("fed 1 a tick, attacker 4000 hits: stays", 4000 > escapeNet(5, fed, 11), escapeNet(5, fed, 11));
+check("fed 1 a tick, healer 1600 hits 20 tiles in: stays", 1600 > escapeNet(5, fed, 23), escapeNet(5, fed, 23));
+check("full tower: retreats", 4000 <= escapeNet(790, undefined, 11), escapeNet(790, undefined, 11));
+check("filler-fed tower at 10: retreats", 4000 <= escapeNet(10, filler, 11), escapeNet(10, filler, 11));
 
 console.log(failures === 0 ? "\nall checks passed" : `\n${failures} check(s) failed`);
 process.exit(failures === 0 ? 0 : 1);

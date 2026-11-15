@@ -530,7 +530,7 @@ function decideProbe(name: string, quad: QuadMemory): boolean {
     if (decision === "noFire" || decision === "noProgress") {
         countStat(`military:drain:${decision}`);
         const why = decision === "noFire" ? "the towers never fire at the exit tile" : "the refills keep up";
-        const when = quad.state === "probe" ? "before spawning the quad" : "with the quad waiting";
+        const when = quad.state === "probe" ? "before spawning the quad" : `with the quad in ${quad.state}`;
         log.info("Military", `${name}: ${why}, abandoned ${when}`);
         finish("quad", name, quad, "abandoned");
         return true;
