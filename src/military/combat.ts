@@ -11,12 +11,18 @@ export type Verdict = "safe" | "rescue" | "doomed";
 /** Ticks a creep must be able to survive on a tile before it may step there */
 const SURVIVAL_TICKS = 3;
 
+/** Tower power at a range: 1 up to TOWER_OPTIMAL_RANGE, 1 - TOWER_FALLOFF at TOWER_FALLOFF_RANGE */
 export function towerPower(range: number): number {
     const r = Math.min(Math.max(range, TOWER_OPTIMAL_RANGE), TOWER_FALLOFF_RANGE);
     return 1 - ((r - TOWER_OPTIMAL_RANGE) / (TOWER_FALLOFF_RANGE - TOWER_OPTIMAL_RANGE)) * TOWER_FALLOFF;
 }
 
-function activeParts(creep: Creep, type: BodyPartConstant): number {
+export function hitsRatio(creep: Creep): number {
+    return creep.hits / creep.hitsMax;
+}
+
+/** Active parts of a type, boosts left out */
+export function activeParts(creep: Creep, type: BodyPartConstant): number {
     return creep.body.filter(p => p.type === type && p.hits > 0).length;
 }
 
@@ -31,9 +37,16 @@ export interface BodyPart {
 type BoostTable = Record<string, Record<string, Record<string, number>>>;
 
 /** Multiplier a part's boost gives an effect (1 unboosted) */
-function boostFactor(part: BodyPart, effect: string): number {
+export function boostFactor(part: BodyPart, effect: string): number {
     if (!part.boost) return 1;
     return (BOOSTS as unknown as BoostTable)[part.type]?.[part.boost]?.[effect] ?? 1;
+}
+
+/** Active parts of a type, each weighted by its boost of `effect` (e.g. MOVE "fatigue", WORK "dismantle") */
+export function activePower(creep: Creep, type: BodyPartConstant, effect: string): number {
+    let total = 0;
+    for (const part of creep.body) if (part.type === type && part.hits > 0) total += boostFactor(part, effect);
+    return total;
 }
 
 /** Healing per tick of a body at range 1, boosts included (a ranged heal: x RANGED_HEAL_POWER / HEAL_POWER) */

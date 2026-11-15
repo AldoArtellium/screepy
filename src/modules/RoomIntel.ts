@@ -5,7 +5,8 @@
  * other than WORK/CARRY too. Out of sight a room stays unsafe until its last hostile is expected to die.
  */
 
-import { activePower, effectiveHits, isFast } from "../defense/RoomDefense";
+import { effectiveHits, isFast } from "../defense/RoomDefense";
+import { activePower, attackPower, healPower } from "../military/combat";
 import {
     CONTEST_TTL,
     ContestEntry,
@@ -143,11 +144,8 @@ export const roomIntelModule = () => {
             ...(cores.length > 0 && { hasInvaderCore: true }),
             ...(hostiles.length > 0 && {
                 // Boosts included (Hivemind getDamageCapacity / getHealCapacity): a boosted invader hits twice as hard
-                damage: _.sum(
-                    hostiles,
-                    c => activePower(c, ATTACK, "attack") * ATTACK_POWER + activePower(c, RANGED_ATTACK, "rangedAttack") * RANGED_ATTACK_POWER
-                ),
-                heal: _.sum(hostiles, c => activePower(c, HEAL, "heal") * HEAL_POWER),
+                damage: _.sum(hostiles, c => attackPower(c.body)),
+                heal: _.sum(hostiles, c => healPower(c.body)),
                 rangedDamage: _.sum(hostiles, c => activePower(c, RANGED_ATTACK, "rangedAttack") * RANGED_ATTACK_POWER),
                 hits: _.sum(hostiles, c => effectiveHits(c)),
                 fastMelee: hostiles.some(c => c.getActiveBodyparts(ATTACK) > 0 && isFast(c)),

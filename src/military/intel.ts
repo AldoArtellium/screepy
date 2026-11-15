@@ -13,6 +13,7 @@ import {
     AttackEventItem,
     decayAggression
 } from "./playerThreat";
+import { attackPower, healPower } from "./combat";
 import { lootValue } from "./roi";
 import { STRUCTURE_WORTH } from "../defense/nukeDefense";
 
@@ -154,19 +155,25 @@ export function militaryMemory(): NonNullable<Memory["military"]> {
     return Memory.military;
 }
 
+/** Lowest RCL of a room that spawns squads, unless `Memory.military.minRcl` says otherwise */
+const DEFAULT_MIN_RCL = 4;
+
+export function squadMinRcl(): number {
+    return militaryMemory().minRcl ?? DEFAULT_MIN_RCL;
+}
+
+/** Owned rooms of squadMinRcl() or more with a spawn: the rooms squads spawn from */
+export function squadBases(): Room[] {
+    const minRcl = squadMinRcl();
+    return _.filter(
+        Game.rooms,
+        r => !!r.controller?.my && r.controller.level >= minRcl && r.find(FIND_MY_SPAWNS).length > 0
+    );
+}
+
+/** Damage and healing per tick of creeps, boosts included (combat.ts) */
 function combatPower(creeps: Creep[]): { damage: number; heal: number } {
-    let damage = 0;
-    let heal = 0;
-    for (const creep of creeps) {
-        for (const part of creep.body) {
-            if (part.hits <= 0) continue;
-            const boost = part.boost ? 4 : 1;
-            if (part.type === ATTACK) damage += ATTACK_POWER * boost;
-            else if (part.type === RANGED_ATTACK) damage += RANGED_ATTACK_POWER * boost;
-            else if (part.type === HEAL) heal += HEAL_POWER * boost;
-        }
-    }
-    return { damage, heal };
+    return { damage: _.sum(creeps, c => attackPower(c.body)), heal: _.sum(creeps, c => healPower(c.body)) };
 }
 
 /** Loot in sight, in energy: stores that are not ours (containers, ruins, others' storage and terminal) */

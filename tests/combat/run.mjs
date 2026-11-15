@@ -43,7 +43,7 @@ Object.assign(globalThis, {
     },
 });
 
-const { healPower, attackPower, damageMultiplier, canTank, watchDrain, DRAIN_PATIENCE } = require(join(OUT, "military", "combat.js"));
+const { healPower, attackPower, activePower, towerPower, damageMultiplier, canTank, watchDrain, DRAIN_PATIENCE } = require(join(OUT, "military", "combat.js"));
 
 let failures = 0;
 const check = (name, ok, detail) => {
@@ -67,6 +67,17 @@ check("destroyed HEAL parts don't heal", healPower(hurt) === 144, healPower(hurt
 check("unboosted attacker: 450", attackPower(attacker()) === 450, attackPower(attacker()));
 check("UH2O attacker: 1350", attackPower(attacker(undefined, "UH2O")) === 1350, attackPower(attacker(undefined, "UH2O")));
 check("healer's ranged parts: 20", attackPower(healer()) === 20, attackPower(healer()));
+
+// Active parts weighted by their boost of one effect (defense: dismantle, fatigue, ...)
+check("XLHO2 healer: 6 HEAL x 4 heal", activePower({ body: healer("XLHO2") }, "heal", "heal") === 24);
+check("destroyed parts left out", activePower({ body: hurt }, "heal", "heal") === 12);
+check("other effect of a boosted part: 1 each", activePower({ body: healer("XLHO2") }, "heal", "fatigue") === 6);
+
+// Tower falloff (towers of both sides): 1 up to range 5, 0.25 from range 20
+check("tower power at range 3: 1", towerPower(3) === 1);
+check("tower power at range 20: 0.25", towerPower(20) === 0.25);
+check("tower power at range 30: 0.25", towerPower(30) === 0.25);
+check("tower power at range 10: 0.75", towerPower(10) === 0.75, towerPower(10));
 
 // Damage taken: the lowest damage multiplier of the boosted TOUGH parts still standing
 check("no TOUGH: full damage", damageMultiplier(healer("XLHO2")) === 1);

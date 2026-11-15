@@ -17,7 +17,8 @@ import { trafficManager } from "../modules/TrafficManager";
 import { jitter } from "../utils/jitter";
 import { log } from "../utils/logger";
 import { countStat } from "../utils/stats";
-import { attackPower, incomingDamage, verdict } from "./combat";
+import { onRoomEdge } from "../utils/rooms";
+import { attackPower, hitsRatio, incomingDamage, verdict } from "./combat";
 import { DuoPath, STILL_TICKS, StillState, cachedStep, newPath, noteStep, stillFor } from "./duoPath";
 import { lootRamparts } from "./loot";
 import { CRITICAL_CLASS, TARGET_CLASS, TargetDescriptor, barrierCost, chooseTarget, targetClass } from "./targetChoice";
@@ -66,10 +67,6 @@ const ATTACKER_PRIORITY = 2;
 const READY_HITS = 0.95;
 const IGNORED: StructureConstant[] = [STRUCTURE_CONTROLLER, STRUCTURE_RAMPART, STRUCTURE_WALL, STRUCTURE_ROAD, STRUCTURE_CONTAINER, STRUCTURE_EXTRACTOR, STRUCTURE_KEEPER_LAIR, STRUCTURE_PORTAL];
 
-function hitsRatio(creep: Creep): number {
-    return creep.hits / creep.hitsMax;
-}
-
 function members(name: string): { attacker?: Creep; healer?: Creep } {
     const all = duoCreeps(name).filter(c => !c.spawning);
     return { attacker: all.find(c => c.memory.role === DUO_ATTACKER), healer: all.find(c => c.memory.role === DUO_HEALER) };
@@ -84,7 +81,7 @@ export interface PickOptions {
 }
 
 /** Hostile rampart on a tile (a structure under it can only be hit through it) */
-function coverOf(s: Structure): StructureRampart | undefined {
+export function coverOf(s: Structure): StructureRampart | undefined {
     return s.pos
         .lookFor(LOOK_STRUCTURES)
         .find((r): r is StructureRampart => r.structureType === STRUCTURE_RAMPART && !(r as StructureRampart).my);
@@ -126,7 +123,8 @@ export function pickTarget(room: Room, from: RoomPosition, dps = 1, options: Pic
 const BLOCKER_TTL = 20;
 const blockers: Map<string, { count: number; until: number; id: Id<Structure> | null }> = new Map();
 
-function isHostileBarrier(s: Structure): boolean {
+/** A wall, or a rampart neither ours nor public: what a squad breaks to pass */
+export function isHostileBarrier(s: Structure): boolean {
     if (s.structureType === STRUCTURE_WALL) return true;
     if (s.structureType !== STRUCTURE_RAMPART) return false;
     const rampart = s as StructureRampart;
@@ -187,24 +185,28 @@ export function controllerBlocker(room: Room, from: RoomPosition): Structure | n
     return id ? Game.getObjectById(id) : null;
 }
 
-/** Ramparts and walls cost by their hits (the path goes through the weakest), other obstacles block */
-function computeBreachMatrix(room: Room, target: Structure): CostMatrix {
+/**
+ * Structures of a room as a cost matrix: roads 1, hostile barriers (isHostileBarrier) `barrierCost`,
+ * other obstacles 255; `skip` left out
+ */
+function structureMatrix(room: Room, barrierCost: (s: Structure) => number, skip?: string): CostMatrix {
     const matrix = new PathFinder.CostMatrix();
     for (const s of room.find(FIND_STRUCTURES)) {
-        if (s.id === target.id) continue;
+        if (s.id === skip) continue;
         if (s.structureType === STRUCTURE_ROAD) {
             if (matrix.get(s.pos.x, s.pos.y) === 0) matrix.set(s.pos.x, s.pos.y, 1);
-        } else if (s.structureType === STRUCTURE_RAMPART) {
-            const rampart = s as StructureRampart;
-            if (rampart.my || rampart.isPublic) continue;
-            matrix.set(s.pos.x, s.pos.y, Math.min(250, 20 + Math.floor(s.hits / 2000)));
-        } else if (s.structureType === STRUCTURE_WALL) {
-            matrix.set(s.pos.x, s.pos.y, Math.min(250, 20 + Math.floor(s.hits / 2000)));
+        } else if (isHostileBarrier(s)) {
+            matrix.set(s.pos.x, s.pos.y, barrierCost(s));
         } else if ((OBSTACLE_OBJECT_TYPES as string[]).includes(s.structureType)) {
             matrix.set(s.pos.x, s.pos.y, 255);
         }
     }
     return matrix;
+}
+
+/** Ramparts and walls cost by their hits (the path goes through the weakest), other obstacles block */
+function computeBreachMatrix(room: Room, target: Structure): CostMatrix {
+    return structureMatrix(room, s => Math.min(250, 20 + Math.floor(s.hits / 2000)), target.id);
 }
 
 /** Breach matrix of a room: rebuilt when the target or the structure count changes, else every ~20 ticks (hits) */
@@ -282,18 +284,9 @@ export function travelCallback(
     return name => (allowed.has(name) ? avoiding(travelMatrix(name), name, avoid) : false);
 }
 
+/** Every barrier and obstacle blocks */
 function obstacleMatrix(room: Room): CostMatrix {
-    const matrix = new PathFinder.CostMatrix();
-    for (const s of room.find(FIND_STRUCTURES)) {
-        if (s.structureType === STRUCTURE_ROAD) {
-            if (matrix.get(s.pos.x, s.pos.y) === 0) matrix.set(s.pos.x, s.pos.y, 1);
-        } else if (s.structureType === STRUCTURE_RAMPART) {
-            if (!isMine(s) && !(s as StructureRampart).isPublic) matrix.set(s.pos.x, s.pos.y, 255);
-        } else if ((OBSTACLE_OBJECT_TYPES as string[]).includes(s.structureType)) {
-            matrix.set(s.pos.x, s.pos.y, 255);
-        }
-    }
-    return matrix;
+    return structureMatrix(room, () => 255);
 }
 
 /**
@@ -423,8 +416,7 @@ function moveHealer(healer: Creep, to: RoomPosition, range: number): void {
  * of a border swapped rooms every tick and never met (shard0 W28N5 / W27N5, 2026-10-26)
  */
 function hold(creep: Creep, priority: number, targetRoom?: string): void {
-    const { x, y } = creep.pos;
-    if ((x === 0 || y === 0 || x === 49 || y === 49) && creep.room.name !== targetRoom) {
+    if (onRoomEdge(creep.pos) && creep.room.name !== targetRoom) {
         trafficManager.moveToRoom(creep, creep.room.name, { priority });
     } else {
         trafficManager.requestMove(creep, creep.pos, { range: 0, priority });
@@ -531,7 +523,7 @@ export function runDuo(name: string, duo: DuoMemory): void {
     if (duo.state === "retreat") {
         if (weakest >= READY_HITS) duo.state = "advance";
         else {
-            const out = attacker.room.name === duo.targetRoom || attacker.pos.x === 0 || attacker.pos.y === 0 || attacker.pos.x === 49 || attacker.pos.y === 49;
+            const out = attacker.room.name === duo.targetRoom || onRoomEdge(attacker.pos);
             // PathFinder's default maxOps (2000), as before the cache
             const to = out ? travelStep(attacker, name, duo.stagingRoom, 20, 2000, healer.pos) : null;
             movePair(attacker, healer, to, false, duo.targetRoom);

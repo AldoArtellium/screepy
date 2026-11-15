@@ -10,6 +10,7 @@
 
 import { needsBoosting } from "../labs/boosts";
 import { trafficManager } from "../modules/TrafficManager";
+import { onRoomEdge } from "../utils/rooms";
 import { countStat } from "../utils/stats";
 import { healPower } from "./combat";
 import {
@@ -60,10 +61,6 @@ export function drainerCreeps(mission: string): Creep[] {
     return drainersByMission.get(mission) ?? [];
 }
 
-function onEdge(pos: RoomPosition): boolean {
-    return pos.x === 0 || pos.y === 0 || pos.x === 49 || pos.y === 49;
-}
-
 /** Closest hostile creep within range 3, else the closest hostile structure there (not the controller) */
 function shotTarget(creep: Creep): Creep | Structure | null {
     if (creep.getActiveBodyparts(RANGED_ATTACK) === 0) return null;
@@ -90,7 +87,7 @@ function runDrainer(creep: Creep, quad: QuadMemory): void {
         const target = shotTarget(creep);
         if (target) creep.rangedAttack(target);
         // On the exit tile: back to the staging room at the end of the tick. Pushed off it: back to it.
-        if (onEdge(creep.pos)) trafficManager.requestMove(creep, creep.pos, { range: 0, priority: PRIORITY });
+        if (onRoomEdge(creep.pos)) trafficManager.requestMove(creep, creep.pos, { range: 0, priority: PRIORITY });
         else trafficManager.moveToRoom(creep, quad.stagingRoom, { priority: PRIORITY });
         return;
     }
@@ -110,7 +107,7 @@ function runDrainer(creep: Creep, quad: QuadMemory): void {
     else if (ratio >= READY_HITS) delete creep.memory.drainRest;
     if (creep.memory.drainRest) {
         // Off the exit tile (else it changes room at the end of the tick), healing
-        if (onEdge(creep.pos)) trafficManager.moveToRoom(creep, creep.room.name, { priority: PRIORITY });
+        if (onRoomEdge(creep.pos)) trafficManager.moveToRoom(creep, creep.room.name, { priority: PRIORITY });
         else trafficManager.requestMove(creep, creep.pos, { range: 0, priority: PRIORITY });
         return;
     }

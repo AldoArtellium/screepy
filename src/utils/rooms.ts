@@ -13,6 +13,11 @@ export function parseRoomName(roomName: string): { wx: number; wy: number } | nu
     return { wx: match[1] === "W" ? -x - 1 : x, wy: match[3] === "N" ? -y - 1 : y };
 }
 
+/** Exit tile: the engine carries a creep left there to the next room */
+export function onRoomEdge(pos: { x: number; y: number }): boolean {
+    return pos.x === 0 || pos.y === 0 || pos.x === 49 || pos.y === 49;
+}
+
 export function roomNameFromCoords(wx: number, wy: number): string {
     const x = wx < 0 ? -wx - 1 : wx;
     const y = wy < 0 ? -wy - 1 : wy;

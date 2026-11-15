@@ -11,7 +11,17 @@
 import { buildBody, MoveMode } from "../core/bodyBuilder";
 import { boostableParts, BoostEffect, canBoost } from "../labs/boosts";
 import { energyPrice } from "../modules/MarketManager";
-import { BoostedEffect, BoostOption, chooseSquad, SquadCompounds, SquadShape, SquadType, tierOf } from "./boostNeed";
+import {
+    BoostedEffect,
+    BoostOption,
+    chooseSquad,
+    SquadCompounds,
+    SquadShape,
+    SquadType,
+    ThreatModel,
+    tierOf
+} from "./boostNeed";
+import { attackPower, healPower } from "./combat";
 import { hostileRoom, militaryMemory } from "./intel";
 import { ATTRITION } from "./roi";
 
@@ -68,17 +78,8 @@ function count(body: BodyPartConstant[], type: BodyPartConstant): number {
     return body.filter(p => p === type).length;
 }
 
-export interface Threat {
-    /** Every tower at close range, plus the enemy creeps (TI's minimum healing) */
-    close: number;
-    /** Every tower at the room edge, plus the enemy creeps */
-    edge: number;
-    /** Damage needed to beat the enemy healing (TI: x 1.2) */
-    minDamage: number;
-}
-
-/** Threat of a room: live when visible, else from military intel (unknown: one tower, to be safe) */
-export function threatOf(roomName: string): Threat {
+/** Threat of a room: live when visible, else from military intel (unknown: one tower, to be safe); boosts included */
+export function threatOf(roomName: string): ThreatModel {
     const room = Game.rooms[roomName];
     let towers: number;
     let damage: number;
@@ -86,11 +87,8 @@ export function threatOf(roomName: string): Threat {
     if (room) {
         towers = room.find(FIND_HOSTILE_STRUCTURES, { filter: s => s.structureType === STRUCTURE_TOWER }).length;
         const enemies = room.find(FIND_HOSTILE_CREEPS, { filter: c => c.owner.username !== "Source Keeper" });
-        damage = _.sum(
-            enemies,
-            c => c.getActiveBodyparts(ATTACK) * ATTACK_POWER + c.getActiveBodyparts(RANGED_ATTACK) * RANGED_ATTACK_POWER
-        );
-        heal = _.sum(enemies, c => c.getActiveBodyparts(HEAL) * HEAL_POWER);
+        damage = _.sum(enemies, c => attackPower(c.body));
+        heal = _.sum(enemies, c => healPower(c.body));
     } else {
         const intel = hostileRoom(roomName);
         // A stronghold seen before it deployed gets the towers of its template
@@ -113,7 +111,7 @@ export interface SquadPlan {
     tanks: boolean;
     /** Healing of the chosen squad, its boosts included */
     heal: number;
-    threat: Threat;
+    threat: ThreatModel;
     /** Compound per boosted part type (null: plain), boostNeed.ts */
     compounds: Record<BoostedEffect, string | null>;
     /** Energy of one squad's boosts (compounds at market price + lab energy) */

@@ -27,21 +27,23 @@ import { threatOf } from "../defense/threat";
 import { needsBoosting } from "../labs/boosts";
 import { trafficManager } from "../modules/TrafficManager";
 import { log } from "../utils/logger";
-import { parseRoomName } from "../utils/rooms";
+import { onRoomEdge, parseRoomName } from "../utils/rooms";
 import { countStat } from "../utils/stats";
 import {
+    activeParts,
     attackPower,
     availableHealing,
     canTank,
     damageMultiplier,
     enemyTowers,
     healPower,
+    hitsRatio,
     incomingDamage,
     towerPower,
     verdict,
     watchDrain
 } from "./combat";
-import { isMine, landing, pickTarget, travelCallback } from "./duo";
+import { coverOf, isHostileBarrier, isMine, landing, pickTarget, travelCallback } from "./duo";
 import { drainerCreeps } from "./drainer";
 import { hostileRoom } from "./intel";
 
@@ -136,14 +138,6 @@ const DRAIN_GAIN = 30;
 
 const RANGED_MASS = [10, 10, 4, 1];
 
-function hitsRatio(creep: Creep): number {
-    return creep.hits / creep.hitsMax;
-}
-
-function parts(creep: Creep, type: BodyPartConstant): number {
-    return creep.body.filter(p => p.type === type && p.hits > 0).length;
-}
-
 /** Range across room borders (world coordinates) */
 function worldRange(a: RoomPosition, b: RoomPosition): number {
     if (a.roomName === b.roomName) return a.getRangeTo(b);
@@ -199,8 +193,8 @@ function damageSources(room: Room): DamageSource[] {
         reach: 50
     }));
     for (const enemy of room.find(FIND_HOSTILE_CREEPS)) {
-        const melee = parts(enemy, ATTACK) * ATTACK_POWER;
-        const ranged = parts(enemy, RANGED_ATTACK) * RANGED_ATTACK_POWER;
+        const melee = activeParts(enemy, ATTACK) * ATTACK_POWER;
+        const ranged = activeParts(enemy, RANGED_ATTACK) * RANGED_ATTACK_POWER;
         if (melee) sources.push({ pos: enemy.pos, damage: () => melee, reach: 2 });
         if (ranged) sources.push({ pos: enemy.pos, damage: () => ranged, reach: 4 });
     }
@@ -264,7 +258,7 @@ function healQuad(group: Creep[]): void {
 
 /** What to hit through: the rampart covering a structure, else the structure */
 function cover(target: Structure): Structure {
-    return target.pos.lookFor(LOOK_STRUCTURES).find(s => s.structureType === STRUCTURE_RAMPART && !isMine(s)) ?? target;
+    return coverOf(target) ?? target;
 }
 
 function isFighter(creep: Creep): boolean {
@@ -279,7 +273,7 @@ function isFighter(creep: Creep): boolean {
 function attackQuad(group: Creep[], focus: Structure | null): void {
     for (const creep of group) {
         const hostiles = creep.room.find(FIND_HOSTILE_CREEPS);
-        if (parts(creep, ATTACK)) {
+        if (activeParts(creep, ATTACK)) {
             const enemy = _.max(
                 hostiles.filter(c => creep.pos.isNearTo(c) && isFighter(c)),
                 c => threatOf(c) / c.hits
@@ -294,7 +288,7 @@ function attackQuad(group: Creep[], focus: Structure | null): void {
             if (target && creep.attack(target) === OK && !(target instanceof Creep)) countStat("military:attack");
             continue;
         }
-        const ranged = parts(creep, RANGED_ATTACK);
+        const ranged = activeParts(creep, RANGED_ATTACK);
         if (!ranged || rangedUsed.has(creep.name)) continue;
         const inRange = hostiles.filter(c => creep.pos.inRangeTo(c, 3));
         const structures = creep.pos
@@ -334,8 +328,7 @@ function structureDps(group: Creep[]): number {
 
 /** Breakable hostile structures and walls on a tile block; everything else that blocks is 255 */
 function isBarrier(s: Structure): boolean {
-    if (s.structureType === STRUCTURE_RAMPART) return !isMine(s) && !(s as StructureRampart).isPublic;
-    return s.structureType === STRUCTURE_WALL || (OBSTACLE_OBJECT_TYPES as string[]).includes(s.structureType);
+    return isHostileBarrier(s) || (OBSTACLE_OBJECT_TYPES as string[]).includes(s.structureType);
 }
 
 const UNBREAKABLE: StructureConstant[] = [
@@ -732,10 +725,6 @@ function canEscape(creep: Creep, group: Creep[], pos: RoomPosition = creep.pos):
     return creep.hits > net * (toExit + ESCAPE_MARGIN);
 }
 
-function onEdge(pos: RoomPosition): boolean {
-    return pos.x <= 0 || pos.y <= 0 || pos.x >= 49 || pos.y >= 49;
-}
-
 /** Combat trace: state changes, and every 10 ticks near the target */
 const lastTrace: Record<string, string> = {};
 function trace(name: string, quad: QuadMemory, group: Creep[], note: string): void {
@@ -889,11 +878,11 @@ export function runQuad(name: string, quad: QuadMemory): void {
     } else if (quad.state === "retreat") {
         retreat(quad, group);
         attackQuad(group, null);
-        const home = group.every(c => c.room.name === quad.stagingRoom && !onEdge(c.pos));
+        const home = group.every(c => c.room.name === quad.stagingRoom && !onRoomEdge(c.pos));
         if (home && group.every(c => hitsRatio(c) >= READY_HITS)) quad.state = "travel";
     } else {
         const leader = group[0];
-        if (quad.state === "travel" && leader.room.name === quad.targetRoom && !onEdge(leader.pos))
+        if (quad.state === "travel" && leader.room.name === quad.targetRoom && !onRoomEdge(leader.pos))
             quad.state = "engage";
         if (quad.state === "travel") {
             if (leader.room.name === quad.stagingRoom) {

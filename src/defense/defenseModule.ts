@@ -6,6 +6,7 @@
  */
 
 import { log } from "../utils/logger";
+import { towerPower } from "../military/combat";
 import { nukeDefenseModule } from "./nukes";
 import { countStat } from "../utils/stats";
 import {
@@ -20,7 +21,6 @@ import {
     isDangerous,
     isWallIntact,
     myRooms,
-    towerPowerAtRange,
     towerTarget,
     updateThreat
 } from "./RoomDefense";
@@ -85,7 +85,7 @@ function towerHeal(room: Room, tower: StructureTower, strength: EnemyStrength): 
             (c.getActiveBodyparts(ATTACK) > 0 || c.getActiveBodyparts(RANGED_ATTACK) > 0 || strength === ENEMY_STRENGTH_NONE)
     });
     if (wounded.length === 0) return false;
-    const target = _.min(wounded, c => c.hits / c.hitsMax / (1 + towerPowerAtRange(tower.pos.getRangeTo(c))));
+    const target = _.min(wounded, c => c.hits / c.hitsMax / (1 + towerPower(tower.pos.getRangeTo(c))));
     return typeof target !== "number" && tower.heal(target) === OK;
 }
 
@@ -98,7 +98,7 @@ function towerRampartRepair(room: Room, tower: StructureTower, hostiles: Creep[]
         hostiles.some(h => isDangerous(h) && r.pos.getRangeTo(h) <= (h.getActiveBodyparts(RANGED_ATTACK) > 0 ? 3 : 1))
     );
     if (endangered.length === 0) return false;
-    const target = _.min(endangered, r => r.hits / (1 + towerPowerAtRange(tower.pos.getRangeTo(r))));
+    const target = _.min(endangered, r => r.hits / (1 + towerPower(tower.pos.getRangeTo(r))));
     return typeof target !== "number" && tower.repair(target) === OK;
 }
 

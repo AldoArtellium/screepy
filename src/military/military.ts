@@ -23,7 +23,7 @@ import { countStat } from "../utils/stats";
 import { BOOST_MARGIN, BoostedEffect } from "./boostNeed";
 import { controllerBlocker, DUO_ATTACKER, DUO_HEALER, DuoMemory, runDuo } from "./duo";
 import { openSiege, runSieges, siegePlan } from "./siege";
-import { hostileRoom, militaryMemory, updateMilitaryIntel } from "./intel";
+import { hostileRoom, militaryMemory, squadBases, squadMinRcl, updateMilitaryIntel } from "./intel";
 import { lootRamparts, startLooting, updateLootMissions } from "./loot";
 import { QUAD_ATTACKER, QUAD_HEALER, QUAD_ROSTER, QuadMemory, runQuad } from "./quad";
 import { DRAINER, drainerCreeps, runDrainers } from "./drainer";
@@ -84,20 +84,15 @@ export function towersRefill(roomName: string): boolean {
     return (intel?.coreLevel ?? 0) > 0 || !!intel?.owner;
 }
 
-function minRcl(): number {
-    return militaryMemory().minRcl ?? 4;
-}
-
 /**
- * Rally room of a mission: the RCL 4+ room with a spawn closest to the target by squad route, and the
+ * Rally room of a mission: the base (intel.ts squadBases) closest to the target by squad route, and the
  * room the squad heals up in before the target. Whether its squad can win is the bases' matter
  * (startMission): shard0 W28N8, W28N7 (RCL 5, no labs) next to it rallies, W29N7 (RCL 6, labs, XLHO2 and
  * GHO2) one more room spawns the boosted members.
  */
 function findOrigin(target: string): { spawnRoom: string; stagingRoom: string; length: number } | null {
     let best: { spawnRoom: string; stagingRoom: string; length: number } | null = null;
-    for (const room of _.filter(Game.rooms, r => !!r.controller?.my && r.controller.level >= minRcl())) {
-        if (room.find(FIND_MY_SPAWNS).length === 0) continue;
+    for (const room of squadBases()) {
         // The squad's own room route (route.ts): the staging room is never another player's room
         const rooms = squadRoute(room.name, target);
         if (!rooms || rooms.length < 2 || rooms.length - 1 > MAX_ROUTE_ROOMS) continue;
@@ -123,7 +118,7 @@ type Mission = DuoMemory | QuadMemory;
 function baseCandidates(rally: string): (BaseCandidate & { home: Room })[] {
     return _.filter(Game.rooms, r => !!r.controller?.my).map(r => {
         const level = r.controller!.level;
-        const rooms = level >= minRcl() ? squadRoute(r.name, rally) : null;
+        const rooms = level >= squadMinRcl() ? squadRoute(r.name, rally) : null;
         return {
             room: r.name,
             route: rooms ? rooms.length - 1 : Infinity,
@@ -149,7 +144,7 @@ function migrateMission(mission: Mission): void {
 function refreshBases(name: string, mission: Mission): void {
     if (Game.time - (mission.basesAt ?? -Infinity) < BASES_REFRESH) return;
     mission.basesAt = Game.time;
-    const bases = colonyBases(mission.energy, minRcl(), baseCandidates(mission.spawnRoom));
+    const bases = colonyBases(mission.energy, squadMinRcl(), baseCandidates(mission.spawnRoom));
     if (_.isEqual(bases, mission.bases)) return;
     log.info("Military", `${name}: bases ${mission.bases.join("+") || "none"} -> ${bases.join("+") || "none"}`);
     mission.bases = bases;
@@ -323,7 +318,7 @@ function startMission(target: string): void {
         plans.set(base.room, plan);
         return plan;
     };
-    const sizing = energyBase(candidates, minRcl(), base => planOf(base).feasible);
+    const sizing = energyBase(candidates, squadMinRcl(), base => planOf(base).feasible);
     let plan: SquadPlan;
     let energy: number;
     if (sizing) {
@@ -338,7 +333,7 @@ function startMission(target: string): void {
         if (memory.targets) memory.targets = memory.targets.filter(t => t.room !== target);
         return;
     }
-    const bases = colonyBases(energy, minRcl(), candidates);
+    const bases = colonyBases(energy, squadMinRcl(), candidates);
     const takeover = takeoverOf(target, bases);
     const base = {
         ...origin,

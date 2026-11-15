@@ -9,6 +9,7 @@ import { structuresOfType, tickCache } from "../core/roomState";
 import { jitter } from "../utils/jitter";
 import { RoomPlan } from "../planner/RoomPlan";
 import { roomPlanner } from "../planner/RoomPlanner";
+import { activePower, boostFactor, towerPower } from "../military/combat";
 import { threatOf } from "./threat";
 
 declare global {
@@ -80,18 +81,11 @@ export function creepPower(creep: Creep, activeOnly = false): { attack: number; 
     let heal = 0;
     for (const part of creep.body) {
         if (activeOnly && part.hits === 0) continue;
-        let power = PART_STRENGTH[part.type] ?? 0;
-        let boost = 1;
-        if (part.boost && typeof part.boost === "string") {
-            const effect = (BOOSTS as unknown as Record<string, Record<string, Record<string, number>>>)[part.type]?.[part.boost] ?? {};
-            boost = effect[BOOST_ATTRIBUTE[part.type] ?? ""] || 1;
-            if (part.type === TOUGH) {
-                power = 100;
-                boost = 1 / (effect.damage || 1);
-            }
-        }
-        if (part.type === ATTACK || part.type === RANGED_ATTACK || part.type === CLAIM || part.type === WORK) attack += power * boost;
-        if (part.type === HEAL) heal += power * boost;
+        const strength = PART_STRENGTH[part.type];
+        if (!strength) continue;
+        const power = strength * boostFactor(part, BOOST_ATTRIBUTE[part.type] ?? "");
+        if (part.type === HEAL) heal += power;
+        else attack += power;
     }
     return { attack, heal };
 }
@@ -245,10 +239,9 @@ export function desiredWallStrength(room: Room): number {
     return tickCache(`wallTarget:${room.name}`, () => wallTarget(rcl, roomThreat(room))) * multiplier;
 }
 
-/** Tower power at a range: 1 up to TOWER_OPTIMAL_RANGE, 1 - TOWER_FALLOFF at TOWER_FALLOFF_RANGE */
-export function towerPowerAtRange(range: number): number {
-    const r = Math.min(Math.max(range, TOWER_OPTIMAL_RANGE), TOWER_FALLOFF_RANGE);
-    return 1 - ((r - TOWER_OPTIMAL_RANGE) / (TOWER_FALLOFF_RANGE - TOWER_OPTIMAL_RANGE)) * TOWER_FALLOFF;
+/** Share of the damage a part takes (boosted TOUGH below 1) */
+function damageShare(part: BodyPartDefinition): number {
+    return part.type === TOUGH ? boostFactor(part, "damage") : 1;
 }
 
 /** Damage actually dealt once boosted TOUGH parts absorb their share (Hivemind getEffectiveDamage) */
@@ -258,11 +251,7 @@ function effectiveDamage(creep: Creep, potential: number): number {
     for (const part of creep.body) {
         if (taken >= potential) break;
         if (part.hits === 0) continue;
-        let multiplier = 1;
-        if (part.type === TOUGH && part.boost) {
-            const effect = (BOOSTS as unknown as Record<string, Record<string, Record<string, number>>>)[TOUGH]?.[part.boost as string];
-            if (effect?.damage) multiplier = 1 / effect.damage;
-        }
+        const multiplier = 1 / damageShare(part);
         const damage = Math.min(part.hits * multiplier, potential - taken);
         total += damage / multiplier;
         taken += damage;
@@ -273,12 +262,7 @@ function effectiveDamage(creep: Creep, potential: number): number {
 /** Hits once boosted TOUGH parts absorb their share (Hivemind getEffectiveHealth) */
 export function effectiveHits(creep: Creep): number {
     let total = 0;
-    for (const part of creep.body) {
-        const effect = part.type === TOUGH && part.boost
-            ? (BOOSTS as unknown as Record<string, Record<string, Record<string, number>>>)[TOUGH]?.[part.boost as string]
-            : undefined;
-        total += part.hits / (effect?.damage ?? 1);
-    }
+    for (const part of creep.body) total += part.hits / damageShare(part);
     return total;
 }
 
@@ -286,20 +270,6 @@ export function effectiveHits(creep: Creep): number {
 export function isFast(creep: Creep): boolean {
     const others = creep.body.filter(p => p.type !== MOVE && p.type !== CARRY).length;
     return activePower(creep, MOVE, "fatigue") >= others;
-}
-
-
-/** Active parts of a creep, boosts included */
-export function activePower(creep: Creep, type: BodyPartConstant, attribute: string): number {
-    let total = 0;
-    for (const part of creep.body) {
-        if (part.type !== type || part.hits === 0) continue;
-        const effect = part.boost
-            ? (BOOSTS as unknown as Record<string, Record<string, Record<string, number>>>)[type]?.[part.boost as string]
-            : undefined;
-        total += effect?.[attribute] ?? 1;
-    }
-    return total;
 }
 
 interface MilitarySituation {
@@ -322,7 +292,7 @@ export function militarySituation(room: Room): MilitarySituation {
         for (const tower of room.find(FIND_MY_STRUCTURES, { filter: s => s.structureType === STRUCTURE_TOWER }) as StructureTower[]) {
             // Almost empty towers are not counted, so we don't shoot at targets we can't kill
             if (tower.store.energy < TOWER_ENERGY_COST * 10) continue;
-            for (const h of hostiles) add(myDamage, h.pos, towerPowerAtRange(tower.pos.getRangeTo(h)) * TOWER_POWER_ATTACK);
+            for (const h of hostiles) add(myDamage, h.pos, towerPower(tower.pos.getRangeTo(h)) * TOWER_POWER_ATTACK);
         }
         for (const creep of mine) {
             const attack = activePower(creep, ATTACK, "attack");
@@ -389,7 +359,7 @@ export function harmlessTarget(room: Room, tower: StructureTower, taken: Set<Id<
             if (distance <= 1) heal += HEAL_POWER * activePower(healer, HEAL, "heal");
             else if (distance <= 3) heal += RANGED_HEAL_POWER * activePower(healer, HEAL, "heal");
         }
-        if (effectiveDamage(creep, towerPowerAtRange(range) * TOWER_POWER_ATTACK) < creep.hits + heal) continue;
+        if (effectiveDamage(creep, towerPower(range) * TOWER_POWER_ATTACK) < creep.hits + heal) continue;
         best = { creep, range };
     }
     return best?.creep ?? null;

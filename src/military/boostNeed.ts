@@ -34,12 +34,13 @@ export interface BoostOption {
     tier: number;
 }
 
+/** Threat of a room (sizing.ts threatOf) */
 export interface ThreatModel {
-    /** Every tower at close range plus the enemy creeps */
+    /** Every tower at close range plus the enemy creeps (TI's minimum healing) */
     close: number;
     /** Every tower at the room edge plus the enemy creeps */
     edge: number;
-    /** Damage needed to beat the enemy healing */
+    /** Damage needed to beat the enemy healing (TI: x 1.2) */
     minDamage: number;
 }
 
