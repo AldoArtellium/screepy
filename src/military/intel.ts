@@ -6,6 +6,7 @@
 
 import { energyPrice } from "../modules/MarketManager";
 import { remoteSources } from "../remote/RemoteMining";
+import { NPC_OWNERS, SOURCE_KEEPER } from "../remote/keepers";
 import {
     aggressionFromEvents,
     AGGRESSION_DECAY,
@@ -13,6 +14,7 @@ import {
     AttackEventItem,
     decayAggression
 } from "./playerThreat";
+import { attackPower, healPower } from "./combat";
 import { lootValue } from "./roi";
 import { STRUCTURE_WORTH } from "../defense/nukeDefense";
 
@@ -84,8 +86,6 @@ declare global {
              * the target, "max" the strongest in stock (before 2026-10-25), "none" plain bodies
              */
             boosts?: "auto" | "max" | "none";
-            /** Automatic target before 2026-11-05 (one mission at a time): migrated into `targets` */
-            target?: AutoTargetEntry;
             /** Automatic targets of the simultaneous missions, with their strategic reason (targets.ts) */
             targets?: AutoTargetEntry[];
             /** Missions at once, the manual `attack` included (default 2) */
@@ -131,10 +131,9 @@ declare global {
             aggressionDecayed?: number;
             /**
              * Nukes (nukeStrike.ts): false never fills nor fires a nuker; unset fills them, fires only when told
-             * (a room "W8N3" or a room and impact point "W8N3:25,25": one strike, cleared once launched); true
-             * also fires on the automatic targets whose strike pays (roi.ts nukeWorthIt)
+             * (a room "W8N3" or a room and impact point "W8N3:25,25": one strike, cleared once launched)
              */
-            nuke?: boolean | string;
+            nuke?: false | string;
             /** Our nukes in flight, by target room */
             nukes?: { [room: string]: { x: number; y: number; landTime: number; from: string; value: number } };
             /** Rooms looted after a successful attack (loot.ts) */
@@ -147,7 +146,6 @@ const RECORD_EVERY = 10;
 const FORGET_AFTER = 50000;
 const INFAMY_DECAY_EVERY = 1000;
 const INFAMY_DECAY = 0.95;
-const NPC = ["Invader", "Source Keeper"];
 
 export function militaryMemory(): NonNullable<Memory["military"]> {
     if (!Memory.military) Memory.military = { duos: {} };
@@ -156,19 +154,25 @@ export function militaryMemory(): NonNullable<Memory["military"]> {
     return Memory.military;
 }
 
+/** Lowest RCL of a room that spawns squads, unless `Memory.military.minRcl` says otherwise */
+const DEFAULT_MIN_RCL = 4;
+
+export function squadMinRcl(): number {
+    return militaryMemory().minRcl ?? DEFAULT_MIN_RCL;
+}
+
+/** Owned rooms of squadMinRcl() or more with a spawn: the rooms squads spawn from */
+export function squadBases(): Room[] {
+    const minRcl = squadMinRcl();
+    return _.filter(
+        Game.rooms,
+        r => !!r.controller?.my && r.controller.level >= minRcl && r.find(FIND_MY_SPAWNS).length > 0
+    );
+}
+
+/** Damage and healing per tick of creeps, boosts included (combat.ts) */
 function combatPower(creeps: Creep[]): { damage: number; heal: number } {
-    let damage = 0;
-    let heal = 0;
-    for (const creep of creeps) {
-        for (const part of creep.body) {
-            if (part.hits <= 0) continue;
-            const boost = part.boost ? 4 : 1;
-            if (part.type === ATTACK) damage += ATTACK_POWER * boost;
-            else if (part.type === RANGED_ATTACK) damage += RANGED_ATTACK_POWER * boost;
-            else if (part.type === HEAL) heal += HEAL_POWER * boost;
-        }
-    }
-    return { damage, heal };
+    return { damage: _.sum(creeps, c => attackPower(c.body)), heal: _.sum(creeps, c => healPower(c.body)) };
 }
 
 /** Loot in sight, in energy: stores that are not ours (containers, ruins, others' storage and terminal) */
@@ -226,7 +230,7 @@ function recordRoom(room: Room, ours: Set<string>): void {
             s.structureType === STRUCTURE_WALL || (s.structureType === STRUCTURE_RAMPART && !(s as StructureRampart).my)
     });
     const collapse = core?.effects?.find(e => e.effect === EFFECT_COLLAPSE_TIMER);
-    const power = combatPower(room.find(FIND_HOSTILE_CREEPS, { filter: c => c.owner.username !== "Source Keeper" }));
+    const power = combatPower(room.find(FIND_HOSTILE_CREEPS, { filter: c => c.owner.username !== SOURCE_KEEPER }));
     const towers = structures.filter((s): s is StructureTower => s.structureType === STRUCTURE_TOWER);
     memory.rooms = memory.rooms ?? {};
     memory.rooms[room.name] = {
@@ -260,7 +264,7 @@ function recordInfamy(ours: Set<string>): void {
         const room = Game.rooms[roomName];
         if (!room) continue;
         for (const creep of room.find(FIND_HOSTILE_CREEPS)) {
-            if (NPC.includes(creep.owner.username) || seenCreeps.has(creep.id)) continue;
+            if (NPC_OWNERS.includes(creep.owner.username) || seenCreeps.has(creep.id)) continue;
             seenCreeps.add(creep.id);
             const fighter = creep.body.some(p => p.type === ATTACK || p.type === RANGED_ATTACK || p.type === WORK);
             memory.infamy = memory.infamy ?? {};
@@ -327,7 +331,7 @@ function recordAggression(ours: Set<string>): void {
                 memory.aggression[player] = (memory.aggression[player] ?? 0) + damage[player];
             }
         }
-        const armed = room.find(FIND_HOSTILE_CREEPS, { filter: c => !NPC.includes(c.owner.username) && isArmed(c) });
+        const armed = room.find(FIND_HOSTILE_CREEPS, { filter: c => !NPC_OWNERS.includes(c.owner.username) && isArmed(c) });
         if (armed.length === 0) continue;
         armedRooms[roomName] = {
             tick: Game.time,

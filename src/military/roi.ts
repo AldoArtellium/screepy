@@ -14,8 +14,6 @@
  * Our design (Harabi's "ROI-driven target selection" with energy on both sides).
  */
 
-import { NUKE_ENERGY, NUKE_GHODIUM } from "./nukeTarget";
-
 export const ATTRITION = 2;
 /** Net energy per tick of a remote source (typical `sourceNet` of mined sources: 3-9) */
 export const REMOTE_NET = 3;
@@ -23,19 +21,6 @@ export const REMOTE_NET = 3;
 export const REMOTE_HORIZON = 10000;
 export const MIN_ROI = 1;
 export const CURRENT_BONUS = 1.5;
-
-/**
- * A nuke (military/nukeStrike.ts): its energy and its ghodium at the market price in energy (1 without prices,
- * like the loot). Worth a launch when what it destroys (nukeTarget.ts bestImpact, STRUCTURE_WORTH) is MIN_ROI
- * times that: a spawn, a tower and a storage without strong ramparts (380k) against ~305-350k.
- */
-export function nukeCost(ghodiumPrice: number): number {
-    return NUKE_ENERGY + NUKE_GHODIUM * ghodiumPrice;
-}
-
-export function nukeWorthIt(value: number, cost: number): boolean {
-    return cost > 0 && value / cost >= MIN_ROI;
-}
 
 /** Spawn cost of the squad with its replacements, and their boosts (`boostCost`: one squad's, sizing.ts planSquad) */
 export function squadCost(memberCosts: number[], attrition = ATTRITION, boostCost = 0): number {
@@ -131,38 +116,11 @@ export function targetValue(parts: { loot: number; remote: number; infamy: numbe
 }
 
 /**
- * Best target by return, at least MIN_ROI; the current one counts CURRENT_BONUS times its return, and is
- * kept whatever its return while `engaged` (its squad has creeps) and still a candidate
- */
-export function pickTarget<T extends { room: string; roi: number }>(
-    candidates: T[],
-    current: string | undefined,
-    engaged = false
-): T | null {
-    // A squad already spawned (or spawning) for the current target keeps it while it is still a candidate
-    // (feasible, no safe mode, not failed): switching recycled it (shard0 W27N5, duo against W29N3)
-    if (engaged) {
-        const kept = candidates.find(c => c.room === current);
-        if (kept) return kept;
-    }
-    let best: T | null = null;
-    let bestScore = 0;
-    for (const candidate of candidates) {
-        if (candidate.roi < MIN_ROI) continue;
-        const score = candidate.room === current ? candidate.roi * CURRENT_BONUS : candidate.roi;
-        if (!best || score > bestScore) {
-            best = candidate;
-            bestScore = score;
-        }
-    }
-    return best;
-}
-
-/**
  * Targets of the simultaneous missions (our design, 2026-11-05: the CPU unlock left ~40 CPU idle while one
  * mission at a time ran): the current targets whose squad has creeps (`engaged`) and are still candidates
  * first, whatever their return, then the others by return (at least MIN_ROI, CURRENT_BONUS for a current
- * one), at most `max`
+ * one), at most `max`. A squad already spawned for a target keeps it while it is still a candidate
+ * (feasible, no safe mode, not failed): switching recycled it (shard0 W27N5, duo against W29N3)
  */
 export function pickTargets<T extends { room: string; roi: number }>(
     candidates: T[],

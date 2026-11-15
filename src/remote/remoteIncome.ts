@@ -35,9 +35,13 @@ export function worthMining(net: number): boolean {
 
 export { KEEPER_KILLER_COST, KEEPER_KILLER_PARTS } from "./keepers";
 
-/** Energy per tick of a keeper room or sector center source: 4000 per regeneration */
-export function keeperGeneration(): number {
-    return SOURCE_ENERGY_KEEPER_CAPACITY / ENERGY_REGEN_TIME;
+/**
+ * Energy per regeneration of a remote source as the selection prices it: 4000 in keeper rooms and
+ * sector centers (no controller to reserve), 3000 when a reserver can be spawned, else 1500
+ */
+export function remoteCapacity(keeperOrCenter: boolean, reservable: boolean): number {
+    if (keeperOrCenter) return SOURCE_ENERGY_KEEPER_CAPACITY;
+    return reservable ? SOURCE_ENERGY_CAPACITY : SOURCE_ENERGY_NEUTRAL_CAPACITY;
 }
 
 /** A source's share of its room's killer: `cost` per CREEP_LIFE_TIME ticks over the room's mined sources */

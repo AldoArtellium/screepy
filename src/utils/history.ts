@@ -4,8 +4,8 @@
  *
  * - `history` (segment 6): every SNAPSHOT_INTERVAL elapsed ticks (not `Game.time %`: the module may
  *   be throttled), a snapshot with the delta of every Memory.stats counter since the previous one,
- *   the average tick CPU, the bucket and, per owned room, RCL, progress, storage + terminal energy,
- *   creeps and the room counters below. Ring of HISTORY_SIZE snapshots.
+ *   the mean and highest tick CPU over the period, the bucket and, per owned room, RCL, progress,
+ *   storage + terminal energy, creeps and the room counters below. Ring of HISTORY_SIZE snapshots.
  * - `historyDetail` (segment 7): the last SPAWN_LOG_SIZE spawns (tick, room, role, priority, weight,
  *   cost, parts, reason) and the remote source balance of each snapshot (energy harvested, delivered
  *   home, spawn cost of the creeps serving it, whether the window is a steady measure of it, its
@@ -22,6 +22,7 @@
  * trailing empties trimmed ("1a,,3k"). The tables are rebuilt at each snapshot from the keys in use.
  */
 
+import { myRooms, storedEnergy } from "./owned";
 import { segmentStore } from "./segments";
 import { countStat } from "./stats";
 
@@ -42,8 +43,10 @@ interface HistoryEntry {
     d: number;
     /** Ticks covered by the room counters and remote balance when fewer than `d` (global reset) */
     rd?: number;
-    /** Average tick CPU over the period (one decimal), bucket at the snapshot and lowest seen */
+    /** Mean tick CPU over the period (one decimal), bucket at the snapshot and lowest seen over the period */
     cpu: number;
+    /** Highest tick CPU over the period (one decimal; absent in snapshots before 2026-11-15) */
+    cm?: number;
     bk: number;
     bm: number;
     /** Counter deltas (encoded) */
@@ -132,6 +135,7 @@ const lastHome = new Map<string, string>();
 let spawnQueue: SpawnLogEntry[] = [];
 let cpuSum = 0;
 let cpuTicks = 0;
+let cpuMax = 0;
 let bucketMin = Infinity;
 
 // --- Counting -------------------------------------------------------------------------------------
@@ -334,10 +338,6 @@ function normalizedDetail(): HistoryDetail {
     return data;
 }
 
-function roomEnergy(room: Room): number {
-    return (room.storage?.store.energy ?? 0) + (room.terminal?.store.energy ?? 0);
-}
-
 const SOURCE_SAMPLE_INTERVAL = 10;
 /** Share of the samples a steady window needs (selected, harvester, container, one reservation state) */
 const STEADY_SHARE = 0.9;
@@ -512,30 +512,32 @@ function keyTable(sets: { [key: string]: number }[], extra: { [key: string]: num
     return Object.keys(uses).sort((a, b) => uses[b] - uses[a] || (a < b ? -1 : 1));
 }
 
-function snapshot(data: HistoryData, detail: HistoryDetail, counters: { [name: string]: number }): void {
-    const previousTick = data.t!;
-    const baseline = decode(data.b, data.k);
+/** Increase of each counter since the baseline (a counter that went down was reset: its value is the increase) */
+function counterDeltas(baseline: { [key: string]: number }, counters: { [name: string]: number }): { [key: string]: number } {
     const deltas: { [key: string]: number } = {};
     for (const key in counters) {
         const now = Math.round(counters[key]);
         const before = baseline[key] ?? 0;
-        // A counter that went down was reset: its value is the increase
         const delta = now >= before ? now - before : now;
         if (delta > 0) deltas[key] = delta;
     }
+    return deltas;
+}
+
+function snapshot(data: HistoryData, detail: HistoryDetail, counters: { [name: string]: number }): void {
+    const previousTick = data.t!;
+    const deltas = counterDeltas(decode(data.b, data.k), counters);
 
     // Owned rooms (and homes with heap counters)
     const creeps = _.countBy(Game.creeps, c => c.memory.room ?? c.room.name);
     const rooms: { [room: string]: DecodedRoom } = {};
-    for (const name in Game.rooms) {
-        const room = Game.rooms[name];
-        if (!room.controller?.my) continue;
-        rooms[name] = {
-            rcl: room.controller.level,
-            progress: room.controller.progress,
-            energy: roomEnergy(room),
-            creeps: creeps[name] ?? 0,
-            counters: roomAcc[name] ?? {}
+    for (const room of myRooms()) {
+        rooms[room.name] = {
+            rcl: room.controller!.level,
+            progress: room.controller!.progress,
+            energy: storedEnergy(room),
+            creeps: creeps[room.name] ?? 0,
+            counters: roomAcc[room.name] ?? {}
         };
     }
     for (const name in roomAcc) {
@@ -552,6 +554,7 @@ function snapshot(data: HistoryData, detail: HistoryDetail, counters: { [name: s
         t: Game.time,
         d: Game.time - previousTick,
         cpu: round(cpuTicks > 0 ? cpuSum / cpuTicks : Memory.stats?.cpuAvg ?? 0, 1),
+        cm: round(cpuTicks > 0 ? cpuMax : Memory.stats?.cpuAvg ?? 0, 1),
         bk: Game.cpu.bucket,
         bm: Math.min(bucketMin, Game.cpu.bucket),
         c: "",
@@ -594,6 +597,7 @@ function resetAccumulators(): void {
     sourceSamples = {};
     cpuSum = 0;
     cpuTicks = 0;
+    cpuMax = 0;
     bucketMin = Infinity;
 }
 
@@ -604,6 +608,7 @@ export const historyModule = (): void => {
     if (stats && stats.tick === Game.time - 1) {
         cpuSum += stats.cpu;
         cpuTicks++;
+        cpuMax = Math.max(cpuMax, stats.cpu);
     }
     bucketMin = Math.min(bucketMin, Game.cpu.bucket);
     if (lastSourceSample === undefined || Game.time - lastSourceSample >= SOURCE_SAMPLE_INTERVAL) {
@@ -637,6 +642,57 @@ export const historyModule = (): void => {
 };
 
 // --- Readers (reports) ----------------------------------------------------------------------------
+
+/** What the history knows of a window ending now (historyWindow) */
+export interface HistoryWindow {
+    /** Tick the window starts at: a snapshot, or the first baseline */
+    start: number;
+    /** Increase of each Memory.stats counter over the window */
+    counters: { [key: string]: number };
+    /** Owned rooms at the start (none when it is the first baseline) */
+    rooms: { [room: string]: { rcl: number; progress: number; energy: number } };
+    /** Lowest bucket over the window */
+    bucketMin: number;
+    /** Mean and highest tick CPU over the window (snapshots and current period); undefined before any sample */
+    cpu?: { mean: number; max: number };
+}
+
+/**
+ * The window from the last snapshot at or before `since` (the oldest kept when every snapshot is
+ * younger) to now: snapshot counter deltas plus the current period's. Undefined while the segment
+ * is not loaded or before the first baseline.
+ */
+export function historyWindow(since: number): HistoryWindow | undefined {
+    if (!historyStore.ready) return undefined;
+    const data = normalized();
+    if (data.t === undefined) return undefined;
+    let base: HistoryEntry | undefined;
+    for (const entry of data.e) if (entry.t <= since) base = entry;
+    base ??= data.e[0];
+    const start = base?.t ?? data.t;
+    const counters = counterDeltas(decode(data.b, data.k), Memory.stats?.counters ?? {});
+    let lowest = Math.min(bucketMin, Game.cpu.bucket);
+    // CPU: snapshot means weighted by their ticks, plus the current period's sampled ticks
+    let cpuTotal = cpuSum;
+    let cpuWeight = cpuTicks;
+    let highest = cpuMax;
+    for (const entry of data.e) {
+        if (entry.t <= start) continue;
+        lowest = Math.min(lowest, entry.bm);
+        cpuTotal += entry.cpu * entry.d;
+        cpuWeight += entry.d;
+        highest = Math.max(highest, entry.cm ?? entry.cpu);
+        const deltas = decode(entry.c, data.k);
+        for (const key in deltas) counters[key] = (counters[key] ?? 0) + deltas[key];
+    }
+    const rooms: HistoryWindow["rooms"] = {};
+    for (const room in base?.r ?? {}) {
+        const { rcl, progress, energy } = decodeRoom(base!.r[room], data.rk);
+        if (rcl > 0) rooms[room] = { rcl, progress, energy };
+    }
+    const cpu = cpuWeight > 0 ? { mean: cpuTotal / cpuWeight, max: highest } : undefined;
+    return { start, counters, rooms, bucketMin: lowest, cpu };
+}
 
 /**
  * Room counters per room since `since` (snapshots taken after it, plus the heap counters of the

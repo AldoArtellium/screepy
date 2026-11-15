@@ -48,8 +48,6 @@ declare global {
         lastRun: number;
         consecutiveSkips: number;
         avgCpu?: number;
-        /** Ticks the module was due but held back by bucket throttling */
-        throttled?: number;
     }
 
     interface CreepMemory {

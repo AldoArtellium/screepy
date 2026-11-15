@@ -15,7 +15,7 @@
  * longer a blocked candidate.
  */
 
-export type BoostedEffect = "heal" | "tough" | "attack";
+import type { BoostedEffect } from "./boostNeed";
 
 export interface BoostDemand {
     /** Origin room whose labs make the compounds */

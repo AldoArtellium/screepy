@@ -5,7 +5,7 @@
  * See docs/hivemind/hivemind-expansion.md §4.2, §7.
  */
 
-import { buildBody, MoveMode } from "../core/bodyBuilder";
+import { buildBody, MoveMode, spawnEnergyLimit } from "../core/bodyBuilder";
 import { effectiveEnergy, squadCreeps } from "../core/roomState";
 import { remoteDefenderBody, DefenseResponse } from "../remote/remoteDefense";
 import type { SpawnOption, SpawnRole } from "../spawning/spawnRoles";
@@ -24,17 +24,13 @@ const RECLAIM_ENERGY = 10000;
 const RECLAIM_BUCKET = 8000;
 const MAX_RECLAIM_PIONEERS = 5;
 
-function energyLimit(room: Room): number {
-    return Math.min(room.energyCapacityAvailable, Math.max(room.energyCapacityAvailable * 0.9, room.energyAvailable));
-}
-
 /** Units alive (pioneers keep their squad once in the target room) */
 function unitCount(squad: string, unit: SquadUnit): number {
     return squadCreeps(squad).filter(c => c.memory.unit === unit).length;
 }
 
 function pioneerBody(room: Room): BodyPartConstant[] {
-    return buildBody({ weights: { [CARRY]: 3, [WORK]: 2 }, moveMode: MoveMode.PLAINS, energyLimit: energyLimit(room) });
+    return buildBody({ weights: { [CARRY]: 3, [WORK]: 2 }, moveMode: MoveMode.PLAINS, energyLimit: spawnEnergyLimit(room) });
 }
 
 export const squadSpawnRole: SpawnRole = {

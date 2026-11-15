@@ -5,12 +5,12 @@
  * invader cores only).
  */
 
-import { healWounded } from "../core/healing";
 import { stayInPlace, whenInRange } from "../core/movement";
 import { isFast } from "../defense/RoomDefense";
 import { trafficManager } from "../modules/TrafficManager";
 import { isRoomUnderAttack } from "../modules/RoomIntel";
 import { groupMembers, missingBoosts, REMOTE_DEFENDER, waitingForGroup } from "../remote/remoteDefense";
+import { SOURCE_KEEPER } from "../remote/keepers";
 import { countStat } from "../utils/stats";
 import { performRecycle } from "./recycle";
 import { registerRole } from "./registry";
@@ -46,7 +46,7 @@ export function runRemoteDefender(creep: Creep): void {
 
     const inTarget = creep.room.name === targetRoom;
     const hostiles = creep.room.find(FIND_HOSTILE_CREEPS, {
-        filter: c => c.owner.username !== "Source Keeper" && (inTarget || c.pos.inRangeTo(creep, ENGAGE_RANGE))
+        filter: c => c.owner.username !== SOURCE_KEEPER && (inTarget || c.pos.inRangeTo(creep, ENGAGE_RANGE))
     });
     const enemy = creep.pos.findClosestByRange(hostiles);
     if ((!enemy || !enemy.pos.inRangeTo(creep, ENGAGE_RANGE)) && regroup(creep)) return;
@@ -65,8 +65,6 @@ export function runRemoteDefender(creep: Creep): void {
         engage(creep, core);
         return;
     }
-    // Remote clear: heal the harvesters and haulers hit in the fight first (no tower there, a damaged part does nothing)
-    if (healWounded(creep, { move: true })) return;
     if (!isRoomUnderAttack(targetRoom)) {
         // Forget the target: else, back out of it, the defender walked to it again (endless bounce
         // on the room edge)

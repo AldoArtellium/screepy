@@ -1,7 +1,7 @@
 /**
  * IntelManager - static intel of every room we have seen: sources, controller, mineral,
- * owner/reserver, source keepers. Kept in RawMemory segments 1-2 (utils/segments.ts, heap copy;
- * was `Memory.intel`, migrated on load). Hostiles and invader cores live in RoomIntel
+ * owner/reserver, source keepers. Kept in RawMemory segments 1-2 (utils/segments.ts, heap copy).
+ * Hostiles and invader cores live in RoomIntel
  * (`Memory.rooms[r].enemies`, refreshed every tick), never here.
  */
 
@@ -67,10 +67,7 @@ export interface RoomIntel {
 type IntelData = { [roomName: string]: RoomIntel };
 
 /** Written at most every 100 ticks: a global reset loses at most that much of refreshed intel */
-const store = segmentStore<IntelData>("intel", [1, 2], 100, {
-    read: () => Memory.intel,
-    clear: () => delete Memory.intel
-});
+const store = segmentStore<IntelData>("intel", [1, 2], 100);
 
 class IntelManager {
     getIntel(roomName: string): RoomIntel | undefined {
@@ -154,8 +151,6 @@ class IntelManager {
 
 declare global {
     interface Memory {
-        /** Legacy: intel now lives in segments, this copy is migrated then deleted */
-        intel?: { [roomName: string]: RoomIntel };
         username?: string;
     }
 }

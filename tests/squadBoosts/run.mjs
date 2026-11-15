@@ -32,7 +32,7 @@ try {
     // Type errors outside this file (global declarations) don't prevent emitting
 }
 
-const { chooseSquad, BOOST_MARGIN } = require(join(OUT, "military", "boostNeed.js"));
+const { chooseSquad, chooseWithDrain, BOOST_MARGIN } = require(join(OUT, "military", "boostNeed.js"));
 
 let failures = 0;
 const check = (name, ok, detail) => {
@@ -206,6 +206,21 @@ const threat = (towers, creeps = 0, heal = 0) => ({
     duo.frontOther = 30;
     const c = chooseSquad([duo], threat(2), false);
     check("forced duo: feasible through its front", c.feasible && c.type === "duo", JSON.stringify(c));
+}
+
+// 8d. A forced duo (Memory.military.squad = "duo") against a player's refilled towers it can't tank:
+//     no quad shape to drain with, the duo choice is kept (crashed on `.shape` of undefined, 2026-11-15)
+{
+    const [duo] = shapes(FULL);
+    const forced = chooseWithDrain([duo], threat(3), true, true);
+    check("forced duo, refilled towers: duo kept, infeasible", forced.type === "duo" && !forced.feasible, JSON.stringify(forced));
+    const both = chooseWithDrain(shapes({ XLHO2: 9000 }), threat(1), true, true);
+    const quadDrain = chooseSquad(shapes({ XLHO2: 9000 }).filter(s => s.type === "quad"), threat(1), false);
+    check(
+        "duo and quad, refilled towers: the drained quad when it holds at the edge",
+        quadDrain.feasible ? both.type === "quad" && both.feasible : !both.feasible,
+        JSON.stringify(both)
+    );
 }
 
 // 9. No labs / no stock: the unboosted squad, feasible or not

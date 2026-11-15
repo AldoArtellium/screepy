@@ -12,6 +12,7 @@
 import { enemyStrength } from "../defense/RoomDefense";
 import { intelManager } from "../modules/IntelManager";
 import { canReserveFrom } from "../remote/RemoteMining";
+import { NPC_OWNERS } from "../remote/keepers";
 import { LABEL_PRIORITY, labelStyle, MapLabels } from "./mapLabels";
 import { Cell, MapPanel } from "./mapPanel";
 
@@ -63,7 +64,7 @@ function drawThreat(visual: MapVisual, labels: MapLabels, threats: Cell[][] | un
             room
                 .find(FIND_HOSTILE_CREEPS)
                 .map(c => c.owner.username)
-                .filter(name => name !== "Invader" && name !== "Source Keeper")
+                .filter(name => !NPC_OWNERS.includes(name))
         );
         if (players.size > 0) parts.push([...players].join(", "));
         if (room.controller?.my) parts.push(STRENGTH_NAMES[enemyStrength(room)]);

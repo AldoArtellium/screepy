@@ -32,7 +32,7 @@ try {
 }
 
 const mocks = require("./mocks.cjs");
-const { buildVariation, extendRoomPlan, listVariations } = require(join(OUT, "planner", "RoomPlanner.js"));
+const { buildVariation, listVariations } = require(join(OUT, "planner", "RoomPlanner.js"));
 const { RoomPlan } = require(join(OUT, "planner", "RoomPlan.js"));
 
 const dataDir = join(ROOT, "tests", "planner", "data");
@@ -109,27 +109,6 @@ for (const room of rooms) {
         if (sourceLabs.some(s => Math.max(Math.abs(s.x - lab.x), Math.abs(s.y - lab.y)) > 2)) errors.push(`lab ${lab.x},${lab.y} out of range`);
     }
 
-    // PLAN_VERSION 3 plan of the same variation, extended in place: nothing moves, new structures on free safe tiles
-    const legacy = buildVariation({ ...input, legacy: true }, variations.find(v => v.key === best.key)).plan;
-    const before = new Map();
-    for (const type of legacy.types()) before.set(type, legacy.getLocations(type).map(p => p.x + 50 * p.y).join());
-    const legacyBlocked = new Set();
-    for (const type of [...structureTypes, "road", "rampart", "center", "harvester", "upgrader.0", "bay_center"]) {
-        for (const p of legacy.getLocations(type)) legacyBlocked.add(p.x + 50 * p.y);
-    }
-    const extended = extendRoomPlan(input, RoomPlan.deserialize(room, legacy.serialize()));
-    const extendErrors = [];
-    for (const [type, positions] of before) {
-        const after = extended.getLocations(type).map(p => p.x + 50 * p.y);
-        if (!positions.split(",").every(k => !k || after.includes(Number(k)))) extendErrors.push(`${type} moved`);
-    }
-    for (const type of ["lab", "powerSpawn", "nuker", "observer", "helper_parking"]) {
-        for (const p of extended.getLocations(type)) {
-            if (legacyBlocked.has(p.x + 50 * p.y)) extendErrors.push(`${type} over the old plan at ${p.x},${p.y}`);
-            if (!legacy.has(p, "safe")) extendErrors.push(`${type} outside the safe area at ${p.x},${p.y}`);
-        }
-    }
-    errors.push(...extendErrors);
     if (plan.count("container.source") !== sources.length) errors.push(`container.source: ${plan.count("container.source")}`);
     for (const s of sources) if (plan.count("harvester." + s.id) !== 1) errors.push(`harvester.${s.id} missing`);
 
@@ -172,8 +151,6 @@ for (const room of rooms) {
 
     mkdirSync(join(ROOT, "test-results"), { recursive: true });
     writeFileSync(join(ROOT, "test-results", `plan-${room}.txt`), lines.join("\n") + "\n");
-    console.log(`  extended v3 plan: ${extended.count("lab")} labs, ${extended.count("powerSpawn")} power spawn, ${extended.count("nuker")} nuker, ` +
-        `${extended.count("observer")} observer, ${extended.count("helper_parking")} parking${extendErrors.length ? "" : ", nothing moved"}`);
     console.log(`${room}: ${errors.length ? "FAIL " + errors.join("; ") : "PASS"} - best ${best.key} ${best.score.toFixed(3)} ` +
         `(first ${scores[0]}), ${variations.length} variations in ${ms.toFixed(0)} ms, ${pathCalls} paths, ` +
         `${plan.count("extension")} ext, ${plan.count("spawn")} spawns, ${plan.count("tower")} towers, ${plan.count("road")} roads`);

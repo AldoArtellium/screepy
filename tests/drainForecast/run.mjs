@@ -34,7 +34,7 @@ try {
 Object.assign(globalThis, { CREEP_SPAWN_TIME: 3 });
 
 const {
-    sampleEnergy, recordPoke, wasHit, etaToEmpty, quadLeadTime, drainDecision,
+    sampleEnergy, recordPoke, wasHit, etaToEmpty, quadLeadTime, drainDecision, restartPatience, refillsInBursts, BURST_REFILL,
     RATE_WINDOW, NO_FIRE_TICKS, FORECAST_PATIENCE, MIN_RATE, SAMPLE_GAP,
 } = require(join(OUT, "military", "drainForecast.js"));
 
@@ -117,6 +117,43 @@ check("refilled faster than drained: never", etaToEmpty(3000, -2) === Infinity);
     check("slow but real drain after the patience: wait",
         drainDecision({ ...base, inTicks: 100, hitTicks: 50, rate: MIN_RATE * 2 }, FORECAST_PATIENCE, 2900, 400) === "wait");
 }
+
+// The quad spawned on a good drain, then the owner refills while it waits at the border (shard0 W29N4
+// 2026-11-14: 3 towers kept between 500 and 900 by fillers): the drain that stalls ends the mission
+{
+    let f = recordPoke(sampleEnergy(undefined, 1000, 2400), true);
+    f = sampleEnergy(seenAt(f, 1100), 1100, 1500);
+    check("draining 9 a tick: spawn within a lead of 200", drainDecision(f, 1100, 1500, 200) === "spawn", f.rate);
+    for (const now of [1200, 1300, 1400, 1500]) f = sampleEnergy(seenAt(f, now), now, 2400);
+    check("refilled back to 2400: rate below MIN_RATE", f.rate < MIN_RATE, f.rate);
+    check("refilled after the patience: noProgress", drainDecision(f, 1000 + FORECAST_PATIENCE, 2400, 200) === "noProgress");
+}
+
+// A second wait, back from a retreat: the probe started long before and the fight's refills pulled the
+// rate down. Without a restart the wait's first tick ends the mission; with it the drain gets its patience.
+{
+    let f = recordPoke(sampleEnergy(undefined, 1000, 2400), true);
+    for (const now of [1100, 1200, 1300]) f = sampleEnergy(seenAt(f, now), now, 2400 + (now - 1000));
+    const back = 1000 + 2 * FORECAST_PATIENCE;
+    check("stale probe at a second wait: noProgress at once", drainDecision(f, back, 2700, 200) === "noProgress", f.rate);
+    const restarted = restartPatience(f, back, 2700);
+    check("restarted: patience from now, no rate, hits kept",
+        restarted.since === back && restarted.at === back && restarted.energy === 2700 && restarted.rate === undefined &&
+            restarted.hitTicks === 1, JSON.stringify(restarted));
+    check("restarted: waits on its first tick", drainDecision(restarted, back + 1, 2700, 200) === "wait");
+    let g = restarted;
+    for (const now of [back + 100, back + 200, back + 300, back + 400, back + 500]) g = sampleEnergy(seenAt(g, now), now, 2700);
+    check("restarted, still refilled after its own patience: noProgress",
+        drainDecision(g, back + FORECAST_PATIENCE, 2700, 200) === "noProgress", g.rate);
+}
+
+// Burst refills (drainer.ts, every state): a stronghold's core refills its tower 990 at once, the mockup's
+// player feeder 5 at a time
+check("no refill seen: drain goes on", !refillsInBursts(0));
+check("feeder of 5 at a time: drain goes on", !refillsInBursts(5));
+check("a shot's worth at once: drain goes on", !refillsInBursts(10));
+check("core refill of 990: hopeless", refillsInBursts(990));
+check("from BURST_REFILL: hopeless", refillsInBursts(BURST_REFILL) && !refillsInBursts(BURST_REFILL - 1));
 
 console.log(failures === 0 ? "\nall checks passed" : `\n${failures} check(s) failed`);
 process.exit(failures === 0 ? 0 : 1);

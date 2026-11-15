@@ -27,7 +27,7 @@ import { intelManager } from "../modules/IntelManager";
 import { releaseRooms } from "../modules/RoomIntel";
 import { minedRemoteRooms, remoteSources } from "../remote/RemoteMining";
 import { log } from "../utils/logger";
-import { HostileRoom, militaryMemory } from "./intel";
+import { HostileRoom, militaryMemory, squadBases } from "./intel";
 import { looksStronger, OwnedRoomSeen, playerRoomCounts } from "./playerThreat";
 import {
     ATTRITION,
@@ -75,11 +75,7 @@ interface Origin {
 }
 
 function origins(): Origin[] {
-    const minRcl = militaryMemory().minRcl ?? 4;
-    return _.filter(
-        Game.rooms,
-        r => !!r.controller?.my && r.controller.level >= minRcl && r.find(FIND_MY_SPAWNS).length > 0
-    ).map(room => ({ room }));
+    return squadBases().map(room => ({ room }));
 }
 
 function recentlyFailed(roomName: string): boolean {

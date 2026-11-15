@@ -333,7 +333,7 @@ function printExcluded(memory, time) {
 
 function printMilitary(memory, time) {
   const military = memory.military ?? {};
-  const autos = [...(military.target ? [military.target] : []), ...(military.targets ?? [])].map(
+  const autos = (military.targets ?? []).map(
     (t) => `${t.room} (${t.reason}, roi ${t.roi ?? "?"}, since ${t.since})`
   );
   const target = [...(military.attack ? [`${military.attack} (manual)`] : []), ...autos].join("; ") || "none";

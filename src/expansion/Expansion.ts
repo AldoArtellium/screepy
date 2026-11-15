@@ -20,6 +20,7 @@ import { intelManager } from "../modules/IntelManager";
 import { hasInvaderCore, isRoomUnderAttack } from "../modules/RoomIntel";
 import { expansionCpuFits, preparesNextExpansion } from "../remote/remoteIncome";
 import { log } from "../utils/logger";
+import { myRooms } from "../utils/owned";
 import { expansionScore } from "./expansionScore";
 
 export type SquadUnit = "claimer" | "pioneer" | "defender";
@@ -66,10 +67,6 @@ const NO_TARGET_RETRY = 500;
 export function expansionMemory(): NonNullable<Memory["expand"]> {
     if (!Memory.expand) Memory.expand = { failed: [], squads: {} };
     return Memory.expand;
-}
-
-function myRooms(): Room[] {
-    return _.filter(Game.rooms, r => !!r.controller?.my);
 }
 
 /** Route length in rooms avoiding rooms owned by others, null when there is none */

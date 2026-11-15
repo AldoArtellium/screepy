@@ -34,12 +34,13 @@ export interface BoostOption {
     tier: number;
 }
 
+/** Threat of a room (sizing.ts threatOf) */
 export interface ThreatModel {
-    /** Every tower at close range plus the enemy creeps */
+    /** Every tower at close range plus the enemy creeps (TI's minimum healing) */
     close: number;
     /** Every tower at the room edge plus the enemy creeps */
     edge: number;
-    /** Damage needed to beat the enemy healing */
+    /** Damage needed to beat the enemy healing (TI: x 1.2) */
     minDamage: number;
 }
 
@@ -205,4 +206,24 @@ export function chooseSquad(shapes: SquadShape[], threat: ThreatModel, refills: 
     });
     const pick = choices.find(c => c.holds) ?? choices[choices.length - 1];
     return result(pick.shape, pick.levels, threat, refills, attrition, opts.tank);
+}
+
+/**
+ * chooseSquad against towers that must be tanked (`tank`), else a quad that drains them first, judged at
+ * the edge without refill (sizing.ts planSquad). A forced duo has no quad shape: its own choice is kept
+ * (empty shapes made chooseSquad read `.shape` of undefined, 2026-11-15)
+ */
+export function chooseWithDrain(
+    shapes: SquadShape[],
+    threat: ThreatModel,
+    refills: boolean,
+    tank: boolean,
+    opts: ChooseOptions = {}
+): SquadChoice {
+    const choice = chooseSquad(shapes, threat, refills, { ...opts, tank });
+    if (!tank || choice.feasible) return choice;
+    const quads = shapes.filter(s => s.type === "quad");
+    if (quads.length === 0) return choice;
+    const drained = chooseSquad(quads, threat, false, { ...opts, tank: false });
+    return drained.feasible ? drained : choice;
 }

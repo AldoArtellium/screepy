@@ -7,9 +7,6 @@ export interface Module {
   fn: () => void;
   mandatory?: boolean;
   runEvery?: number;
-  /** Skips (CPU budget) tolerated before the module is forced to run. Defaults to DEFAULT_MAX_SKIPS. */
-  maxSkips?: number;
-  disabled?: boolean;
   /**
    * Bucket throttling (Hivemind process priorities): "always" never throttles; otherwise the
    * module's interval (runEvery, 1 by default) is multiplied as the bucket drains, and the module
@@ -43,6 +40,33 @@ const DEFAULT_MAX_SKIPS = 10;
 /** Max errors kept in Memory.moduleErrors */
 const MAX_ERRORS = 20;
 
+/** Nominal interval of each module (runEvery, 1 by default), refreshed by runModuleManager */
+const runIntervals = new Map<string, number>();
+
+/**
+ * Recent CPU per tick of a module: its average per run (avgCpu) spread over its nominal interval,
+ * so a module running every N ticks is not N times more expensive than one running every tick.
+ * Bucket throttling stretches the interval further: this is an upper bound then. Undefined for a name
+ * not registered in this global (a removed module's frozen avgCpu).
+ */
+export function moduleCpuPerTick(name: string): number | undefined {
+  const interval = runIntervals.get(name);
+  const avgCpu = Memory.moduleState?.[name]?.avgCpu;
+  if (interval === undefined || avgCpu === undefined) return undefined;
+  return avgCpu / interval;
+}
+
+/** Memory.moduleState of modules no longer in the loop was pruned in this global */
+let statePruned = false;
+
+/** Drops the state of modules removed from the loop (their avgCpu would stay frozen forever) */
+function pruneModuleState(modules: Module[]): void {
+  if (statePruned || !Memory.moduleState) return;
+  statePruned = true;
+  const names = new Set(modules.map(m => m.name));
+  for (const name in Memory.moduleState) if (!names.has(name)) delete Memory.moduleState[name];
+}
+
 function getModuleState(name: string): ModuleState {
   if (!Memory.moduleState) Memory.moduleState = {};
   if (!Memory.moduleState[name]) {
@@ -60,30 +84,27 @@ function recordError(name: string, error: unknown) {
 
 export function runModuleManager(modules: Module[], cpuLimit: number) {
   const start = Game.cpu.getUsed();
+  pruneModuleState(modules);
 
-  // Find ONE module to force-run (the most starved one past its maxSkips)
+  // Find ONE module to force-run (the most starved one past DEFAULT_MAX_SKIPS)
   let moduleToForce: string | null = null;
   let mostSkips = 0;
   for (const module of modules) {
-    if (module.disabled || module.mandatory) continue;
+    if (module.mandatory) continue;
     const state = getModuleState(module.name);
-    const maxSkips = module.maxSkips ?? DEFAULT_MAX_SKIPS;
-    if (state.consecutiveSkips >= maxSkips && state.consecutiveSkips > mostSkips) {
+    if (state.consecutiveSkips >= DEFAULT_MAX_SKIPS && state.consecutiveSkips > mostSkips) {
       moduleToForce = module.name;
       mostSkips = state.consecutiveSkips;
     }
   }
 
   for (const module of modules) {
-    if (module.disabled) continue;
     const state = getModuleState(module.name);
+    runIntervals.set(module.name, module.runEvery ?? 1);
 
-    // Not due yet
+    // Not due yet (mandatory and "always" modules skip the bucket check, not runEvery)
     if (module.runEvery && state.lastRun + module.runEvery > Game.time) continue;
-    if (!isAllowedByBucket(module, state.lastRun)) {
-      state.throttled = (state.throttled ?? 0) + 1;
-      continue;
-    }
+    if (!isAllowedByBucket(module, state.lastRun)) continue;
 
     const remainingCpu = cpuLimit - (Game.cpu.getUsed() - start);
     const shouldForce = module.name === moduleToForce;

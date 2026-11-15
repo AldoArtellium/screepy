@@ -13,7 +13,7 @@ import { effectiveEnergy } from "../core/roomState";
 import type { SpawnOption, SpawnRole } from "../spawning/spawnRoles";
 import { log } from "../utils/logger";
 import { countStat } from "../utils/stats";
-import { hostileRoom, militaryMemory } from "./intel";
+import { hostileRoom, militaryMemory, squadBases } from "./intel";
 import { squadRoute } from "./route";
 import { attackMode, safeModePhase } from "./safeMode";
 
@@ -77,15 +77,7 @@ function stillArmed(roomName: string): boolean {
 
 /** Closest base of the squads' minimum RCL (targets.ts origins) with a spawn, within MAX_DISTANCE */
 function closestBase(roomName: string): string | undefined {
-    const minRcl = militaryMemory().minRcl ?? 4;
-    const bases = _.filter(
-        Game.rooms,
-        r =>
-            !!r.controller?.my &&
-            r.controller.level >= minRcl &&
-            r.find(FIND_MY_SPAWNS).length > 0 &&
-            Game.map.getRoomLinearDistance(r.name, roomName) <= MAX_DISTANCE
-    );
+    const bases = squadBases().filter(r => Game.map.getRoomLinearDistance(r.name, roomName) <= MAX_DISTANCE);
     if (bases.length === 0) return undefined;
     return _.min(bases, r => Game.map.getRoomLinearDistance(r.name, roomName)).name;
 }

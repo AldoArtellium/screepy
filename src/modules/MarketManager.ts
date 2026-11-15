@@ -68,6 +68,26 @@ const usedTerminals: Set<string> = new Set();
 /** Own order id -> last tick its price changed (heap) */
 const repricedAt: Map<string, number> = new Map();
 
+/** Order book of each resource fetched this tick: one getAllOrders per resource and tick */
+const orderBook: Map<string, Order[]> = new Map();
+let orderBookTick = -1;
+
+/** Every open order on a resource (both types, ours included), fetched once per tick */
+function allOrders(resourceType: ResourceConstant): Order[] {
+    if (orderBookTick !== Game.time) {
+        orderBookTick = Game.time;
+        orderBook.clear();
+    }
+    let orders = orderBook.get(resourceType);
+    if (!orders) orderBook.set(resourceType, (orders = Game.market.getAllOrders({ resourceType })));
+    return orders;
+}
+
+/** Orders of one type on a resource with at least 100 left, other players' only unless `withOwn` */
+function marketOrders(type: ORDER_BUY | ORDER_SELL, resourceType: ResourceConstant, withOwn = false): Order[] {
+    return allOrders(resourceType).filter(o => o.type === type && o.amount >= 100 && (withOwn || !Game.market.orders[o.id]));
+}
+
 /** 0 energy, 10 power, else the length of the name (+3 with G): 1 = base minerals (Hivemind getResourceTier) */
 function resourceTier(resourceType: ResourceConstant): number {
     if (resourceType === RESOURCE_ENERGY) return 0;
@@ -101,7 +121,7 @@ function priceData(resourceType: ResourceConstant): PriceData | null {
 
     let currentCount = 0;
     let currentValue = 0;
-    const orders = Game.market.getAllOrders({ resourceType }).filter(o => o.remainingAmount > 0);
+    const orders = allOrders(resourceType).filter(o => o.remainingAmount > 0);
     for (const order of orders) {
         currentCount += order.remainingAmount;
         currentValue += order.remainingAmount * order.price;
@@ -136,7 +156,7 @@ export function tradeValue(resourceType: ResourceConstant, side: "input" | "prod
     const average = priceData(resourceType)?.average;
     let cached = bestBuyCache.get(resourceType);
     if (!cached || cached.until <= Game.time) {
-        const orders = Game.market.getAllOrders({ type: ORDER_BUY, resourceType }).filter(o => o.amount >= 100 && !Game.market.orders[o.id]);
+        const orders = marketOrders(ORDER_BUY, resourceType);
         cached = { until: Game.time + PRICE_CACHE_TICKS, price: orders.length > 0 ? _.max(orders, o => o.price).price : undefined };
         bestBuyCache.set(resourceType, cached);
     }
@@ -185,7 +205,7 @@ function maxOrderAmount(resourceType: ResourceConstant): number {
 
 /** Best order of other players to deal with: price x 1000 against 0.3 credit per energy of transfer cost */
 function findBestOrder(type: ORDER_BUY | ORDER_SELL, resourceType: ResourceConstant, roomName: string): Order | null {
-    const orders = Game.market.getAllOrders({ type, resourceType }).filter(o => o.amount >= 100 && !Game.market.orders[o.id]);
+    const orders = marketOrders(type, resourceType);
     const score = (o: Order) => {
         const cost = o.roomName ? Game.market.calcTransactionCost(1000, roomName, o.roomName) : 0;
         return type === ORDER_BUY ? 1000 * o.price - 0.3 * cost : -(1000 * o.price + 0.3 * cost);
@@ -295,7 +315,7 @@ function tryBuy(resourceType: ResourceConstant, rooms: string[], need: number, m
     const history = priceData(resourceType);
     if (!room || !history) return;
     const cap = Math.min(maxPrice, history.average - Math.min(history.stdDev / 2, history.average * 0.2));
-    const competitor = Game.market.getAllOrders({ type: ORDER_BUY, resourceType }).filter(o => o.amount >= 100);
+    const competitor = marketOrders(ORDER_BUY, resourceType, true);
     let offer = history.average - Math.min(history.stdDev, history.average * 0.8);
     if (competitor.length > 0) offer = Math.min(cap, _.max(competitor, o => o.price).price * 1.01);
     if (offer > cap) return;
@@ -328,7 +348,7 @@ function trySell(resourceType: ResourceConstant, rooms: string[]): void {
     const room = roomHighestOn(resourceType, rooms);
     const history = priceData(resourceType);
     if (!room || !history) return;
-    const competitors = Game.market.getAllOrders({ type: ORDER_SELL, resourceType }).filter(o => o.amount >= 100 && !Game.market.orders[o.id]);
+    const competitors = marketOrders(ORDER_SELL, resourceType);
     const cheapest = competitors.length > 0 ? _.min(competitors, o => o.price).price : undefined;
     const bestBuy = findBestOrder(ORDER_BUY, resourceType, room.name);
     if (bestBuy && prefersInstantSell(bestBuy.price, history, cheapest, lowCredits())) {

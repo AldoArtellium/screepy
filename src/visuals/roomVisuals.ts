@@ -10,13 +10,12 @@
  * Runs every tick (visuals last one tick): only the redraws wait while the bucket is low, the cached
  * layers are still imported; below STOP_BUCKET nothing is drawn. Under CPU pressure (remote budget capped or
  * CPU average above 85% of the limit) the plan and map creeps are off and the map and panel are redrawn
- * less often, the map at once when a watched room gains or loses hostiles (`settings.ts`). The module logs its CPU per layer (map redraws and cached map imports
- * apart) every LOG_INTERVAL ticks.
+ * less often, the map at once when a watched room gains or loses hostiles (`settings.ts`). The
+ * module's CPU is in the `cpu:module:RoomVisuals` counter.
  */
 
 import { roomPlanner } from "../planner/RoomPlanner";
 import { RoomPlan } from "../planner/RoomPlan";
-import { log } from "../utils/logger";
 import { decisionBucket } from "../utils/throttle";
 import { drawMapCreeps } from "./mapCreeps";
 import { MapLabels } from "./mapLabels";
@@ -30,7 +29,6 @@ import { layerEnabled, mapInterval, panelInterval, visualsEnabled } from "./sett
 import { drawSpawns } from "./spawnVisual";
 
 const PLAN_INTERVAL = 100;
-const LOG_INTERVAL = 1000;
 /** Below this bucket the layers are no longer redrawn (kept as they are) */
 const REDRAW_BUCKET = 5000;
 const STOP_BUCKET = 2000;
@@ -47,26 +45,6 @@ interface RoomCache {
 
 const cache: Map<string, RoomCache> = new Map();
 let mapCache: (Layer & { threats: string }) | undefined;
-/** World map redraws since the last log */
-let mapRedraws = 0;
-/** CPU used since the last log, for the average in the log line */
-let cpuUsed = 0;
-let cpuTicks = 0;
-/** CPU per layer since the last log (map = redraws of every world map layer, mapImport = cached map imports) */
-const layerCpu: Record<"plan" | "panel" | "spawn" | "map" | "mapImport", number> = {
-    plan: 0,
-    panel: 0,
-    spawn: 0,
-    map: 0,
-    mapImport: 0
-};
-
-/** Runs a layer and adds its CPU to the layer's total */
-function timed(layer: keyof typeof layerCpu, run: () => void): void {
-    const start = Game.cpu.getUsed();
-    run();
-    layerCpu[layer] += Game.cpu.getUsed() - start;
-}
 
 /** Visuals drawn in the room this tick ("" when none: export() then returns undefined) */
 function exported(visual: RoomVisual): string {
@@ -81,27 +59,14 @@ function capture(roomName: string, draw: (visual: RoomVisual) => void): string {
     return exported(visual).slice(before);
 }
 
-function elements(data: string): number {
-    return data ? data.split("\n").filter(line => line).length : 0;
-}
-
 function drawRoom(room: Room): void {
     const state = cache.get(room.name) ?? {};
     cache.set(room.name, state);
 
     const redraw = decisionBucket() >= REDRAW_BUCKET;
-    timed("plan", () => drawPlanLayer(room, state, redraw));
-    timed("panel", () => drawPanelLayer(room, state, redraw));
-    if (layerEnabled("spawn")) timed("spawn", () => drawSpawns(room.visual, room));
-
-    if (Game.time % LOG_INTERVAL === 0) {
-        const all = exported(room.visual);
-        log.info(
-            "Visuals",
-            `${room.name}: plan ${elements(state.plan?.data ?? "")} elements, panel ${elements(state.panel?.data ?? "")}, ` +
-                `room visual ${elements(all)} elements / ${all.length} chars`
-        );
-    }
+    drawPlanLayer(room, state, redraw);
+    drawPanelLayer(room, state, redraw);
+    if (layerEnabled("spawn")) drawSpawns(room.visual, room);
 }
 
 function drawPlanLayer(room: Room, state: RoomCache, redraw: boolean): void {
@@ -140,12 +105,8 @@ function drawMap(): void {
     // A room gaining or losing hostiles is redrawn at once, whatever the interval
     const threatState = threats ? threatSignature() : "";
     const due = !mapCache || Game.time - mapCache.tick >= mapInterval() || mapCache.threats !== threatState;
-    if (!mapCache || (redraw && due)) timed("map", () => redrawMap(remotes, strategy, creeps, threats, threatState));
-    else if (mapCache.data) timed("mapImport", () => Game.map.visual.import(mapCache!.data));
-    if (Game.time % LOG_INTERVAL === 0 && mapCache) {
-        log.info("Visuals", `map ${elements(mapCache.data)} elements / ${mapCache.data.length} chars, ${mapRedraws} redraws`);
-        mapRedraws = 0;
-    }
+    if (!mapCache || (redraw && due)) redrawMap(remotes, strategy, creeps, threats, threatState);
+    else if (mapCache.data) Game.map.visual.import(mapCache.data);
 }
 
 function redrawMap(remotes: boolean, strategy: boolean, creeps: boolean, threats: boolean, threatState: string): void {
@@ -166,12 +127,10 @@ function redrawMap(remotes: boolean, strategy: boolean, creeps: boolean, threats
     if (area) labels.block(area);
     labels.flush(visual);
     mapCache = { tick: Game.time, data: visual.export() ?? "", threats: threatState };
-    mapRedraws++;
 }
 
 export const roomVisualsModule = (): void => {
     if (!visualsEnabled() || decisionBucket() < STOP_BUCKET) return;
-    const start = Game.cpu.getUsed();
     sampleIncome();
     for (const name in Game.rooms) {
         const room = Game.rooms[name];
@@ -180,16 +139,4 @@ export const roomVisualsModule = (): void => {
     // Rooms lost or no longer visible
     for (const name of cache.keys()) if (!Game.rooms[name]?.controller?.my) cache.delete(name);
     drawMap();
-
-    cpuUsed += Game.cpu.getUsed() - start;
-    cpuTicks++;
-    if (Game.time % LOG_INTERVAL === 0) {
-        const perLayer = Object.entries(layerCpu)
-            .map(([layer, cpu]) => `${layer} ${(cpu / cpuTicks).toFixed(3)}`)
-            .join(", ");
-        log.info("Visuals", `average CPU ${(cpuUsed / cpuTicks).toFixed(3)} over ${cpuTicks} ticks (${perLayer})`);
-        cpuUsed = 0;
-        cpuTicks = 0;
-        for (const layer in layerCpu) layerCpu[layer as keyof typeof layerCpu] = 0;
-    }
 };

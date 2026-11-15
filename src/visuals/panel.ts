@@ -1,16 +1,18 @@
 /**
  * Room panel (top left): a two-column table with thin bars - controller progress and ETA, energy,
- * storage, income, CPU, bucket, the most expensive modules and roles; creeps, spawning, the spawn
+ * storage, income, CPU, bucket, the most expensive modules (CPU per tick, ModuleManager); creeps, spawning, the spawn
  * queue (best options of the last evaluation), construction; defense, remotes, expansion, attack.
  * Bars turn orange then red only when something needs attention; empty rows are left out.
- * Rates come from heap samples taken every SAMPLE_INTERVAL ticks over a 1000-tick sliding window.
+ * Controller and income rates come from heap samples taken every SAMPLE_INTERVAL ticks over a 1000-tick sliding window.
  */
 
 import { hasEnemies } from "../core/roomState";
+import { moduleCpuPerTick } from "../ModuleManager";
 import { enemyStrength } from "../defense/RoomDefense";
 import { miningEfficiency } from "../modules/MiningStats";
 import { spawnManager } from "../modules/SpawnManager";
 import { roomPlanner } from "../planner/RoomPlanner";
+import { rate, short } from "../utils/format";
 
 const SAMPLE_INTERVAL = 100;
 /** Samples kept: 10 intervals = 1000 ticks */
@@ -64,10 +66,7 @@ interface Sample {
 /** Controller progress by room (reset on level change) and empire-wide harvest counters */
 const progressSamples: Map<string, { level: number; samples: Sample[] }> = new Map();
 const incomeSamples: { local: Sample[]; remote: Sample[] } = { local: [], remote: [] };
-/** Cumulated CPU counters (`cpu:module:<name>`, `cpu:<role>`) */
-const cpuSamples: Map<string, Sample[]> = new Map();
-let lastCpuSample = -SAMPLE_INTERVAL;
-/** Entries in the CPU top rows */
+/** Entries in the CPU top row */
 const CPU_TOP = 3;
 
 function pushSample(samples: Sample[], value: number): void {
@@ -78,7 +77,7 @@ function pushSample(samples: Sample[], value: number): void {
 }
 
 /** Increase per tick over the window, undefined with a single sample */
-function rate(samples: Sample[]): number | undefined {
+function sampleRate(samples: Sample[]): number | undefined {
     if (samples.length < 2) return undefined;
     const first = samples[0];
     const last = samples[samples.length - 1];
@@ -90,26 +89,6 @@ export function sampleIncome(): void {
     const counters = Memory.stats?.counters ?? {};
     pushSample(incomeSamples.local, counters["work:harvest"] ?? 0);
     pushSample(incomeSamples.remote, counters["work:remoteHarvest"] ?? 0);
-    // CPU counters: one pass over the counters every SAMPLE_INTERVAL ticks
-    if (Game.time - lastCpuSample < SAMPLE_INTERVAL) return;
-    lastCpuSample = Game.time;
-    for (const key in counters) {
-        if (!key.startsWith("cpu:")) continue;
-        let samples = cpuSamples.get(key);
-        if (!samples) cpuSamples.set(key, (samples = []));
-        pushSample(samples, counters[key]);
-    }
-}
-
-/** The CPU_TOP biggest CPU users per tick among the counters with `prefix` (names without it) */
-function cpuTop(prefix: string, exclude?: string): { name: string; cpu: number }[] {
-    const top: { name: string; cpu: number }[] = [];
-    for (const [key, samples] of cpuSamples) {
-        if (!key.startsWith(prefix) || (exclude && key.startsWith(exclude))) continue;
-        const cpu = rate(samples);
-        if (cpu !== undefined) top.push({ name: key.slice(prefix.length), cpu });
-    }
-    return top.sort((a, b) => b.cpu - a.cpu).slice(0, CPU_TOP);
 }
 
 /** Module names without the usual suffixes, to fit the row */
@@ -117,22 +96,18 @@ function moduleName(name: string): string {
     return name.replace(/(Manager|Runner)$/, "") || name;
 }
 
+/** The CPU_TOP modules by recent CPU per tick (ModuleManager moduleCpuPerTick; per role CPU: Grafana) */
 function cpuRows(): Entry[] {
-    const rows: Entry[] = [];
-    let modules = cpuTop("cpu:module:").map(m => `${moduleName(m.name)} ${m.cpu.toFixed(1)}`);
-    if (modules.length === 0) {
-        // Before two samples: the modules' recent average CPU per run
-        const state = Memory.moduleState ?? {};
-        modules = Object.keys(state)
-            .filter(name => state[name].avgCpu !== undefined)
-            .sort((a, b) => state[b].avgCpu! - state[a].avgCpu!)
-            .slice(0, CPU_TOP)
-            .map(name => `${moduleName(name)} ${state[name].avgCpu!.toFixed(1)}`);
+    const perTick: [string, number][] = [];
+    for (const name in Memory.moduleState ?? {}) {
+        const cpu = moduleCpuPerTick(name);
+        if (cpu !== undefined) perTick.push([name, cpu]);
     }
-    if (modules.length > 0) rows.push({ label: "CPU top", text: modules.join(" · "), color: DIM });
-    const roles = cpuTop("cpu:", "cpu:module:").map(r => `${ROLE_NAMES[r.name] ?? r.name} ${r.cpu.toFixed(1)}`);
-    if (roles.length > 0) rows.push({ label: "", text: roles.join(" · "), color: DIM });
-    return rows;
+    const modules = perTick
+        .sort((a, b) => b[1] - a[1])
+        .slice(0, CPU_TOP)
+        .map(([name, cpu]) => `${moduleName(name)} ${cpu.toFixed(1)}`);
+    return modules.length > 0 ? [{ label: "CPU top", text: modules.join(" · "), color: DIM }] : [];
 }
 
 function sampleProgress(controller: StructureController): number | undefined {
@@ -142,17 +117,7 @@ function sampleProgress(controller: StructureController): number | undefined {
         progressSamples.set(controller.room.name, state);
     }
     pushSample(state.samples, controller.progress);
-    return rate(state.samples);
-}
-
-function short(value: number): string {
-    if (Math.abs(value) >= 1e6) return `${(value / 1e6).toFixed(1)}M`;
-    if (Math.abs(value) >= 1e4) return `${(value / 1e3).toFixed(1)}k`;
-    return `${Math.round(value)}`;
-}
-
-function rateText(value: number | undefined): string {
-    return value === undefined ? "-" : value.toFixed(1);
+    return sampleRate(state.samples);
 }
 
 /** A table row: label, optional bar (fill 0..1 and color), text after the bar */
@@ -193,10 +158,10 @@ function economyRows(room: Room): Entry[] {
         const stored = room.storage.store.getUsedCapacity(RESOURCE_ENERGY);
         rows.push({ label: "Storage", bar: { fill: stored / STORAGE_CAPACITY, color: OK }, text: short(stored) });
     }
-    const local = rate(incomeSamples.local);
-    const remote = rate(incomeSamples.remote);
+    const local = sampleRate(incomeSamples.local);
+    const remote = sampleRate(incomeSamples.remote);
     if (local !== undefined && remote !== undefined) {
-        rows.push({ label: "Income", text: `${rateText(local + remote)}/t   local ${rateText(local)} · remote ${rateText(remote)}` });
+        rows.push({ label: "Income", text: `${rate(local + remote)}/t   local ${rate(local)} · remote ${rate(remote)}` });
     }
     const mining = miningEfficiency(room.name);
     if (mining.total !== undefined) {

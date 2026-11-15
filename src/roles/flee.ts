@@ -9,8 +9,8 @@
  */
 
 import { trafficManager } from "../modules/TrafficManager";
-import { roomKeeperDangers, SOURCE_KEEPER } from "../remote/keeperDangerCache";
-import { inKeeperDanger, KEEPER_FLEE_RANGE } from "../remote/keepers";
+import { roomKeeperDangers } from "../remote/keeperDangerCache";
+import { inKeeperDanger, KEEPER_FLEE_RANGE, SOURCE_KEEPER } from "../remote/keepers";
 import { countStat } from "../utils/stats";
 
 const FLEE_RANGE = 5;

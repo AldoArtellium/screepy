@@ -5,7 +5,7 @@
  */
 
 import { nukeRepairWork } from "../defense/nukes";
-import { buildBody, MoveMode } from "../core/bodyBuilder";
+import { buildBody, MoveMode, spawnEnergyLimit } from "../core/bodyBuilder";
 import { Option } from "../core/options";
 import {
     activeParts,
@@ -39,7 +39,7 @@ import { looterSpawnRole } from "../military/loot";
 import { militarySpawnRole } from "../military/military";
 import { siegeSpawnRole } from "../military/siege";
 import { REMOTE_HARVESTER, REMOTE_HAULER, remoteSpawnRole } from "../remote/remoteSpawnRole";
-import { remoteSources } from "../remote/RemoteMining";
+import { remoteSources, sourceEnergyCapacity } from "../remote/RemoteMining";
 import { dismantlerSpawnRole } from "../remote/dismantle";
 import { ENEMY_STRENGTH_NORMAL, enemyStrength } from "../defense/RoomDefense";
 import { GUARDIAN } from "../roles/guardian";
@@ -218,7 +218,7 @@ const mineralHarvester: SpawnRole = {
             weights: { [CARRY]: 1, [WORK]: 10 },
             moveMode: MoveMode.ROAD,
             carryContentLevel: 0,
-            energyLimit: Math.min(room.energyCapacityAvailable, Math.max(room.energyCapacityAvailable * 0.9, room.energyAvailable))
+            energyLimit: spawnEnergyLimit(room)
         });
     },
 
@@ -460,7 +460,7 @@ function roomIncome(room: Room): number {
     const remotes = remoteSources(room.name);
     if (remotes.length === 0) return local;
     const harvested = Math.min(
-        (remotes.length * SOURCE_ENERGY_CAPACITY) / ENERGY_REGEN_TIME,
+        _.sum(remotes, s => sourceEnergyCapacity(room, s)) / ENERGY_REGEN_TIME,
         activeParts(creepsByRole(room.name, REMOTE_HARVESTER), WORK) * HARVEST_POWER
     );
     const travel = Math.max(1, _.sum(remotes, s => s.travelTime) / remotes.length);
@@ -614,7 +614,7 @@ const helper: SpawnRole = {
             weights: { [CARRY]: 1 },
             partLimits: { [CARRY]: 12 },
             moveMode: MoveMode.ROAD,
-            energyLimit: Math.min(room.energyCapacityAvailable, Math.max(room.energyCapacityAvailable * 0.9, room.energyAvailable))
+            energyLimit: spawnEnergyLimit(room)
         });
     },
 

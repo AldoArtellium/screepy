@@ -46,6 +46,19 @@ export interface DrainForecast {
 export type DrainDecision = "wait" | "spawn" | "noFire" | "noProgress";
 
 /**
+ * A tower refill seen at once from which the drain is hopeless (combat.ts largestRefill): mockup level 1
+ * stronghold W7N4 (2026-11-15), the core refills its tower from empty to 990-1000 every 200-300 ticks; the
+ * quad then held where it could still escape such a refill, short of the core, and retreated at each one
+ * until its members aged. The mockup's player feeder brings 5 at a time.
+ */
+export const BURST_REFILL = 200;
+
+/** The towers are refilled in bursts no drain keeps down */
+export function refillsInBursts(largestRefill: number): boolean {
+    return largestRefill >= BURST_REFILL;
+}
+
+/**
  * The towers' total energy seen now: a new window each RATE_WINDOW ticks, averaged with the last one. After
  * more than SAMPLE_GAP ticks unseen (drainer dead or resting) the window restarts from now: the refills of
  * the gap, with nobody draining, would count against the drain.
@@ -57,6 +70,16 @@ export function sampleEnergy(forecast: DrainForecast | undefined, now: number, e
     const window = (forecast.energy - energy) / (now - forecast.at);
     const rate = forecast.rate === undefined ? window : (forecast.rate + window) / 2;
     return { ...forecast, at: now, energy, seen: now, rate };
+}
+
+/**
+ * A new wait of the quad at the border (first one, or back from a retreat): the patience and the rate
+ * window start over from now. The old rate holds the fight's and the retreat's refills, and a patience
+ * counted from the first probe sample would end the mission on the wait's first tick. The hit counts are
+ * kept: towers that fired at the drainer still do.
+ */
+export function restartPatience(forecast: DrainForecast, now: number, energy: number): DrainForecast {
+    return { ...forecast, since: now, at: now, energy, seen: now, rate: undefined };
 }
 
 /** One tick of the drainer in the target room, hit or not */

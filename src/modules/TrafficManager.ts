@@ -63,10 +63,6 @@ export const EDGE_BOUNCES = 2;
 const IDLE_CACHE_TTL = 500;
 
 class TrafficManager {
-    /** Move requests issued this tick (for stats) */
-    private requestsThisTick = 0;
-    private requestsTick = 0;
-
     /** Stuck tracking per creep (heap only) */
     private stuck: Map<string, StuckState> = new Map();
 
@@ -113,11 +109,6 @@ class TrafficManager {
     ): ScreepsReturnCode {
         if (!creep.pos) return ERR_INVALID_TARGET; // unspawned power creep
         const targetPos = target instanceof RoomPosition ? target : target.pos;
-        if (this.requestsTick !== Game.time) {
-            this.requestsTick = Game.time;
-            this.requestsThisTick = 0;
-        }
-        this.requestsThisTick++;
 
         const range = options.range ?? 1;
         const inRange = creep.pos.roomName === targetPos.roomName && creep.pos.inRangeTo(targetPos, range);
@@ -196,11 +187,6 @@ class TrafficManager {
      * other move, so shoves and swaps still work, but without a path search.
      */
     requestStep(creep: Creep, pos: RoomPosition, priority?: number): ScreepsReturnCode {
-        if (this.requestsTick !== Game.time) {
-            this.requestsTick = Game.time;
-            this.requestsThisTick = 0;
-        }
-        this.requestsThisTick++;
         this.trackStuck(creep, false);
         const p = priority ?? this.getCreepPriority(creep);
         return move(creep, [pos], 101 - Math.min(100, Math.max(0, p)));
@@ -579,23 +565,6 @@ class TrafficManager {
 
         this.idleCandidates.set(room.name, { until: Game.time + jitter(IDLE_CACHE_TTL), positions });
         return positions;
-    }
-
-    /**
-     * Invalidate cached data for a room (call when construction changes)
-     */
-    invalidateRoom(roomName: string): void {
-        this.idleCandidates.delete(roomName);
-    }
-
-    /**
-     * Get stats for dashboard
-     */
-    getStats(): { pathCacheSize: number; requestsThisTick: number } {
-        return {
-            pathCacheSize: 0,
-            requestsThisTick: this.requestsTick === Game.time ? this.requestsThisTick : 0
-        };
     }
 }
 

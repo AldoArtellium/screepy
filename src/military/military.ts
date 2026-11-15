@@ -23,7 +23,7 @@ import { countStat } from "../utils/stats";
 import { BOOST_MARGIN, BoostedEffect } from "./boostNeed";
 import { controllerBlocker, DUO_ATTACKER, DUO_HEALER, DuoMemory, runDuo } from "./duo";
 import { openSiege, runSieges, siegePlan } from "./siege";
-import { hostileRoom, militaryMemory, updateMilitaryIntel } from "./intel";
+import { hostileRoom, militaryMemory, squadBases, squadMinRcl, updateMilitaryIntel } from "./intel";
 import { lootRamparts, startLooting, updateLootMissions } from "./loot";
 import { QUAD_ATTACKER, QUAD_HEALER, QUAD_ROSTER, QuadMemory, runQuad } from "./quad";
 import { DRAINER, drainerCreeps, runDrainers } from "./drainer";
@@ -84,20 +84,15 @@ export function towersRefill(roomName: string): boolean {
     return (intel?.coreLevel ?? 0) > 0 || !!intel?.owner;
 }
 
-function minRcl(): number {
-    return militaryMemory().minRcl ?? 4;
-}
-
 /**
- * Rally room of a mission: the RCL 4+ room with a spawn closest to the target by squad route, and the
+ * Rally room of a mission: the base (intel.ts squadBases) closest to the target by squad route, and the
  * room the squad heals up in before the target. Whether its squad can win is the bases' matter
  * (startMission): shard0 W28N8, W28N7 (RCL 5, no labs) next to it rallies, W29N7 (RCL 6, labs, XLHO2 and
  * GHO2) one more room spawns the boosted members.
  */
 function findOrigin(target: string): { spawnRoom: string; stagingRoom: string; length: number } | null {
     let best: { spawnRoom: string; stagingRoom: string; length: number } | null = null;
-    for (const room of _.filter(Game.rooms, r => !!r.controller?.my && r.controller.level >= minRcl())) {
-        if (room.find(FIND_MY_SPAWNS).length === 0) continue;
+    for (const room of squadBases()) {
         // The squad's own room route (route.ts): the staging room is never another player's room
         const rooms = squadRoute(room.name, target);
         if (!rooms || rooms.length < 2 || rooms.length - 1 > MAX_ROUTE_ROOMS) continue;
@@ -123,7 +118,7 @@ type Mission = DuoMemory | QuadMemory;
 function baseCandidates(rally: string): (BaseCandidate & { home: Room })[] {
     return _.filter(Game.rooms, r => !!r.controller?.my).map(r => {
         const level = r.controller!.level;
-        const rooms = level >= minRcl() ? squadRoute(r.name, rally) : null;
+        const rooms = level >= squadMinRcl() ? squadRoute(r.name, rally) : null;
         return {
             room: r.name,
             route: rooms ? rooms.length - 1 : Infinity,
@@ -149,7 +144,7 @@ function migrateMission(mission: Mission): void {
 function refreshBases(name: string, mission: Mission): void {
     if (Game.time - (mission.basesAt ?? -Infinity) < BASES_REFRESH) return;
     mission.basesAt = Game.time;
-    const bases = colonyBases(mission.energy, minRcl(), baseCandidates(mission.spawnRoom));
+    const bases = colonyBases(mission.energy, squadMinRcl(), baseCandidates(mission.spawnRoom));
     if (_.isEqual(bases, mission.bases)) return;
     log.info("Military", `${name}: bases ${mission.bases.join("+") || "none"} -> ${bases.join("+") || "none"}`);
     mission.bases = bases;
@@ -323,7 +318,7 @@ function startMission(target: string): void {
         plans.set(base.room, plan);
         return plan;
     };
-    const sizing = energyBase(candidates, minRcl(), base => planOf(base).feasible);
+    const sizing = energyBase(candidates, squadMinRcl(), base => planOf(base).feasible);
     let plan: SquadPlan;
     let energy: number;
     if (sizing) {
@@ -338,7 +333,7 @@ function startMission(target: string): void {
         if (memory.targets) memory.targets = memory.targets.filter(t => t.room !== target);
         return;
     }
-    const bases = colonyBases(energy, minRcl(), candidates);
+    const bases = colonyBases(energy, squadMinRcl(), candidates);
     const takeover = takeoverOf(target, bases);
     const base = {
         ...origin,
@@ -459,14 +454,9 @@ function runMilitary(): void {
     updateMilitaryIntel();
     updateLootMissions();
     const memory = militaryMemory();
-    // One target before 2026-11-05: its mission goes on as the first of the list
-    if (memory.target) {
-        memory.targets = [memory.target, ...(memory.targets ?? []).filter(t => t.room !== memory.target!.room)];
-        delete memory.target;
-    }
     if (Game.time % AUTO_TARGET_EVERY === 0) updateAutoTargets();
     runBaits();
-    runNukeStrikes(currentTargets());
+    runNukeStrikes();
     // A target with our nuke in flight: its squad starts so as to arrive around the impact
     for (const target of currentTargets()) if (!hasMission(target) && !missionHeldByNuke(target)) startMission(target);
     for (const { name, mission } of missionsInOrder()) {
@@ -476,24 +466,7 @@ function runMilitary(): void {
 
     for (const name in memory.duos) {
         const duo = memory.duos[name];
-        const upgrade = upgradePlan(duo);
-        if (upgrade) {
-            // The duo was sized on stale intel: the threat seen in the fight calls for a quad
-            delete memory.duos[name];
-            // A quad that doesn't tank the towers probes them with a drainer first, like a new mission
-            const probe = !upgrade.tanks && (hostileRoom(duo.targetRoom)?.towers ?? 1) > 0;
-            const quad: QuadMemory = {
-                ...duo,
-                members: [],
-                state: probe ? "probe" : "forming",
-                ...(probe && { probeSince: Game.time }),
-                boosts: upgrade.compounds,
-                boostLosses: duo.losses
-            };
-            memory.quads = { ...memory.quads, [`quad.${duo.targetRoom}`]: quad };
-            log.info("Military", `${name} lost ${duo.losses} creeps: a quad takes over (boosts ${describeBoosts(upgrade.compounds)})`);
-            continue;
-        }
+        if (upgradeDuo(memory, name, duo)) continue;
         const duoEnd = isNeutralized(duo.targetRoom, duo, duoCreeps(name)) ? "success" : endReason(duo);
         if (duoEnd) finish("duo", name, duo, duoEnd);
         else if (squadsOutForNuke(duo.targetRoom)) continue;
@@ -504,15 +477,12 @@ function runMilitary(): void {
     }
     for (const name in memory.quads ?? {}) {
         const quad = memory.quads![name];
-        // A drain the owner out-refills (quad.ts drain): abandoned, the room left alone FAILURE_MEMORY ticks
         // A safe mode first: the drain it stalls is not a failure (shard0 W25N7 2026-11-14)
         const quadEnd = isNeutralized(quad.targetRoom, quad, quadCreeps(name))
             ? "success"
             : safeModeOn(quad.targetRoom)
               ? "safeMode"
-              : quad.drainStalled
-                ? "abandoned"
-                : endReason(quad);
+              : endReason(quad);
         if (quadEnd) {
             finish("quad", name, quad, quadEnd);
             continue;
@@ -520,24 +490,58 @@ function runMilitary(): void {
         // Our nuke lands soon: the creeps follow the evacuation (CreepRunner), nothing is decided meanwhile
         if (squadsOutForNuke(quad.targetRoom)) continue;
         trackDrainer(name, quad);
-        const decision = runDrainers(name, quad);
-        if (decision === "noFire" || decision === "noProgress") {
-            countStat(`military:drain:${decision}`);
-            const why = decision === "noFire" ? "the towers never fire at the exit tile" : "the refills keep up";
-            log.info("Military", `${name}: ${why}, abandoned before spawning the quad`);
-            finish("quad", name, quad, "abandoned");
-            continue;
-        }
-        if (decision === "spawn") {
-            quad.state = "forming";
-            countStat("military:drainSpawn");
-            const eta = quad.probe?.rate ? Math.round((quad.probeEnergy ?? 0) / quad.probe.rate) : 0;
-            log.info("Military", `${name}: towers at ${quad.probeEnergy ?? 0} energy, empty in ~${eta} ticks: spawning the quad`);
-        }
+        if (decideProbe(name, quad)) continue;
         escalateBoosts("quad", name, quad);
         if (quad.state !== "probe") runQuad(name, quad);
     }
     runSieges();
+}
+
+/**
+ * The duo was sized on stale intel: the threat seen in the fight calls for a quad, which replaces it.
+ * Returns true when the duo was upgraded.
+ */
+function upgradeDuo(memory: NonNullable<Memory["military"]>, name: string, duo: DuoMemory): boolean {
+    const upgrade = upgradePlan(duo);
+    if (!upgrade) return false;
+    delete memory.duos[name];
+    // A quad that doesn't tank the towers probes them with a drainer first, like a new mission
+    const probe = !upgrade.tanks && (hostileRoom(duo.targetRoom)?.towers ?? 1) > 0;
+    const quad: QuadMemory = {
+        ...duo,
+        members: [],
+        state: probe ? "probe" : "forming",
+        ...(probe && { probeSince: Game.time }),
+        boosts: upgrade.compounds,
+        boostLosses: duo.losses
+    };
+    memory.quads = { ...memory.quads, [`quad.${duo.targetRoom}`]: quad };
+    log.info("Military", `${name} lost ${duo.losses} creeps: a quad takes over (boosts ${describeBoosts(upgrade.compounds)})`);
+    return true;
+}
+
+/**
+ * The drainers' decision: a drain the owner out-refills, while probing or while the quad waits at the
+ * border, is abandoned (the room left alone FAILURE_MEMORY ticks); towers predicted empty spawn the
+ * quad. Returns true when the mission was abandoned.
+ */
+function decideProbe(name: string, quad: QuadMemory): boolean {
+    const decision = runDrainers(name, quad);
+    if (decision === "noFire" || decision === "noProgress") {
+        countStat(`military:drain:${decision}`);
+        const why = decision === "noFire" ? "the towers never fire at the exit tile" : "the refills keep up";
+        const when = quad.state === "probe" ? "before spawning the quad" : `with the quad in ${quad.state}`;
+        log.info("Military", `${name}: ${why}, abandoned ${when}`);
+        finish("quad", name, quad, "abandoned");
+        return true;
+    }
+    if (decision === "spawn") {
+        quad.state = "forming";
+        countStat("military:drainSpawn");
+        const eta = quad.probe?.rate ? Math.round((quad.probeEnergy ?? 0) / quad.probe.rate) : 0;
+        log.info("Military", `${name}: towers at ${quad.probeEnergy ?? 0} energy, empty in ~${eta} ticks: spawning the quad`);
+    }
+    return false;
 }
 
 /** A drainer gone before its time is a loss of the mission (MAX_LOSSES, escalation) */
@@ -613,9 +617,15 @@ function offersBoosted(room: Room, mission: Mission, role: string): boolean {
 function missingMember(room: Room): MissingMember | null {
     for (const { kind, name, mission } of missionsInOrder()) {
         if (!mission.bases.includes(room.name)) continue;
-        // One drainer at a time: alone while probing, and replaced while the quad forms (one that dies of
-        // age before the quad gets there would leave the towers to refill)
-        const probing = kind === "quad" && (mission.state === "probe" || (mission.state === "forming" && !!(mission as QuadMemory).probe));
+        // One drainer at a time: alone while probing, replaced while the quad forms or travels after a
+        // probe (one that dies before the quad gets there would leave the towers to refill) and while it
+        // waits at the border (the quad has no other drain: it would wait for good)
+        const state = mission.state;
+        const probing =
+            kind === "quad" &&
+            (state === "probe" ||
+                state === "wait" ||
+                ((state === "forming" || state === "travel") && !!(mission as QuadMemory).probe));
         if (probing) {
             const drainers = drainerCreeps(name).length + claimedRoles(name).filter(r => r === DRAINER).length;
             if (drainers === 0) return { name, role: DRAINER, started: false, type: kind };

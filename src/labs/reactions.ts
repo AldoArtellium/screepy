@@ -6,7 +6,7 @@
  */
 
 import { tickCache } from "../core/roomState";
-import { ENEMY_STRENGTH_NORMAL, enemyStrength, roomThreat } from "../defense/RoomDefense";
+import { ENEMY_STRENGTH_NORMAL, enemyStrength } from "../defense/RoomDefense";
 import { currentTargets } from "../military/military";
 import { log } from "../utils/logger";
 import { countStat } from "../utils/stats";
@@ -29,7 +29,7 @@ declare global {
 
 /**
  * Targets of a room: upgrade compounds first; military ones after them while a player threatened us
- * (room threat, infamy) and automatic attacks are on, before them during an attack mission or with
+ * (room threat) and automatic attacks are on, before them during an attack mission or with
  * NORMAL+ enemies at home. Before (2026-10-25) the military list always came first: shard0 made UH2O,
  * LHO2, GHO2... that nothing used, 20000 ticks without a single boost. Before 2026-11-04 the threat
  * stock was made with `Memory.military.auto = false` too (no squad to use it); without it, the smaller
@@ -65,7 +65,7 @@ export function spareGhodium(room: Room): number {
 function labDemandTargets(room: Room): DemandTarget[] {
     const homeThreat = enemyStrength(room) >= ENEMY_STRENGTH_NORMAL;
     const mission = currentTargets().length > 0;
-    const militaryWanted = Memory.military?.auto !== false && roomThreat(room) > 0;
+    const militaryWanted = Memory.military?.auto !== false && (room.memory.threat ?? 0) > 0;
     const targets = demandTargets(room.controller?.level ?? 0, homeThreat || mission, militaryWanted).map(t =>
         t.kind === "military" && !homeThreat ? { ...t, kind: "offense" as const } : t
     );
