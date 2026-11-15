@@ -7,9 +7,6 @@ export interface Module {
   fn: () => void;
   mandatory?: boolean;
   runEvery?: number;
-  /** Skips (CPU budget) tolerated before the module is forced to run. Defaults to DEFAULT_MAX_SKIPS. */
-  maxSkips?: number;
-  disabled?: boolean;
   /**
    * Bucket throttling (Hivemind process priorities): "always" never throttles; otherwise the
    * module's interval (runEvery, 1 by default) is multiplied as the bucket drains, and the module
@@ -61,29 +58,24 @@ function recordError(name: string, error: unknown) {
 export function runModuleManager(modules: Module[], cpuLimit: number) {
   const start = Game.cpu.getUsed();
 
-  // Find ONE module to force-run (the most starved one past its maxSkips)
+  // Find ONE module to force-run (the most starved one past DEFAULT_MAX_SKIPS)
   let moduleToForce: string | null = null;
   let mostSkips = 0;
   for (const module of modules) {
-    if (module.disabled || module.mandatory) continue;
+    if (module.mandatory) continue;
     const state = getModuleState(module.name);
-    const maxSkips = module.maxSkips ?? DEFAULT_MAX_SKIPS;
-    if (state.consecutiveSkips >= maxSkips && state.consecutiveSkips > mostSkips) {
+    if (state.consecutiveSkips >= DEFAULT_MAX_SKIPS && state.consecutiveSkips > mostSkips) {
       moduleToForce = module.name;
       mostSkips = state.consecutiveSkips;
     }
   }
 
   for (const module of modules) {
-    if (module.disabled) continue;
     const state = getModuleState(module.name);
 
-    // Not due yet
+    // Not due yet (mandatory and "always" modules skip the bucket check, not runEvery)
     if (module.runEvery && state.lastRun + module.runEvery > Game.time) continue;
-    if (!isAllowedByBucket(module, state.lastRun)) {
-      state.throttled = (state.throttled ?? 0) + 1;
-      continue;
-    }
+    if (!isAllowedByBucket(module, state.lastRun)) continue;
 
     const remainingCpu = cpuLimit - (Game.cpu.getUsed() - start);
     const shouldForce = module.name === moduleToForce;

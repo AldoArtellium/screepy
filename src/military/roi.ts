@@ -131,38 +131,11 @@ export function targetValue(parts: { loot: number; remote: number; infamy: numbe
 }
 
 /**
- * Best target by return, at least MIN_ROI; the current one counts CURRENT_BONUS times its return, and is
- * kept whatever its return while `engaged` (its squad has creeps) and still a candidate
- */
-export function pickTarget<T extends { room: string; roi: number }>(
-    candidates: T[],
-    current: string | undefined,
-    engaged = false
-): T | null {
-    // A squad already spawned (or spawning) for the current target keeps it while it is still a candidate
-    // (feasible, no safe mode, not failed): switching recycled it (shard0 W27N5, duo against W29N3)
-    if (engaged) {
-        const kept = candidates.find(c => c.room === current);
-        if (kept) return kept;
-    }
-    let best: T | null = null;
-    let bestScore = 0;
-    for (const candidate of candidates) {
-        if (candidate.roi < MIN_ROI) continue;
-        const score = candidate.room === current ? candidate.roi * CURRENT_BONUS : candidate.roi;
-        if (!best || score > bestScore) {
-            best = candidate;
-            bestScore = score;
-        }
-    }
-    return best;
-}
-
-/**
  * Targets of the simultaneous missions (our design, 2026-11-05: the CPU unlock left ~40 CPU idle while one
  * mission at a time ran): the current targets whose squad has creeps (`engaged`) and are still candidates
  * first, whatever their return, then the others by return (at least MIN_ROI, CURRENT_BONUS for a current
- * one), at most `max`
+ * one), at most `max`. A squad already spawned for a target keeps it while it is still a candidate
+ * (feasible, no safe mode, not failed): switching recycled it (shard0 W27N5, duo against W29N3)
  */
 export function pickTargets<T extends { room: string; roi: number }>(
     candidates: T[],

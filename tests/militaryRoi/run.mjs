@@ -34,7 +34,7 @@ try {
     // Type errors outside these files (global declarations) don't prevent emitting
 }
 
-const { squadCost, remoteValue, lootValue, targetValue, pickTarget, ATTRITION, MIN_ROI, CURRENT_BONUS } = require(join(OUT, "military", "roi.js"));
+const { squadCost, remoteValue, lootValue, targetValue, pickTargets, ATTRITION, MIN_ROI, CURRENT_BONUS } = require(join(OUT, "military", "roi.js"));
 
 let failures = 0;
 const check = (name, ok, detail) => {
@@ -114,16 +114,16 @@ check("CURRENT_BONUS is 1.5", CURRENT_BONUS === 1.5);
 const a = { room: "A", roi: 1.5 };
 const b = { room: "B", roi: 2.0 };
 const c = { room: "C", roi: 2.5 };
-check("nothing pays: no target", pickTarget([{ room: "X", roi: 0.4 }], undefined) === null);
-check("best ROI wins", pickTarget([a, b, c], undefined)?.room === "C");
-check("current kept against a slightly better one", pickTarget([a, b], "A")?.room === "A");
-check("current replaced by a clearly better one", pickTarget([a, c], "A")?.room === "C");
-check("current below MIN_ROI dropped", pickTarget([{ room: "A", roi: 0.8 }], "A") === null);
+check("nothing pays: no target", pickTargets([{ room: "X", roi: 0.4 }], [], [], 1).length === 0);
+check("best ROI wins", pickTargets([a, b, c], [], [], 1)[0]?.room === "C");
+check("current kept against a slightly better one", pickTargets([a, b], ["A"], [], 1)[0]?.room === "A");
+check("current replaced by a clearly better one", pickTargets([a, c], ["A"], [], 1)[0]?.room === "C");
+check("current below MIN_ROI dropped", pickTargets([{ room: "A", roi: 0.8 }], ["A"], [], 1).length === 0);
 // Engaged (squad creeps alive or spawning): kept while still a candidate (shard0 W27N5: a forming duo
 // against W29N3 was recycled when W27N9 scored 6.75)
-check("engaged current kept against a clearly better one", pickTarget([a, c], "A", true)?.room === "A");
-check("engaged current kept below MIN_ROI", pickTarget([{ room: "A", roi: 0.8 }, c], "A", true)?.room === "A");
-check("engaged current no longer a candidate: replaced", pickTarget([b, c], "A", true)?.room === "C");
+check("engaged current kept against a clearly better one", pickTargets([a, c], ["A"], ["A"], 1)[0]?.room === "A");
+check("engaged current kept below MIN_ROI", pickTargets([{ room: "A", roi: 0.8 }, c], ["A"], ["A"], 1)[0]?.room === "A");
+check("engaged current no longer a candidate: replaced", pickTargets([b, c], ["A"], ["A"], 1)[0]?.room === "C");
 
 const { lootersNeeded } = require(join(OUT, "military", "roi.js"));
 
@@ -260,10 +260,9 @@ check("not a room closer to another of their rooms", !releasedRooms("W25N7", "Bl
 check("a stale reservation is not released", releasedRooms("W25N7", "Blindfold", blindfoldRooms.map(r => (r.room === "W24N7" ? { ...r, scouted: T0 - 6000 } : r)), dist, T0).join() === "W25N7");
 
 // Simultaneous missions (2026-11-05): up to `max` targets, engaged ones kept, the rest by return
-const { pickTargets } = require(join(OUT, "military", "roi.js"));
 const rooms = list => list.map(t => t.room).join();
 check("two best by return", rooms(pickTargets([a, b, c], [], [], 2)) === "C,B");
-check("one slot: same as pickTarget", rooms(pickTargets([a, b, c], [], [], 1)) === "C");
+check("one slot: best by return", rooms(pickTargets([a, b, c], [], [], 1)) === "C");
 check("no slot", pickTargets([a, b, c], [], [], 0).length === 0);
 check("below MIN_ROI left out", rooms(pickTargets([{ room: "X", roi: 0.4 }, a], [], [], 2)) === "A");
 check("engaged kept whatever its return", rooms(pickTargets([{ room: "X", roi: 0.4 }, b, c], ["X"], ["X"], 2)) === "X,C");

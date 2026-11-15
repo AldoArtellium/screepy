@@ -9,12 +9,8 @@
  * runtime/make.js saves it in the user document), so after a reset the segments are visible on the
  * first tick and loaded by `segmentsPreTick`. Only the very first tick (segments never requested,
  * or the list changed by someone else) has the one-tick delay: the store is then not `ready`, its
- * `get()` returns the legacy Memory copy (migration) or an empty pending object, and whatever is
- * written there is merged into the segment data once it loads. Writers that must not run on
- * partial data (the planner) check `ready`.
- *
- * Migration: a store with a `legacy` accessor merges the old Memory copy into the segment data
- * when it loads, writes the segment and only then deletes the Memory copy (same tick save).
+ * `get()` returns an empty pending object, and whatever is written there is merged into the segment
+ * data once it loads. Writers that must not run on partial data (the planner) check `ready`.
  */
 
 import { log } from "./logger";
@@ -22,18 +18,10 @@ import { countStat } from "./stats";
 
 const MAX_SEGMENT_LENGTH = 100 * 1024;
 
-interface LegacySource<T> {
-    /** The old Memory copy, undefined once migrated */
-    read(): T | undefined;
-    /** Drops the old Memory copy (after the segment write) */
-    clear(): void;
-}
-
 export class SegmentStore<T extends object> {
     private data: T | undefined;
     private pending: T | undefined;
     private dirty = false;
-    private legacyPending = false;
     /** Write on the next save, whatever the delay */
     private force = false;
     private lastWrite = -Infinity;
@@ -42,8 +30,7 @@ export class SegmentStore<T extends object> {
         readonly name: string,
         readonly ids: number[],
         /** Ticks a change may wait before the segment write (heap keeps the truth meanwhile) */
-        private readonly writeDelay: number,
-        private readonly legacy?: LegacySource<T>
+        private readonly writeDelay: number
     ) {}
 
     /** Segment data loaded: get() returns the full data */
@@ -51,10 +38,10 @@ export class SegmentStore<T extends object> {
         return this.data !== undefined;
     }
 
-    /** The data (mutable: call touch() after a change). Before the load: legacy copy or pending writes */
+    /** The data (mutable: call touch() after a change). Before the load: pending writes */
     get(): T {
         if (this.data) return this.data;
-        this.pending ??= this.legacy?.read() ?? ({} as T);
+        this.pending ??= {} as T;
         return this.pending;
     }
 
@@ -88,14 +75,7 @@ export class SegmentStore<T extends object> {
                 countStat(`segments:corrupt:${this.name}`);
             }
         }
-        const legacy = this.legacy?.read();
-        if (legacy) {
-            Object.assign(data, legacy);
-            this.legacyPending = true;
-            this.touchNow();
-            log.info("Segments", `${this.name}: migrating ${Object.keys(legacy).length} entries from Memory`);
-        }
-        if (this.pending && this.pending !== legacy) {
+        if (this.pending) {
             Object.assign(data, this.pending);
             this.touchNow();
         }
@@ -121,10 +101,6 @@ export class SegmentStore<T extends object> {
             RawMemory.segments[id] = text.slice(i * MAX_SEGMENT_LENGTH, (i + 1) * MAX_SEGMENT_LENGTH);
         });
         countStat(`segments:write:${this.name}`);
-        if (this.legacyPending) {
-            this.legacy?.clear();
-            this.legacyPending = false;
-        }
     }
 }
 
@@ -134,13 +110,8 @@ const stores: SegmentStore<object>[] = [];
  * A store on fixed segment ids (at most 10 active segments for all stores together; ids never
  * shared between stores). The writeDelay keeps frequently touched data from being serialized every tick.
  */
-export function segmentStore<T extends object>(
-    name: string,
-    ids: number[],
-    writeDelay: number,
-    legacy?: LegacySource<T>
-): SegmentStore<T> {
-    const store = new SegmentStore<T>(name, ids, writeDelay, legacy);
+export function segmentStore<T extends object>(name: string, ids: number[], writeDelay: number): SegmentStore<T> {
+    const store = new SegmentStore<T>(name, ids, writeDelay);
     stores.push(store as unknown as SegmentStore<object>);
     return store;
 }

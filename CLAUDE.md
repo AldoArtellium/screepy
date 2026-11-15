@@ -74,7 +74,7 @@ node scripts/shard0-neighbours.mjs --radius 5       # other players around us
 
 ### Game loop (`src/gameLoop.ts`, `src/ModuleManager.ts`)
 
-The ModuleManager runs modules in order with a CPU budget (80% of the limit): `mandatory` modules always run (errors in `Memory.moduleErrors`), others support `runEvery`, `disabled`, `maxSkips` and bucket throttling by `priority` (`always`, `high`, `default`, `low`; `src/utils/throttle.ts`). Per-module CPU in `Memory.moduleState` and the counters `cpu:module:<name>`.
+The ModuleManager runs modules in order with a CPU budget (80% of the limit): `mandatory` modules always run (errors in `Memory.moduleErrors`), others support `runEvery` and bucket throttling by `priority` (the most starved one forced after 10 CPU skips) (`always`, `high`, `default`, `low`; `src/utils/throttle.ts`). Per-module CPU in `Memory.moduleState` and the counters `cpu:module:<name>`.
 
 | Module | Frequency | Role |
 |---|---|---|

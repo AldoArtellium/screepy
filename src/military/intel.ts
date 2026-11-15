@@ -84,8 +84,6 @@ declare global {
              * the target, "max" the strongest in stock (before 2026-10-25), "none" plain bodies
              */
             boosts?: "auto" | "max" | "none";
-            /** Automatic target before 2026-11-05 (one mission at a time): migrated into `targets` */
-            target?: AutoTargetEntry;
             /** Automatic targets of the simultaneous missions, with their strategic reason (targets.ts) */
             targets?: AutoTargetEntry[];
             /** Missions at once, the manual `attack` included (default 2) */

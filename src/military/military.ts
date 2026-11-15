@@ -459,11 +459,6 @@ function runMilitary(): void {
     updateMilitaryIntel();
     updateLootMissions();
     const memory = militaryMemory();
-    // One target before 2026-11-05: its mission goes on as the first of the list
-    if (memory.target) {
-        memory.targets = [memory.target, ...(memory.targets ?? []).filter(t => t.room !== memory.target!.room)];
-        delete memory.target;
-    }
     if (Game.time % AUTO_TARGET_EVERY === 0) updateAutoTargets();
     runBaits();
     runNukeStrikes(currentTargets());

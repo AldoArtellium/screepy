@@ -69,17 +69,11 @@ interface PathCache {
     home?: string;
 }
 
-/** Packed path format (1: "W7N3,12,34;..." strings, migrated on load) */
-const PATHS_VERSION = 2;
-
 declare global {
     interface Memory {
         remoteMining?: {
             /** Selected sources, by key */
             sources: { [key: string]: RemoteSource };
-            /** Legacy: the paths live in segment 5 now (`paths` store below), migrated then deleted */
-            paths?: { [key: string]: PathCache };
-            pathsVersion?: number;
             lastSelect: number;
             /** CPU budget: slow average of the tick CPU, remote rooms allowed empire-wide (none = no cap yet) */
             cpuAvg?: number;
@@ -92,7 +86,7 @@ declare global {
             /** Slow average of the CPU per tick of one mined remote room (its remote roles' CPU and moves) */
             roomCpu?: number;
             /** Sum of the remote roles' CPU counters at the last budget update, and its tick */
-            roleCpu?: { total: number; tick: number; moves?: boolean };
+            roleCpu?: { total: number; tick: number };
             /** Sources a home's spawn can keep harvested (none = no cap yet), by home room */
             sourceCaps?: { [home: string]: { max: number; changed: number } };
             /** Share of the ticks every spawn of a home was spawning or waiting for energy, ~400 ticks average, by home */
@@ -117,48 +111,15 @@ const FAILED_PATH_TTL = 500;
  * RawMemory segment 5 (utils/segments.ts, heap copy). A global reset loses at most 20 ticks of new
  * paths (recomputed).
  */
-const pathStore = segmentStore<{ [key: string]: PathCache }>("remotePaths", [5], 20, {
-    read: () => {
-        const mem = Memory.remoteMining;
-        if (!mem?.paths) return undefined;
-        if (mem.pathsVersion !== PATHS_VERSION) migratePaths(mem);
-        return mem.paths;
-    },
-    clear: () => {
-        if (Memory.remoteMining) delete Memory.remoteMining.paths;
-    }
-});
+const pathStore = segmentStore<{ [key: string]: PathCache }>("remotePaths", [5], 20);
 
 function paths(): { [key: string]: PathCache } {
     return pathStore.get();
 }
 
 function memory(): NonNullable<Memory["remoteMining"]> {
-    Memory.remoteMining ??= { sources: {}, lastSelect: 0, pathsVersion: PATHS_VERSION };
-    const mem = Memory.remoteMining;
-    if (mem.pathsVersion !== PATHS_VERSION) migratePaths(mem);
-    return mem;
-}
-
-/** Version 1 ("W7N3,12,34;..." in paths and again in sources[k].path): repack, drop the duplicates */
-function migratePaths(mem: NonNullable<Memory["remoteMining"]>): void {
-    const legacy = mem.paths ?? {};
-    for (const key in legacy) {
-        const old = legacy[key].path;
-        if (!old) continue;
-        const positions = old.split(";").map(part => {
-            const [roomName, x, y] = part.split(",");
-            return { x: Number(x), y: Number(y), roomName };
-        });
-        legacy[key].path = encodePath(positions);
-    }
-    for (const key in mem.sources) {
-        const source = mem.sources[key] as RemoteSource & { path?: string };
-        delete source.path;
-        // A selected source always has its path
-        if (!legacy[key]?.path) delete mem.sources[key];
-    }
-    mem.pathsVersion = PATHS_VERSION;
+    Memory.remoteMining ??= { sources: {}, lastSelect: 0 };
+    return Memory.remoteMining;
 }
 
 export function sourceKey(room: string, x: number, y: number): string {
@@ -626,11 +587,9 @@ function sampleRoomCpu(currentRooms: number): void {
     if (!counters) return;
     const total = _.sum(REMOTE_CPU_ROLES, role => (counters[`cpu:${role}`] ?? 0) + INTENT_CPU * (counters[`intents:move:${role}`] ?? 0));
     const last = mem.roleCpu;
-    mem.roleCpu = { total, tick: Game.time, moves: true };
-    // A total written before the moves were counted: its average left them out, start both again
-    if (last && !last.moves) delete mem.roomCpu;
+    mem.roleCpu = { total, tick: Game.time };
     // Counters reset (mockup state load): start again from here
-    if (!last?.moves || total < last.total || Game.time <= last.tick || currentRooms === 0) return;
+    if (!last || total < last.total || Game.time <= last.tick || currentRooms === 0) return;
     const ticks = Game.time - last.tick;
     mem.roomCpu = cpuAverage(mem.roomCpu, (total - last.total) / currentRooms, ticks);
 }
@@ -1144,11 +1103,6 @@ export function sourceEnergyCapacity(home: Room, source: RemoteSource): number {
     const keepers = intelManager.getIntel(source.room)?.hasSourceKeepers;
     if (isKeeperOrCenter(source.room, keepers)) return SOURCE_ENERGY_KEEPER_CAPACITY;
     return canReserveFrom(home, source.room) ? SOURCE_ENERGY_CAPACITY : SOURCE_ENERGY_NEUTRAL_CAPACITY;
-}
-
-/** Keeper rooms a home mines (a killer each) */
-export function minedKeeperRooms(homeRoom: string): string[] {
-    return [...new Set(remoteSources(homeRoom).map(s => s.room))].filter(isKeeperRemote);
 }
 
 /**
