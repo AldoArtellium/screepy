@@ -14,7 +14,7 @@ import { energyPrice } from "../modules/MarketManager";
 import {
     BoostedEffect,
     BoostOption,
-    chooseSquad,
+    chooseWithDrain,
     SquadCompounds,
     SquadShape,
     SquadType,
@@ -216,16 +216,7 @@ export function planSquad(
         floor: escalation.floor,
         margin: escalation.margin
     };
-    let choice = chooseSquad(shapes, threat, refills, { ...opts, tank });
-    if (tank && !choice.feasible) {
-        const drained = chooseSquad(
-            shapes.filter(s => s.type === "quad"),
-            threat,
-            false,
-            opts
-        );
-        if (drained.feasible) choice = drained;
-    }
+    const choice = chooseWithDrain(shapes, threat, refills, tank, opts);
     return {
         type: choice.type,
         feasible: choice.feasible,
