@@ -122,6 +122,9 @@ jobs:
       - name: Scouting check
         run: node tests/scouting/run.mjs
 
+      - name: Observer check
+        run: node tests/observer/run.mjs
+
       - name: Room map check
         run: node tests/roomMap/run.mjs
 

@@ -13,6 +13,7 @@ import { marketManagerModule } from "modules/MarketManager";
 import { terminalTransfersModule } from "modules/TerminalTransfers";
 import { memoryCleanupModule } from "modules/MemoryCleanup";
 import { miningStatsModule } from "modules/MiningStats";
+import { observerManagerModule } from "modules/ObserverManager";
 import { roomIntelModule } from "modules/RoomIntel";
 import { scoutManagerModule } from "modules/ScoutManager";
 import { spawnManagerModule } from "modules/SpawnManager";
@@ -54,6 +55,8 @@ export const gameLoop = () => {
     // Link transfers (RCL 5+): source links -> controller link, storage link as buffer
     { name: "Links", fn: linksModule, runEvery: 3, priority: "high" },
     { name: "IntelManager", fn: intelManagerModule },
+    // Observers (RCL 8): one room per tick, recorded by IntelManager the next tick (intel/observerPlan.ts)
+    { name: "Observer", fn: observerManagerModule, priority: "low" },
     { name: "ScoutManager", fn: scoutManagerModule, runEvery: 10, priority: "low" },
     // Remote sources each owned room mines (selection every 20 ticks)
     { name: "RemoteMining", fn: remoteMiningModule, priority: "high" },

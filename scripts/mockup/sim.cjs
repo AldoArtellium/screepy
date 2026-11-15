@@ -233,6 +233,8 @@ const MINERALS = Object.fromEntries(
   })
 );
 const LABS = flag("labs");
+/** With a plan preset at RCL 8: --observer builds the plan's observer at once (ObserverManager tests) */
+const OBSERVER = flag("observer");
 const QUICK_PRESET = PRESET && PRESETS[PRESET] ? PRESET : null;
 const PLAN_PRESET = PRESET && !QUICK_PRESET ? PRESET : null;
 /**
@@ -569,6 +571,11 @@ async function applyPlanPreset(server, user, memory) {
       if (await insert(pos, { type: "lab", hits: 500, hitsMax: 500, mineralAmount: 0, store: { energy: 0 }, storeCapacity: 5000, storeCapacityResource: { energy: 2000 }, cooldown: 0, actionLog: { runReaction: null, reverseReaction: null } })) labs++;
     }
   }
+  let observer = 0;
+  if (OBSERVER && rcl === 8) {
+    const pos = planPositions(plan, "observer")[0];
+    if (pos && (await insert(pos, { type: "observer", hits: 500, hitsMax: 500, observeRoom: null }))) observer++;
+  }
   let ext = 0;
   for (const pos of planPositions(plan, "extension")) {
     if (ext >= counts.extension) break;
@@ -597,7 +604,7 @@ async function applyPlanPreset(server, user, memory) {
     await db["rooms.objects"].insert({ room: ROOM, x: pos.x, y: pos.y, type: "road", hits: 5000, hitsMax: 5000, nextDecayTime: time + 1000 });
     roads++;
   }
-  log(`Preset ${PRESET} at tick ${time}: storage, ${ext} extensions, ${towers} towers, ${ramparts} ramparts, ${roads} roads${LABS ? `, terminal, ${labs} labs` : ""}${Object.keys(MINERALS).length ? `, storage minerals ${JSON.stringify(MINERALS)}` : ""}`);
+  log(`Preset ${PRESET} at tick ${time}: storage, ${ext} extensions, ${towers} towers, ${ramparts} ramparts, ${roads} roads${LABS ? `, terminal, ${labs} labs` : ""}${observer ? ", observer" : ""}${Object.keys(MINERALS).length ? `, storage minerals ${JSON.stringify(MINERALS)}` : ""}`);
   return true;
 }
 let fixtureTerrain = "";

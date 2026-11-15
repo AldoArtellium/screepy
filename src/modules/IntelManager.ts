@@ -140,12 +140,15 @@ class IntelManager {
      */
     getRoomsNeedingScouting(baseRoomName: string, maxDistance: number): string[] {
         const ownershipAge = ownershipRescoutAge(INTEL_EXPIRY.OWNERSHIP, cpuPressure());
-        return roomsInRange(baseRoomName, maxDistance).filter(roomName => {
-            const intel = this.getIntel(roomName);
-            if (!intel?.sources) return true;
-            const age = Game.time - intel.lastScouted;
-            return age >= INTEL_EXPIRY.STRUCTURE || (!!intel.controllerPos && age >= ownershipAge);
-        });
+        return roomsInRange(baseRoomName, maxDistance).filter(roomName => this.needsScouting(roomName, ownershipAge));
+    }
+
+    /** The rule of getRoomsNeedingScouting for one room (ownershipAge: computed once by the caller) */
+    needsScouting(roomName: string, ownershipAge = ownershipRescoutAge(INTEL_EXPIRY.OWNERSHIP, cpuPressure())): boolean {
+        const intel = this.getIntel(roomName);
+        if (!intel?.sources) return true;
+        const age = Game.time - intel.lastScouted;
+        return age >= INTEL_EXPIRY.STRUCTURE || (!!intel.controllerPos && age >= ownershipAge);
     }
 }
 

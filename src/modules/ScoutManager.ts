@@ -13,7 +13,9 @@ import { log } from "../utils/logger";
 import { trafficManager } from "./TrafficManager";
 import { spawnManager } from "./SpawnManager";
 import { registerRole } from "../roles/registry";
-import { ScoutHome, scoutHomeOf } from "../utils/scouting";
+import { ScoutHome, scoutHomeOf, scoutRange } from "../utils/scouting";
+import { coveredByObserver } from "../intel/observerPlan";
+import { ownObservers } from "../intel/observers";
 
 const SCOUT_ROLE = "scout";
 
@@ -24,11 +26,6 @@ const SCOUT_SPAWN_PRIORITY = 1;
 const SCOUT_CONFIG = {
     /** Maximum scouts per owned room */
     MAX_SCOUTS_PER_ROOM: 1,
-    /** Distance to scout from each owned room */
-    SCOUT_RANGE: 3,
-    /** From RCL 4 (expansion): candidates further away (expansion targets beyond 3 rooms score lower) */
-    EXPANSION_SCOUT_RANGE: 5,
-    EXPANSION_RCL: 4,
     /** Minimum RCL to start scouting (remote mining starts at RCL 1, like Hivemind) */
     MIN_RCL: 1,
     /** Ticks between scout spawns */
@@ -45,8 +42,7 @@ class ScoutManager {
     private homesTick = -1;
 
     private scoutRange(roomName: string): number {
-        const level = Game.rooms[roomName]?.controller?.level ?? 0;
-        return level >= SCOUT_CONFIG.EXPANSION_RCL ? SCOUT_CONFIG.EXPANSION_SCOUT_RANGE : SCOUT_CONFIG.SCOUT_RANGE;
+        return scoutRange(Game.rooms[roomName]?.controller?.level ?? 0);
     }
 
     /** Owned rooms that scout, with their range (heap, once per tick) */
@@ -60,14 +56,19 @@ class ScoutManager {
         return this.homesCache;
     }
 
-    /** Rooms this home scouts: those it is the closest scouting home of (utils/scouting.ts), one scout per room */
+    /**
+     * Rooms this home scouts: those it is the closest scouting home of (utils/scouting.ts), one scout per
+     * room, and not within range of one of our observers (ObserverManager observes them)
+     */
     private roomsToScout(homeRoom: string): string[] {
         const homes = this.homes();
         const distance = (a: string, b: string) => Game.map.getRoomLinearDistance(a, b);
+        const observerRooms = ownObservers().map(o => o.room);
         return intelManager
             .getRoomsNeedingScouting(homeRoom, this.scoutRange(homeRoom))
             .filter(r => (this.unreachable.get(r) ?? 0) < Game.time)
-            .filter(r => homes.length <= 1 || scoutHomeOf(r, homes, distance) === homeRoom);
+            .filter(r => homes.length <= 1 || scoutHomeOf(r, homes, distance) === homeRoom)
+            .filter(r => observerRooms.length === 0 || !coveredByObserver(r, observerRooms, distance));
     }
 
     /**
