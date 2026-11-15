@@ -46,6 +46,7 @@ import { chooseAutoTargets, releaseFallen } from "./targets";
 import { militaryCpuAverage, militaryCpuTooHigh } from "./cpuGuard";
 import { decisionBucket } from "../utils/throttle";
 import { refillEngaged } from "./safeMode";
+import { runBaits } from "./bait";
 
 export { militaryMemory } from "./intel";
 
@@ -441,7 +442,8 @@ function updateAutoTargets(): void {
         countStat(`military:target:${auto.reason}`);
         log.info("Military", `Automatic target: ${auto.room} (${auto.reason}, value ${auto.value} for a squad of ${auto.cost} energy)`);
     }
-    const kept = refillEngaged(next, entries, max, hasMission, targetStillHeld);
+    // Only the safe mode releases them here: a room whose last spawn fell still has towers or ramparts to clear
+    const kept = refillEngaged(next, entries, max, hasMission, safeModeOn);
     if (kept.length > 0) memory.targets = kept;
     else delete memory.targets;
 }
@@ -462,6 +464,7 @@ function runMilitary(): void {
         delete memory.target;
     }
     if (Game.time % AUTO_TARGET_EVERY === 0) updateAutoTargets();
+    runBaits();
     for (const target of currentTargets()) if (!hasMission(target)) startMission(target);
     for (const { name, mission } of missionsInOrder()) {
         refreshBases(name, mission);

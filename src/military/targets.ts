@@ -48,6 +48,8 @@ import { marketAverage } from "../modules/MarketManager";
 import { countStat } from "../utils/stats";
 import { BoostDemand, DEMAND_TTL, demandAffordable, demandAmounts, demandState } from "./boostDemand";
 import { siegeEnergy, siegePlan } from "./siege";
+import { baitFailures, setBaitCandidates } from "./bait";
+import { attackMode, safeModePhase } from "./safeMode";
 import { describeBoosts, planSquad, SquadPlan, squadMemberCosts } from "./sizing";
 import { blocksExpansion, isEncroacher, playerReason, spareRemoteRooms, StrategicReason, usableSources } from "./strategy";
 
@@ -190,7 +192,13 @@ function playerCandidate(
     if (militaryMemory().auto === false) return null;
     const owner = intel.owner;
     if (!owner || owner === Memory.username || intel.spawns === 0) return null;
-    if ((intel.safeMode ?? 0) > Game.time) return null;
+    // A safe mode on, or its cooldown ending before a squad could finish (safeMode.ts): back in its window
+    const phase = safeModePhase(intel, Game.time);
+    if (phase === "active" || phase === "closing") {
+        const until = phase === "active" ? `safe mode until ${intel.safeMode}` : `safe mode cooldown ends at ${intel.safeModeCooldown}`;
+        skip(skipped, roomName, until);
+        return null;
+    }
     const aggression = Math.round(militaryMemory().aggression?.[owner] ?? 0);
     const theirRooms = context.counts[owner] ?? 0;
     const stronger = looksStronger(theirRooms, context.ours.length);
@@ -239,6 +247,7 @@ export function rankTargets(engaged: string[] = []): AutoTarget[] {
     const from = origins();
     const targets: AutoTarget[] = [];
     if (from.length === 0) {
+        setBaitCandidates([]);
         delete memory.skipped;
         return targets;
     }
@@ -251,6 +260,8 @@ export function rankTargets(engaged: string[] = []): AutoTarget[] {
     const skipped: { [room: string]: string } = {};
     /** Candidates no origin can fight with its stock (offensive boost demand) */
     const blocked: { room: string; value: number }[] = [];
+    /** Targets worth a squad whose safe mode is armed: baited first */
+    const baitCandidates: AutoTarget[] = [];
     // The siege's claimer comes from the biggest base (siege.ts)
     const biggest = _.max([0, ...from.map(o => o.room.energyCapacityAvailable)]);
     for (const [roomName, intel] of Object.entries(memory.rooms ?? {})) {
@@ -291,8 +302,16 @@ export function rankTargets(engaged: string[] = []): AutoTarget[] {
         const withSiege = siege ? squad + siegeEnergy(siege, biggest) : Infinity;
         const takeover = value / withSiege >= MIN_ROI;
         const cost = Math.round(takeover ? withSiege : squad);
-        targets.push({ room: roomName, reason, roi: value / cost, value: Math.round(value), cost, takeover });
+        const target = { room: roomName, reason, roi: value / cost, value: Math.round(value), cost, takeover };
+        // A player room whose safe mode is armed gets a bait first (bait.ts), unless a squad is already there
+        const mode = attackMode(safeModePhase(intel, Game.time), baitFailures(roomName));
+        if (reason !== "stronghold" && !kept && mode === "bait") {
+            if (target.roi >= MIN_ROI) baitCandidates.push(target);
+            continue;
+        }
+        targets.push(target);
     }
+    setBaitCandidates(_.sortBy(baitCandidates, t => -t.roi).map(t => t.room));
     memory.skipped = skipped;
     updateBoostDemand(from, blocked, targets);
     return targets;

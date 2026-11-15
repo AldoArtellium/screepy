@@ -66,13 +66,14 @@ check("closing: wait", attackMode("closing", 0) === "wait");
 // targets with a mission: the quad poked under safe mode ~310 ticks until watchDrain abandoned it
 const entries = [{ room: "W25N7" }, { room: "W28N8" }];
 const withMission = room => room === "W25N7" || room === "W28N8";
-const safeModed = room => room !== "W25N7";
+const safeModed = room => room === "W25N7";
 const refilled = refillEngaged([], entries, 2, withMission, safeModed).map(e => e.room);
 check("a target under safe mode is not refilled", !refilled.includes("W25N7"), refilled.join(","));
+// W28N8's last spawn fell (no longer a candidate) but its towers stand: its squad stays until the success
 check("a target with a mission and no safe mode is refilled", refilled.includes("W28N8"), refilled.join(","));
-const full = refillEngaged([{ room: "W29N4" }], entries, 1, withMission, () => true).map(e => e.room);
+const full = refillEngaged([{ room: "W29N4" }], entries, 1, withMission, () => false).map(e => e.room);
 check("no refill past max", full.length === 1 && full[0] === "W29N4", full.join(","));
-const noMission = refillEngaged([], entries, 2, () => false, () => true);
+const noMission = refillEngaged([], entries, 2, () => false, () => false);
 check("no refill without a mission", noMission.length === 0);
 
 console.log(failures === 0 ? "\nall checks passed" : `\n${failures} check(s) failed`);

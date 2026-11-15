@@ -90,6 +90,8 @@ declare global {
             takeover?: boolean;
             /** Sieges at once (default 2) */
             maxSieges?: number;
+            /** Safe mode baits per player room: the one under way and the failures (bait.ts) */
+            baits?: { [room: string]: import("./bait").BaitMemory };
             /** Sieges of fallen player rooms' controllers (siege.ts) */
             sieges?: { [room: string]: import("./siege").SiegeMemory };
             /**

@@ -44,21 +44,22 @@ export function attackMode(phase: SafeModePhase, baitFailures: number): AttackMo
 }
 
 /**
- * Engaged targets added back while a slot is free: those with a mission, never one the target check
- * released (`held`: no safe mode, a spawn left). Before, any target with a mission came back, so a
- * safe-moded target kept its quad poking (shard0 W25N7 2026-11-14, ~310 ticks until the drain watch).
+ * Engaged targets added back while a slot is free: those with a mission, never one under safe mode
+ * (`safeModed`). Before, any target with a mission came back, so a safe-moded target kept its quad poking
+ * (shard0 W25N7 2026-11-14, ~310 ticks until the drain watch). A room whose last spawn fell stays: its
+ * towers, loot ramparts or controller blocker are still to clear before the success (military.ts).
  */
 export function refillEngaged<T extends { room: string }>(
     next: T[],
     entries: T[],
     max: number,
     hasMission: (room: string) => boolean,
-    held: (room: string) => boolean
+    safeModed: (room: string) => boolean
 ): T[] {
     const result = [...next];
     for (const entry of entries) {
         if (result.length >= max) break;
-        if (!result.includes(entry) && hasMission(entry.room) && held(entry.room)) result.push(entry);
+        if (!result.includes(entry) && hasMission(entry.room) && !safeModed(entry.room)) result.push(entry);
     }
     return result;
 }

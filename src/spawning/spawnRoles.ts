@@ -33,6 +33,7 @@ import {
     remoteDefenseOptions
 } from "../remote/remoteDefense";
 import { reclaimSpawnRole, squadSpawnRole } from "../expansion/squadSpawnRole";
+import { baitSpawnRole } from "../military/bait";
 import { looterSpawnRole } from "../military/loot";
 import { militarySpawnRole } from "../military/military";
 import { siegeSpawnRole } from "../military/siege";
@@ -726,6 +727,7 @@ function maxEnemyBoostTier(room: Room): number {
 /** Hivemind registration order (alphabetical): it breaks priority/weight ties */
 export const ECONOMY_SPAWN_ROLES: SpawnRole[] = [
     remoteDefense,
+    baitSpawnRole,
     builder,
     dismantlerSpawnRole,
     harvester,
