@@ -24,6 +24,8 @@ import {
     reconcileTraffic
 } from "screeps-cartographer";
 import { resolveTraffic, TrafficCreep } from "../core/traffic";
+import { roomKeeperDangers } from "../remote/keeperDangerCache";
+import { isKeeperOrCenter, safeStepTargets } from "../remote/keepers";
 import { log } from "../utils/logger";
 import { countStat, recordSample } from "../utils/stats";
 import { jitter } from "../utils/jitter";
@@ -82,6 +84,9 @@ class TrafficManager {
     /** Obstacle cost matrix per room (this tick only), see structureMatrix */
     private structureMatrices: Map<string, CostMatrix> = new Map();
     private structureMatricesTick = 0;
+
+    /** Civilians' hits last tick in a keeper room (keeper:damage) */
+    private civilianHits: Map<string, { tick: number; hits: number }> = new Map();
 
     /**
      * Whether a creep's search may cross keeper tiles (cartographer avoids every tile within 5 of a
@@ -379,6 +384,7 @@ class TrafficManager {
                 const room = Game.rooms[roomName];
                 if (!room) continue;
                 try {
+                    if (isKeeperOrCenter(roomName)) this.guardKeeperSteps(room);
                     this.resolveRoom(room);
                 } catch (error) {
                     // the room keeps cartographer's own resolution this tick
@@ -396,6 +402,33 @@ class TrafficManager {
             for (const [name, state] of this.stuck) {
                 if (!Game.creeps[name] || state.tick < Game.time - 10) this.stuck.delete(name);
             }
+            for (const [name, last] of this.civilianHits) if (last.tick < Game.time - 10) this.civilianHits.delete(name);
+        }
+    }
+
+    /**
+     * Civilians (no ATTACK or RANGED_ATTACK part) of a keeper room never step into a keeper's reach of
+     * their own: their move targets inside it are dropped, else they stay put (keepers.ts
+     * safeStepTargets); inside, they keep every target to flee (roles/flee.ts). Counters `keeper:guard`
+     * (moves changed), `keeper:hold` (held in place) and `keeper:damage` (hits civilians lost in the
+     * room; nothing heals them). Armed hostiles measured neutral (docs/decisions/economy.md).
+     */
+    private guardKeeperSteps(room: Room): void {
+        const dangers = roomKeeperDangers(room);
+        const intents = getMoveIntents(room.name);
+        for (const creep of room.find(FIND_MY_CREEPS)) {
+            if (creep.spawning || creep.body.some(p => p.type === ATTACK || p.type === RANGED_ATTACK)) continue;
+            const last = this.civilianHits.get(creep.name);
+            if (last && last.tick === Game.time - 1 && creep.hits < last.hits) countStat("keeper:damage", last.hits - creep.hits);
+            this.civilianHits.set(creep.name, { tick: Game.time, hits: creep.hits });
+            if (dangers.length === 0) continue;
+            const intent = intents.creep.get(creep.id);
+            if (!intent) continue;
+            const safe = safeStepTargets(creep.pos, intent.targets, dangers);
+            if (safe === intent.targets) continue;
+            move(creep, safe, intent.priority);
+            countStat("keeper:guard");
+            if (safe[0].isEqualTo(creep.pos) && !intent.targets[0].isEqualTo(creep.pos)) countStat("keeper:hold");
         }
     }
 
