@@ -98,6 +98,9 @@ jobs:
       - name: Market pricing check
         run: node tests/market/run.mjs
 
+      - name: Factory plan check
+        run: node tests/factory/run.mjs
+
       - name: Expansion mineral value check
         run: node tests/mineralValue/run.mjs
 
