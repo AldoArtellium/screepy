@@ -6,7 +6,9 @@
  * docs/decisions/economy.md.
  */
 
+import { healWounded } from "../core/healing";
 import { followPath, stayInPlace } from "../core/movement";
+import { RANGED_HEAL_RANGE, roamRange } from "../core/patients";
 import { trafficManager } from "../modules/TrafficManager";
 import { isRemoteRoomMined, remotePath, remoteSources } from "../remote/RemoteMining";
 import { keeperTarget } from "../remote/keepers";
@@ -89,6 +91,11 @@ export function runKeeperKiller(creep: Creep): void {
     }
     if (close.length > 0) return;
     const lair = target ? lairs.find(l => l.id === target.id) : undefined;
+    // Idle until the next keeper: heal the harvesters and haulers it hit, back at the lair before it spawns
+    const roam = lair ? roamRange(lair.ticksToSpawn ?? 0) : Infinity;
+    if (roam >= RANGED_HEAL_RANGE) {
+        if (healWounded(creep, { move: true, maxRange: roam })) return;
+    } else healWounded(creep);
     // Waiting at range 3 of the lair: the new keeper is in reach the tick it spawns, out of its melee
     if (lair) trafficManager.requestMove(creep, lair, { range: FIGHT_RANGE, priority: 30 });
     else stayInPlace(creep);
