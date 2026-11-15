@@ -4,7 +4,7 @@
  * Ported from Hivemind (MIT), src/prototype/room.resources.ts, src/room/resource-level-manager.ts and
  * src/empire/funnel-manager.ts. See docs/hivemind/hivemind-endgame.md.
  *
- * Not ported: evacuation and storage/terminal clearing modes, factory bars and batteries, power, ops
+ * Not ported: evacuation and storage/terminal clearing modes, power, ops (factory: resources/factory.ts)
  * and commodities levels.
  */
 
