@@ -1,12 +1,13 @@
 /**
  * Room panel (top left): a two-column table with thin bars - controller progress and ETA, energy,
- * storage, income, CPU, bucket, the most expensive modules (ModuleManager avgCpu); creeps, spawning, the spawn
+ * storage, income, CPU, bucket, the most expensive modules (CPU per tick, ModuleManager); creeps, spawning, the spawn
  * queue (best options of the last evaluation), construction; defense, remotes, expansion, attack.
  * Bars turn orange then red only when something needs attention; empty rows are left out.
  * Controller and income rates come from heap samples taken every SAMPLE_INTERVAL ticks over a 1000-tick sliding window.
  */
 
 import { hasEnemies } from "../core/roomState";
+import { moduleCpuPerTick } from "../ModuleManager";
 import { enemyStrength } from "../defense/RoomDefense";
 import { miningEfficiency } from "../modules/MiningStats";
 import { spawnManager } from "../modules/SpawnManager";
@@ -95,14 +96,17 @@ function moduleName(name: string): string {
     return name.replace(/(Manager|Runner)$/, "") || name;
 }
 
-/** The CPU_TOP modules by recent average CPU per run (ModuleManager avgCpu; per role CPU: Grafana) */
+/** The CPU_TOP modules by recent CPU per tick (ModuleManager moduleCpuPerTick; per role CPU: Grafana) */
 function cpuRows(): Entry[] {
-    const state = Memory.moduleState ?? {};
-    const modules = Object.keys(state)
-        .filter(name => state[name].avgCpu !== undefined)
-        .sort((a, b) => state[b].avgCpu! - state[a].avgCpu!)
+    const perTick: [string, number][] = [];
+    for (const name in Memory.moduleState ?? {}) {
+        const cpu = moduleCpuPerTick(name);
+        if (cpu !== undefined) perTick.push([name, cpu]);
+    }
+    const modules = perTick
+        .sort((a, b) => b[1] - a[1])
         .slice(0, CPU_TOP)
-        .map(name => `${moduleName(name)} ${state[name].avgCpu!.toFixed(1)}`);
+        .map(([name, cpu]) => `${moduleName(name)} ${cpu.toFixed(1)}`);
     return modules.length > 0 ? [{ label: "CPU top", text: modules.join(" · "), color: DIM }] : [];
 }
 

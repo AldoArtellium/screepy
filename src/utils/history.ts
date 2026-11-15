@@ -4,8 +4,8 @@
  *
  * - `history` (segment 6): every SNAPSHOT_INTERVAL elapsed ticks (not `Game.time %`: the module may
  *   be throttled), a snapshot with the delta of every Memory.stats counter since the previous one,
- *   the CPU average then (Memory.stats.cpuAvg), the bucket and, per owned room, RCL, progress, storage + terminal energy,
- *   creeps and the room counters below. Ring of HISTORY_SIZE snapshots.
+ *   the mean and highest tick CPU over the period, the bucket and, per owned room, RCL, progress,
+ *   storage + terminal energy, creeps and the room counters below. Ring of HISTORY_SIZE snapshots.
  * - `historyDetail` (segment 7): the last SPAWN_LOG_SIZE spawns (tick, room, role, priority, weight,
  *   cost, parts, reason) and the remote source balance of each snapshot (energy harvested, delivered
  *   home, spawn cost of the creeps serving it, whether the window is a steady measure of it, its
@@ -43,8 +43,10 @@ interface HistoryEntry {
     d: number;
     /** Ticks covered by the room counters and remote balance when fewer than `d` (global reset) */
     rd?: number;
-    /** Memory.stats.cpuAvg at the snapshot (one decimal), bucket at the snapshot and lowest seen over the period */
+    /** Mean tick CPU over the period (one decimal), bucket at the snapshot and lowest seen over the period */
     cpu: number;
+    /** Highest tick CPU over the period (one decimal; absent in snapshots before 2026-11-15) */
+    cm?: number;
     bk: number;
     bm: number;
     /** Counter deltas (encoded) */
@@ -131,6 +133,9 @@ let lastSourceSample: number | undefined;
 /** Last home of every source seen selected: a source dropped from the selection keeps it in the balance */
 const lastHome = new Map<string, string>();
 let spawnQueue: SpawnLogEntry[] = [];
+let cpuSum = 0;
+let cpuTicks = 0;
+let cpuMax = 0;
 let bucketMin = Infinity;
 
 // --- Counting -------------------------------------------------------------------------------------
@@ -548,7 +553,8 @@ function snapshot(data: HistoryData, detail: HistoryDetail, counters: { [name: s
     const entry: HistoryEntry = {
         t: Game.time,
         d: Game.time - previousTick,
-        cpu: round(Memory.stats?.cpuAvg ?? 0, 1),
+        cpu: round(cpuTicks > 0 ? cpuSum / cpuTicks : Memory.stats?.cpuAvg ?? 0, 1),
+        cm: round(cpuTicks > 0 ? cpuMax : Memory.stats?.cpuAvg ?? 0, 1),
         bk: Game.cpu.bucket,
         bm: Math.min(bucketMin, Game.cpu.bucket),
         c: "",
@@ -589,12 +595,21 @@ function resetAccumulators(): void {
     roomAcc = {};
     sourceAcc = {};
     sourceSamples = {};
+    cpuSum = 0;
+    cpuTicks = 0;
+    cpuMax = 0;
     bucketMin = Infinity;
 }
 
 export const historyModule = (): void => {
     accSince ??= Game.time;
+    // CPU of the previous tick (recorded at the end of the loop) and the bucket
     const stats = Memory.stats;
+    if (stats && stats.tick === Game.time - 1) {
+        cpuSum += stats.cpu;
+        cpuTicks++;
+        cpuMax = Math.max(cpuMax, stats.cpu);
+    }
     bucketMin = Math.min(bucketMin, Game.cpu.bucket);
     if (lastSourceSample === undefined || Game.time - lastSourceSample >= SOURCE_SAMPLE_INTERVAL) {
         lastSourceSample = Game.time;
@@ -638,6 +653,8 @@ export interface HistoryWindow {
     rooms: { [room: string]: { rcl: number; progress: number; energy: number } };
     /** Lowest bucket over the window */
     bucketMin: number;
+    /** Mean and highest tick CPU over the window (snapshots and current period); undefined before any sample */
+    cpu?: { mean: number; max: number };
 }
 
 /**
@@ -655,9 +672,16 @@ export function historyWindow(since: number): HistoryWindow | undefined {
     const start = base?.t ?? data.t;
     const counters = counterDeltas(decode(data.b, data.k), Memory.stats?.counters ?? {});
     let lowest = Math.min(bucketMin, Game.cpu.bucket);
+    // CPU: snapshot means weighted by their ticks, plus the current period's sampled ticks
+    let cpuTotal = cpuSum;
+    let cpuWeight = cpuTicks;
+    let highest = cpuMax;
     for (const entry of data.e) {
         if (entry.t <= start) continue;
         lowest = Math.min(lowest, entry.bm);
+        cpuTotal += entry.cpu * entry.d;
+        cpuWeight += entry.d;
+        highest = Math.max(highest, entry.cm ?? entry.cpu);
         const deltas = decode(entry.c, data.k);
         for (const key in deltas) counters[key] = (counters[key] ?? 0) + deltas[key];
     }
@@ -666,7 +690,8 @@ export function historyWindow(since: number): HistoryWindow | undefined {
         const { rcl, progress, energy } = decodeRoom(base!.r[room], data.rk);
         if (rcl > 0) rooms[room] = { rcl, progress, energy };
     }
-    return { start, counters, rooms, bucketMin: lowest };
+    const cpu = cpuWeight > 0 ? { mean: cpuTotal / cpuWeight, max: highest } : undefined;
+    return { start, counters, rooms, bucketMin: lowest, cpu };
 }
 
 /**

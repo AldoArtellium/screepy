@@ -129,7 +129,6 @@ function groupOptions(home: Room): DefenseOption[] {
     return options;
 }
 
-
 /**
  * A mini brawler against the unarmed creeps (harvesters, reservers, haulers) of the player whose remote
  * we seized (remoteSeize.ts): RoomIntel leaves WORK / CARRY creeps out of the room's threat abroad and

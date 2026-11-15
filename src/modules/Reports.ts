@@ -9,9 +9,9 @@
  *
  * Settings: `Memory.reports = false` (or `{ enabled: false }`) turns everything off;
  * `Memory.reports = { interval: 500, alerts: false }` changes the interval, turns the alerts off.
- * Counters, room states and the lowest bucket come from the history (utils/history.ts
- * historyWindow: from the last snapshot at or before the previous report), the CPU from
- * Memory.stats.cpuAvg; `Memory.reportState` only keeps the report tick, the GCL then and the alerts.
+ * Counters, room states, the CPU and the lowest bucket come from the history (utils/history.ts
+ * historyWindow: from the last snapshot at or before the previous report); `Memory.reportState`
+ * only keeps the report tick, the GCL then and the alerts.
  */
 import { STARVED_TICKS } from "../remote/RemoteMining";
 import { rate, short } from "../utils/format";
@@ -171,11 +171,13 @@ function incomeLines(context: ReportContext): string[] {
     return lines;
 }
 
-/** CPU average (Memory.stats.cpuAvg), bucket, global resets */
+/** Mean and highest tick CPU over the history window, bucket, global resets */
 function cpuLine(context: ReportContext): string {
     const resets = counter(context, "globalReset");
+    const cpu = context.window.cpu;
+    const usage = cpu ? `${cpu.mean.toFixed(1)} avg, ${cpu.max.toFixed(1)} max` : "n/a";
     return (
-        `CPU ${(Memory.stats?.cpuAvg ?? 0).toFixed(1)} avg / ${Game.cpu.limit} | bucket min ${context.window.bucketMin}, now ${Game.cpu.bucket}` +
+        `CPU ${usage} / ${Game.cpu.limit} | bucket min ${context.window.bucketMin}, now ${Game.cpu.bucket}` +
         (resets > 0 ? ` | ${resets} global reset${resets > 1 ? "s" : ""}` : "")
     );
 }
@@ -282,7 +284,8 @@ export function buildReport(state: ReportState, window: HistoryWindow): string {
         ticks: Math.max(1, Game.time - state.time),
         windowTicks: Math.max(1, Game.time - window.start)
     };
-    const header = `Report tick ${Game.time} (last ${context.ticks} ticks` + (window.start !== state.time ? `, history since ${window.start})` : ")");
+    // Rates since the last report (GCL), the rest over the history window (from its snapshot at or before the last report)
+    const header = `Report tick ${Game.time} (last report ${context.ticks} ticks ago, history since tick ${window.start})`;
     return [
         header,
         gclLine(context),

@@ -28,6 +28,7 @@ import {
     INTENT_CPU,
     cpuAverage,
     escortShare,
+    remoteCapacity,
     reserverCost,
     roomEnergyPerCreep,
     SourceCrew,
@@ -1133,14 +1134,11 @@ export function canReserveFrom(home: Room, remoteRoom: string): boolean {
     return home.energyCapacityAvailable >= (positions > 1 ? 650 : 1300);
 }
 
-/**
- * Energy per regeneration of a remote room's sources, as the selection prices them: 4000 in keeper
- * rooms and sector centers (no controller to reserve), 3000 when a reserver can be spawned, else 1500
- */
+/** Energy per regeneration of a remote room's sources, as the selection prices them (remoteIncome.ts remoteCapacity) */
 export function remoteSourceCapacity(home: Room, roomName: string): number {
     const keepers = intelManager.getIntel(roomName)?.hasSourceKeepers;
-    if (isKeeperOrCenter(roomName, keepers)) return SOURCE_ENERGY_KEEPER_CAPACITY;
-    return canReserveFrom(home, roomName) ? SOURCE_ENERGY_CAPACITY : SOURCE_ENERGY_NEUTRAL_CAPACITY;
+    if (isKeeperOrCenter(roomName, keepers)) return remoteCapacity(true, false);
+    return remoteCapacity(false, canReserveFrom(home, roomName));
 }
 
 export function sourceEnergyCapacity(home: Room, source: RemoteSource): number {

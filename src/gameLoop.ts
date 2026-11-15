@@ -78,7 +78,7 @@ export const gameLoop = () => {
     { name: "MiningStats", fn: miningStatsModule },
     // Every tick (a skipped tick blanks the visuals); the module throttles its own redraws
     { name: "RoomVisuals", fn: roomVisualsModule, priority: "always" },
-    // Periodic report (Game.notify, Memory.reports) and immediate alerts; samples CPU and bucket every tick
+    // Periodic report (Game.notify, Memory.reports) and immediate alerts; reads the history (no sampling of its own)
     { name: "Reports", fn: reportsModule, priority: "always" },
     // Counter history, room counters, spawn log, remote balance (segments 6-7, utils/history.ts); every tick, snapshot every 1000 ticks
     { name: "History", fn: historyModule, priority: "always" },

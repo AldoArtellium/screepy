@@ -46,7 +46,7 @@ export function runRemoteDefender(creep: Creep): void {
 
     const inTarget = creep.room.name === targetRoom;
     const hostiles = creep.room.find(FIND_HOSTILE_CREEPS, {
-        filter: c => c.owner.username !== SOURCE_KEEPER &&(inTarget || c.pos.inRangeTo(creep, ENGAGE_RANGE))
+        filter: c => c.owner.username !== SOURCE_KEEPER && (inTarget || c.pos.inRangeTo(creep, ENGAGE_RANGE))
     });
     const enemy = creep.pos.findClosestByRange(hostiles);
     if ((!enemy || !enemy.pos.inRangeTo(creep, ENGAGE_RANGE)) && regroup(creep)) return;

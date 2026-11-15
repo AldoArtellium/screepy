@@ -35,7 +35,6 @@ export interface ContestEntry {
 /** Ticks a contested room stays blocked after the last sighting (jittered +-10% by the caller) */
 export const CONTEST_TTL = 20000;
 
-
 function isPlayer(username: string | undefined, me: string | undefined): username is string {
     return !!username && username !== me && !NPC_OWNERS.includes(username);
 }

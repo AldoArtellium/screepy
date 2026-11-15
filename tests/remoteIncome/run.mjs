@@ -135,8 +135,10 @@ check("next: no progress total", !preparesNextExpansion({ ...gcl6, progress: 5, 
 
 // Source keeper sources (2026-11-14, spec sk-mining): 4000 per 300 ticks, no reserver, the room's killer
 // (a ranged killer, RANGED12 HEAL5 MOVE17 at least: 3900 energy per 1500 ticks) shared between the room's mined sources
-const { keeperGeneration, escortShare, worthMining, MIN_SOURCE_NET, KEEPER_KILLER_COST } = require(join(OUT, "remote", "remoteIncome.js"));
+const { remoteCapacity, escortShare, worthMining, MIN_SOURCE_NET, KEEPER_KILLER_COST } = require(join(OUT, "remote", "remoteIncome.js"));
+const keeperGeneration = () => remoteCapacity(true, false) / 300;
 check("keeper sources yield 4000 / 300", Math.abs(keeperGeneration() - 4000 / 300) < 1e-9);
+check("reserved 3000, neutral 1500", remoteCapacity(false, true) === 3000 && remoteCapacity(false, false) === 1500);
 check("the least killer costs 3900", KEEPER_KILLER_COST === 3900);
 check("one killer for 3 sources: a third each", Math.abs(escortShare(4270, 3) - 4270 / 1500 / 3) < 1e-9);
 check("no source: the whole killer", Math.abs(escortShare(4270, 0) - 4270 / 1500) < 1e-9);

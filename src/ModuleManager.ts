@@ -40,6 +40,20 @@ const DEFAULT_MAX_SKIPS = 10;
 /** Max errors kept in Memory.moduleErrors */
 const MAX_ERRORS = 20;
 
+/** Nominal interval of each module (runEvery, 1 by default), refreshed by runModuleManager */
+const runIntervals = new Map<string, number>();
+
+/**
+ * Recent CPU per tick of a module: its average per run (avgCpu) spread over its nominal interval,
+ * so a module running every N ticks is not N times more expensive than one running every tick.
+ * Bucket throttling stretches the interval further: this is an upper bound then.
+ */
+export function moduleCpuPerTick(name: string): number | undefined {
+  const avgCpu = Memory.moduleState?.[name]?.avgCpu;
+  if (avgCpu === undefined) return undefined;
+  return avgCpu / (runIntervals.get(name) ?? 1);
+}
+
 function getModuleState(name: string): ModuleState {
   if (!Memory.moduleState) Memory.moduleState = {};
   if (!Memory.moduleState[name]) {
@@ -72,6 +86,7 @@ export function runModuleManager(modules: Module[], cpuLimit: number) {
 
   for (const module of modules) {
     const state = getModuleState(module.name);
+    runIntervals.set(module.name, module.runEvery ?? 1);
 
     // Not due yet (mandatory and "always" modules skip the bucket check, not runEvery)
     if (module.runEvery && state.lastRun + module.runEvery > Game.time) continue;
