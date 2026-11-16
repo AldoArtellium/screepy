@@ -33,7 +33,7 @@ try {
     // Type errors outside these files (global declarations) don't prevent emitting
 }
 
-const { measuredNet, unsteadyNet, updateExclusions, BALANCE_WINDOWS, UNSTEADY_WINDOWS, EXCLUDE_TICKS, MIN_NET_PER_1000 } = require(
+const { measuredNet, unsteadyNet, updateExclusions, BALANCE_WINDOWS, UNSTEADY_WINDOWS, EXCLUDE_TICKS, MIN_NET_PER_1000, HAULED_SHARE, roomMeasuredNet } = require(
     join(OUT, "remote", "remoteBalance.js")
 );
 const { steadyWindow, windowFlags, decodeBalance, WINDOW_FULL, WINDOW_THREAT, WINDOW_BUILDING } = require(join(OUT, "utils", "history.js"));
@@ -93,6 +93,28 @@ check(`net below ${MIN_NET_PER_1000}/1000 -> excluded`, added.length === 1);
 excluded = {};
 added = updateExclusions(excluded, windows([2000, 3500], [2000, 800], [2000, 900]), 5000);
 check("one costly window among paying ones -> kept (sum over the windows)", added.length === 0);
+
+// shard0 2026-11-16 W24N7:18:19 (home W24N8): harvest as before, the hauler pool gone to keeper room
+// W24N6; windows 79077379-79079379 decoded from the history ([harvested, delivered, cost])
+const starved = [[10104, 0, 3549], [10116, 1550, 9917], [9792, 4650, 2500]].map(([harvested, delivered, cost], i) => ({
+    tick: 79077379 + 1000 * i,
+    ticks: 1000,
+    sources: { [KEY]: { harvested, delivered, cost, steady: true, home: HOME } }
+}));
+excluded = {};
+added = updateExclusions(excluded, starved, 79079393);
+check("hauling-starved windows (W24N7) -> not judged, kept", added.length === 0 && measuredNet(starved, KEY) === undefined);
+const hauled = starved.map(w => ({ ...w, sources: { [KEY]: { ...w.sources[KEY], delivered: w.sources[KEY].harvested * HAULED_SHARE } } }));
+check(`delivering ${HAULED_SHARE} of the harvest -> judged`, measuredNet(hauled, KEY) !== undefined);
+
+// Room net for the seize ranking: every window with the room's sources, other rooms ignored
+const mixed = [
+    { tick: 1000, ticks: 1000, sources: { "W24N7:18:19": { harvested: 9600, delivered: 8700, cost: 2700, steady: true, home: "W24N8" } } },
+    { tick: 2000, ticks: 1000, sources: { "W24N6:6:11": { harvested: 3000, delivered: 0, cost: 5000, steady: false, home: "W24N8" } } },
+    { tick: 3000, ticks: 1000, sources: { "W24N7:18:19": { harvested: 9600, delivered: 0, cost: 3500, steady: true, home: "W24N8" } } }
+];
+check("room net over the windows that have it", roomMeasuredNet(mixed, "W24N7") === 1250, String(roomMeasuredNet(mixed, "W24N7")));
+check("room never mined -> undefined", roomMeasuredNet(mixed, "W25N7") === undefined);
 
 // Not enough data
 const cases = [

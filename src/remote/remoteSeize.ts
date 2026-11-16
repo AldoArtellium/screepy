@@ -13,7 +13,9 @@ import { AGGRESSION_HOSTILE } from "../military/playerThreat";
 import { intelManager } from "../modules/IntelManager";
 import { log } from "../utils/logger";
 import { isKeeperRoom } from "../utils/rooms";
+import { remoteBalanceWindows } from "../utils/history";
 import { countStat } from "../utils/stats";
+import { roomMeasuredNet } from "./remoteBalance";
 import { isContested, pickSeizes, SEIZE_FAILURE_MEMORY, SEIZE_TTL, SeizeFacts, seizeCandidate, seizeStatus } from "./remoteRooms";
 
 declare global {
@@ -45,6 +47,12 @@ function defendingRooms(): string[] {
 /** Other players' remotes in the static intel and the contests, with the facts the rule needs */
 function candidates(homes: string[]): SeizeFacts[] {
     const aggression = Memory.military?.aggression ?? {};
+    const windows = remoteBalanceWindows();
+    const excludedRooms = new Set(
+        Object.entries(Memory.remoteExcluded ?? {})
+            .filter(([, e]) => e.until > Game.time)
+            .map(([key]) => key.split(":")[0])
+    );
     const players: { [room: string]: string } = {};
     for (const [room, intel] of Object.entries(intelManager.allIntel()))
         if (!intel.owner && intel.reserver && intel.reserver !== Memory.username) players[room] = intel.reserver;
@@ -63,7 +71,9 @@ function candidates(homes: string[]): SeizeFacts[] {
             distance,
             keeper: isKeeperRoom(room) || !!intel?.hasSourceKeepers,
             owned: !!intel?.owner,
-            failedAt: Memory.remoteSeizeFailed?.[room]
+            failedAt: Memory.remoteSeizeFailed?.[room],
+            excluded: excludedRooms.has(room),
+            measuredNet: roomMeasuredNet(windows, room)
         };
         if (seizeCandidate(facts, Game.time, AGGRESSION_HOSTILE)) result.push(facts);
     }

@@ -122,24 +122,36 @@ export interface SeizeFacts {
     owned: boolean;
     /** Tick of the last lost seize of the room */
     failedAt?: number;
+    /**
+     * A source of the room is left out by its measured balance (remoteBalance.ts): the selection
+     * would not mine it, the seize would end unused and the room be left alone SEIZE_FAILURE_MEMORY
+     */
+    excluded?: boolean;
+    /** Net energy per 1000 ticks the history measured while we mined the room (remoteBalance.ts roomMeasuredNet) */
+    measuredNet?: number;
 }
 
 /** Another player's remote we may take: a player, not fighting us, a minable room within reach */
 export function seizeCandidate(facts: SeizeFacts, now: number, hostileThreshold: number): boolean {
     if (NPC_OWNERS.includes(facts.player)) return false;
-    if (facts.owned || facts.keeper || facts.sources <= 0) return false;
+    if (facts.owned || facts.keeper || facts.sources <= 0 || facts.excluded) return false;
     if (facts.distance > SEIZE_RANGE) return false;
     if (facts.aggression >= hostileThreshold) return false;
     return facts.failedAt === undefined || now - facts.failedAt >= SEIZE_FAILURE_MEMORY;
 }
 
-/** New seizes within the cap: most sources first, then the closest (candidates already filtered) */
+/**
+ * New seizes within the cap (candidates already filtered): a room we mined at a measured profit
+ * first (shard0 2026-11-16: W24N7, +5k per 1000 ticks for W24N8 before Blindfold took it back,
+ * ranked behind any unknown 2-source room), then most sources, then the closest
+ */
 export function pickSeizes(candidates: SeizeFacts[], active: string[], max: number): string[] {
     const free = max - active.length;
     if (free <= 0) return [];
+    const paid = (c: SeizeFacts) => ((c.measuredNet ?? 0) > 0 ? 1 : 0);
     return candidates
         .filter(c => !active.includes(c.room))
-        .sort((a, b) => b.sources - a.sources || a.distance - b.distance)
+        .sort((a, b) => paid(b) - paid(a) || b.sources - a.sources || a.distance - b.distance)
         .slice(0, free)
         .map(c => c.room);
 }

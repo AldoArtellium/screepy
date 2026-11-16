@@ -24,6 +24,13 @@
  * is left alone), and their cumulative net (delivered - cost) is negative, the source gets the same
  * exclusion, with reason "unsteady". Windows written before the flags existed never count.
  *
+ * Hauling-starved windows are no measure of the source (shard0 2026-11-16, W24N7:18:19, home W24N8):
+ * the home started mining keeper room W24N6, the shared hauler pool went for its piles, and W24N7
+ * harvested ~10k per window as before while delivering 0, 1.5k and 4.7k (8.7k before), so it was
+ * excluded at net -3255; its reservation lapsed and Blindfold took the room back. A window that
+ * delivers less than HAULED_SHARE of what it harvested is a hauling shortage of the home: the first
+ * rule does not judge the source over it.
+ *
  * Caveat: only the remote harvester's cost is exact; haulers', remote builders' (shared out over the
  * home's sources with a remote harvester by travel time) and reservers' (over the room's sources)
  * are estimates.
@@ -40,6 +47,8 @@ export const MIN_NET_PER_1000 = 100;
 export const EXCLUDE_TICKS = 20000;
 /** Full, never steady windows the second rule needs */
 export const UNSTEADY_WINDOWS = 3;
+/** Share of the harvested energy below which a window's delivery is a hauling shortage, not a measure */
+export const HAULED_SHARE = 0.5;
 
 export interface Exclusion {
     /** Home room the source lost energy for (other homes may still select it) */
@@ -62,7 +71,8 @@ declare global {
 
 /**
  * Net energy per 1000 ticks of a source over the last BALANCE_WINDOWS windows, when every one of
- * them is a steady measure with the same home; undefined when there is not enough data.
+ * them is a steady measure with the same home and none is hauling-starved (HAULED_SHARE); undefined
+ * when there is not enough data.
  */
 export function measuredNet(windows: BalanceWindow[], key: string): { net: number; home: string } | undefined {
     if (windows.length < BALANCE_WINDOWS) return undefined;
@@ -74,6 +84,7 @@ export function measuredNet(windows: BalanceWindow[], key: string): { net: numbe
     for (const window of last) {
         const balance = window.sources[key];
         if (!balance || !balance.steady || balance.home !== home) return undefined;
+        if (balance.delivered < balance.harvested * HAULED_SHARE) return undefined;
         net += balance.delivered - balance.cost;
         ticks += window.ticks;
     }
@@ -100,6 +111,23 @@ export function unsteadyNet(windows: BalanceWindow[], key: string): { net: numbe
         ticks += window.ticks;
     }
     return ticks > 0 ? { net: (net * 1000) / ticks, home } : undefined;
+}
+
+/**
+ * Net energy per 1000 ticks of a room's sources over every window that has them (delivered - cost,
+ * steady or not), undefined when the history never had them: what mining the room paid us
+ * (remoteSeize.ts ranks the rooms to seize again with it)
+ */
+export function roomMeasuredNet(windows: BalanceWindow[], room: string): number | undefined {
+    let net = 0;
+    let ticks = 0;
+    for (const window of windows) {
+        const keys = Object.keys(window.sources).filter(key => key.startsWith(`${room}:`));
+        if (keys.length === 0) continue;
+        for (const key of keys) net += window.sources[key].delivered - window.sources[key].cost;
+        ticks += window.ticks;
+    }
+    return ticks > 0 ? (net * 1000) / ticks : undefined;
 }
 
 /**

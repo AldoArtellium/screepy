@@ -122,6 +122,7 @@ check("not out of reach", !seizeCandidate({ ...facts, distance: 3 }, 30000, 300)
 check("not an invader reservation", !seizeCandidate({ ...facts, player: "Invader" }, 30000, 300));
 check("not soon after a lost seize", !seizeCandidate({ ...facts, failedAt: 25000 }, 30000, 300));
 check("again long after a lost seize", seizeCandidate({ ...facts, failedAt: 1000 }, 30000, 300));
+check("not while a source of the room is excluded (the seize would end unused)", !seizeCandidate({ ...facts, excluded: true }, 30000, 300));
 
 const cands = [
     { ...facts, room: "W27N7", sources: 1, distance: 1 },
@@ -132,6 +133,10 @@ check("most sources first, then closest", JSON.stringify(pickSeizes(cands, [], 2
 check("active seizes count against the cap", JSON.stringify(pickSeizes(cands, ["W24N7"], 2)) === JSON.stringify(["W27N8"]));
 check("an active seize is not picked again", JSON.stringify(pickSeizes(cands, ["W27N8"], 3)) === JSON.stringify(["W28N4", "W27N7"]));
 check("cap reached", pickSeizes(cands, ["A", "B"], 2).length === 0);
+// shard0 2026-11-16: W24N7 (1 source, +1306/1000 measured for W24N8) ranked behind unknown 2-source rooms
+const withPaid = [...cands, { ...facts, room: "W24N7", player: "Blindfold", sources: 1, distance: 1, measuredNet: 1306 }];
+check("a room mined at a profit first", pickSeizes(withPaid, [], 1)[0] === "W24N7");
+check("a room mined at a loss is not preferred", pickSeizes([...cands, { ...withPaid[3], measuredNet: -500 }], [], 1)[0] === "W27N8");
 
 check("held while mined and quiet", seizeStatus({ aggression: 0, threshold: 300, since: 1000, now: 9000, mined: true }) === "hold");
 check("held while the selection may still pick it", seizeStatus({ aggression: 0, threshold: 300, since: 1000, now: 1000 + SEIZE_SELECT_GRACE - 1, mined: false }) === "hold");
