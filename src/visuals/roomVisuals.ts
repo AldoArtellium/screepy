@@ -1,7 +1,8 @@
 /**
  * RoomVisuals - draws on every owned room: the unbuilt part of the plan (refreshed every
  * PLAN_INTERVAL ticks or when the plan changes), the economy / room info panel (every
- * panelInterval() ticks) and the spawn overlay (every tick); on the world map the remote mining and
+ * panelInterval() ticks) and the spawn overlay (every tick); the squad overlay wherever our squads stand
+ * (every tick, `squadVisual.ts`); on the world map the remote mining and
  * strategy layers (every mapInterval() ticks). Cached layers are kept in the heap as exports and
  * imported on the other ticks, so a tick costs one import per layer. `Memory.visuals = false` turns
  * it off, `Memory.visuals = { mapRemotes: false, ... }` single layers (`settings.ts`). The map texts go
@@ -27,6 +28,7 @@ import { drawPanel, sampleIncome } from "./panel";
 import { drawPlan } from "./planVisual";
 import { layerEnabled, mapInterval, panelInterval, visualsEnabled } from "./settings";
 import { drawSpawns } from "./spawnVisual";
+import { drawSquads } from "./squadVisual";
 
 const PLAN_INTERVAL = 100;
 /** Below this bucket the layers are no longer redrawn (kept as they are) */
@@ -138,5 +140,6 @@ export const roomVisualsModule = (): void => {
     }
     // Rooms lost or no longer visible
     for (const name of cache.keys()) if (!Game.rooms[name]?.controller?.my) cache.delete(name);
+    if (layerEnabled("squads")) drawSquads();
     drawMap();
 };

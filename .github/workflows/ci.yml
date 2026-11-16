@@ -50,6 +50,9 @@ jobs:
       - name: Visuals check
         run: node tests/visuals/run.mjs
 
+      - name: Military visuals check
+        run: node tests/militaryVisuals/run.mjs
+
       - name: Remote balance check
         run: node tests/remoteBalance/run.mjs
 

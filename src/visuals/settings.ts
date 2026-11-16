@@ -18,6 +18,7 @@ export type VisualLayer =
     | "panel"
     | "plan"
     | "spawn"
+    | "squads"
     | "mapRemotes"
     | "mapStrategy"
     | "mapCreeps"

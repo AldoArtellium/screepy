@@ -71,7 +71,7 @@ check("above 85% CPU: explicit settings win", ["plan", "mapCreeps"].map(layerEna
 
 memory({ maxRooms: 6 });
 check("capped: remote, strategy and threat map layers stay on", MAP_LAYERS.map(layerEnabled), [true, true, true]);
-check("capped: map panel, room panel and spawn overlay stay on", ["mapPanel", "panel", "spawn"].map(layerEnabled), [true, true, true]);
+check("capped: map panel, room panel, spawn and squad overlays stay on", ["mapPanel", "panel", "spawn", "squads"].map(layerEnabled), [true, true, true, true]);
 check("capped: plan overlay and map creeps off", ["plan", "mapCreeps"].map(layerEnabled), [false, false]);
 check("capped: map redrawn every 200 ticks", typeof mapInterval === "function" ? mapInterval() : undefined, 200);
 check("capped: panel redrawn every 20 ticks", typeof panelInterval === "function" ? panelInterval() : undefined, 20);
