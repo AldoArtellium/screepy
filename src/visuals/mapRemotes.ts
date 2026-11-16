@@ -7,10 +7,11 @@
  * WAITING_TICKS, red when starved (STARVED_TICKS since it was last served) or under attack; invader
  * cores; a summary per home room (sources, cap, spawn busy share) in the home's color. Labels go
  * through the shared placer (`mapLabels.ts`): a source label with no free spot is left out, its dot
- * keeps the color. With the map panel (`mapPanel.ts`) the room only keeps the source's number next
- * to its dot; the panel gets a section per home room (RCL, sources, cap, spawn busy share) and a row
- * per source (number, room, net, travel, harvesters, reservation, state), sources numbered by home
- * then travel time. Cached data only: no path search, nothing written.
+ * keeps the color. With the map panel (`mapPanel.ts`) one "remotes" section: a row per home room (RCL,
+ * remotes and cap, spawn busy share, net income of its remotes), then a row only for the sources with a
+ * problem (`remoteRows.ts` sourceIssue: attacked, starved, no harvester, foreign / low reservation,
+ * loss), numbered, the number next to their dot; healthy sources keep their dot only. Cached data
+ * only: no path search, nothing written.
  */
 
 import { creepsByRole } from "../core/roomState";
@@ -30,9 +31,7 @@ import { sourceNet } from "../remote/remoteIncome";
 import { clampX, LABEL_PRIORITY, labelSize, labelStyle, MapLabels } from "./mapLabels";
 import { Cell, MapPanel } from "./mapPanel";
 import { reservationCell } from "./mapThreats";
-
-/** Without a remote harvester for this long a source turns orange (red after STARVED_TICKS) */
-const WAITING_TICKS = 300;
+import { BAD, homeRow, OK, sourceIssue, WAITING_TICKS, WARN } from "./remoteRows";
 const PATH_STEP = 5;
 const SOURCE_FONT = 4;
 const HOME_FONT = 5;
@@ -45,10 +44,7 @@ const TAG_SHIFTS = [0, -4, 4];
 
 /** Path and summary color of each home room, by sorted home name */
 const HOME_COLORS = ["#00ffff", "#c58cff", "#ffd54d", "#ff8ad8", "#8cff9e"];
-const OK = "#7ee08a";
 const IDLE = "#a0a0a0";
-const WARN = "#e8a23a";
-const BAD = "#ff5c5c";
 
 /** Every PATH_STEP-th position from the storage end, plus both ends */
 function pathPoints(path: RoomPosition[]): RoomPosition[] {
@@ -85,19 +81,24 @@ function labelCandidates(source: RemoteSource, width: number, rows: number[], sh
     return candidates;
 }
 
+/** Panel rows of the remote section, undefined without the panel */
+interface PanelRows {
+    homes: Cell[][];
+    /** Sources with a problem only (remoteRows.ts sourceIssue), numbered in order */
+    issues: Cell[][];
+}
+
 interface SourceDraw {
     home: Room;
     homeColor: string;
     harvesters: number;
-    /** Panel rows of the home, undefined without the panel */
-    rows?: Cell[][];
-    /** Number of the source in the panel */
-    index: number;
+    panel?: PanelRows;
     /** Owned rooms, for the reservation */
     owned: Room[];
 }
 
-function drawSource(visual: MapVisual, labels: MapLabels, source: RemoteSource, draw: SourceDraw): void {
+/** Draws a source; returns its net energy per tick */
+function drawSource(visual: MapVisual, labels: MapLabels, source: RemoteSource, draw: SourceDraw): number {
     const { home, homeColor, harvesters } = draw;
     const unserved = source.servedAt === undefined ? 0 : Game.time - source.servedAt;
     const starved = unserved > STARVED_TICKS;
@@ -110,53 +111,44 @@ function drawSource(visual: MapVisual, labels: MapLabels, source: RemoteSource, 
 
     visual.circle(new RoomPosition(source.x, source.y, source.room), { radius: 1.5, fill: color, opacity: 0.9 });
     const net = sourceIncome(home, source);
-    if (draw.rows) {
-        const tag = `${draw.index}`;
+    if (draw.panel) {
+        const reservation = reservationCell(source.room, draw.owned);
+        const issue = sourceIssue({ attacked, starved, unserved, harvesters, net, reservation });
+        // A source that needs nothing keeps its colored dot only
+        if (!issue) return net;
+        const tag = `${draw.panel.issues.length + 1}`;
         const candidates = labelCandidates(source, labelSize(tag, SOURCE_FONT).width, TAG_ROWS, TAG_SHIFTS);
-        labels.add(tag, candidates, labelStyle(color, SOURCE_FONT), LABEL_PRIORITY.source);
-        const state = attacked ? "attacked" : starved ? "starved" : "";
-        draw.rows.push([
-            { text: tag, color },
-            { text: source.room, color },
-            { text: `${net.toFixed(1)}/t`, color },
-            { text: `${source.travelTime}t`, color },
-            { text: `${harvesters}H`, color },
-            reservationCell(source.room, draw.owned) ?? { text: "", color },
-            { text: state, color: BAD }
+        labels.add(tag, candidates, labelStyle(issue.color, SOURCE_FONT), LABEL_PRIORITY.source);
+        draw.panel.issues.push([
+            { text: tag, color: issue.color },
+            { text: source.room, color: homeColor },
+            issue,
+            { text: `${net.toFixed(1)}/t`, color: IDLE },
+            { text: `${source.travelTime}t · ${harvesters}H`, color: IDLE }
         ]);
-        return;
+        return net;
     }
     const label = `${net.toFixed(1)}/t · ${source.travelTime}t · ${harvesters}H${starved ? " · starved" : ""}`;
     const { width } = labelSize(label, SOURCE_FONT);
     const candidates = labelCandidates(source, width, LABEL_ROWS, LABEL_SHIFTS);
     labels.add(label, candidates, labelStyle(color, SOURCE_FONT), LABEL_PRIORITY.source);
+    return net;
 }
 
-/** Home summary: in the room, or a panel section whose rows it returns */
-function drawHome(
-    labels: MapLabels,
-    panel: MapPanel | undefined,
-    home: Room,
-    homeColor: string,
-    count: number
-): Cell[][] | undefined {
+/** Home summary: a panel row, or a label in the room without the panel */
+function drawHome(labels: MapLabels, panel: PanelRows | undefined, home: Room, homeColor: string, count: number, net: number): void {
     const mem = Memory.remoteMining!;
     const cap = mem.sourceCaps?.[home.name]?.max;
     const busy = mem.spawnBusy?.[home.name];
+    if (panel) {
+        panel.homes.push(homeRow({ name: home.name, color: homeColor, rcl: home.controller!.level, count, cap, busy, net }));
+        return;
+    }
     const parts = [`remotes ${count}${cap === undefined ? "" : `/${cap}`}`];
     if (busy !== undefined) parts.push(`spawn ${Math.round(100 * busy)}%`);
-    const color = cap === undefined ? homeColor : WARN;
-    if (panel) {
-        return panel.section([
-            { text: home.name, color: homeColor },
-            { text: `RCL ${home.controller!.level}`, color: OK },
-            ...parts.map(text => ({ text, color }))
-        ]);
-    }
-    const style = labelStyle(color, HOME_FONT);
+    const style = labelStyle(cap === undefined ? homeColor : WARN, HOME_FONT);
     const pos = (y: number) => new RoomPosition(25, y, home.name);
     labels.add(parts.join(" · "), [pos(46), pos(42)], style, LABEL_PRIORITY.home, true);
-    return undefined;
 }
 
 /** Draws the remote mining layer on the world map */
@@ -168,7 +160,7 @@ export function drawMapRemotes(visual: MapVisual, labels: MapLabels, panel?: Map
 
     const cores = new Set<string>();
     const owned = Object.values(Game.rooms).filter(room => room.controller?.my);
-    let sourceNumber = 0;
+    const rows: PanelRows | undefined = panel ? { homes: [], issues: [] } : undefined;
     Object.keys(byHome)
         .sort()
         .forEach((homeName, index) => {
@@ -180,13 +172,15 @@ export function drawMapRemotes(visual: MapVisual, labels: MapLabels, panel?: Map
                 const key = creep.memory.source;
                 if (key) harvesters[key] = (harvesters[key] ?? 0) + 1;
             }
-            const rows = drawHome(labels, panel, home, homeColor, byHome[homeName].length);
+            let net = 0;
             for (const source of byHome[homeName].sort((a, b) => a.travelTime - b.travelTime)) {
-                const draw = { home, homeColor, harvesters: harvesters[source.key] ?? 0, rows, index: ++sourceNumber, owned };
-                drawSource(visual, labels, source, draw);
+                const draw = { home, homeColor, harvesters: harvesters[source.key] ?? 0, panel: rows, owned };
+                net += drawSource(visual, labels, source, draw);
                 if (hasInvaderCore(source.room)) cores.add(source.room);
             }
+            drawHome(labels, rows, home, homeColor, byHome[homeName].length, net);
         });
+    if (rows && rows.homes.length > 0) panel!.section([{ text: "remotes", color: OK }]).push(...rows.homes, ...rows.issues);
     for (const room of cores) {
         const center = new RoomPosition(25, 25, room);
         visual.circle(center, { radius: 8, fill: "transparent", stroke: BAD, strokeWidth: 1, opacity: 0.6 });

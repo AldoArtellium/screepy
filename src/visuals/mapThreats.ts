@@ -15,13 +15,12 @@ import { canReserveFrom } from "../remote/RemoteMining";
 import { NPC_OWNERS } from "../remote/keepers";
 import { LABEL_PRIORITY, labelStyle, MapLabels } from "./mapLabels";
 import { Cell, MapPanel } from "./mapPanel";
+import { BAD, OK, WARN } from "./remoteRows";
 
 const THREAT_FONT = 5;
 const RESERVATION_FONT = 4;
 const UNRESERVED_FONT = 3;
-const OK = "#7ee08a";
-const WARN = "#e8a23a";
-const BAD = "#ff5c5c";
+// Shared with remoteRows.ts, which reads a reservation's state from its color
 const DIM = "#a0a0a0";
 const STRENGTH_NAMES = ["none", "weak", "normal", "strong", "deadly"];
 
