@@ -5,6 +5,7 @@
  * Heals itself when hurt and not hitting. Our design.
  */
 
+import { healWounded } from "../core/healing";
 import { SIEGE_GUARD, sieges, travelToSiege } from "../military/siege";
 import { trafficManager } from "../modules/TrafficManager";
 import { performRecycle } from "./recycle";
@@ -57,6 +58,8 @@ export function runSiegeGuard(creep: Creep): void {
         trafficManager.requestMove(creep, site.pos, { range: 0 });
         return;
     }
+    // Nothing to fight: heal our wounded (the controller attacker) before parking
+    if (healWounded(creep, { move: true })) return;
     const controller = creep.room.controller;
     // Stops as soon as in range: it rarely stands next to the controller, and the attacker shoves it (traffic priority)
     if (controller) trafficManager.requestMove(creep, controller, { range: PARK_RANGE });
