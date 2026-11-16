@@ -44,6 +44,7 @@ import {
 import { restartPatience } from "./drainForecast";
 import { coverOf, isHostileBarrier, isMine, landing, pickTarget, travelCallback } from "./duo";
 import { hostileRoom } from "./intel";
+import { noteSquad } from "./squadTrace";
 
 export const QUAD_ATTACKER = "quadAttacker";
 export const QUAD_HEALER = "quadHealer";
@@ -269,6 +270,8 @@ function isFighter(creep: Creep): boolean {
  * or any hostile in range.
  */
 function attackQuad(group: Creep[], focus: Structure | null): void {
+    const squad = group[0]?.memory.quad;
+    if (squad) noteSquad(squad, { focus });
     for (const creep of group) {
         const hostiles = creep.room.find(FIND_HOSTILE_CREEPS);
         if (activeParts(creep, ATTACK)) {
@@ -851,5 +854,6 @@ export function runQuad(name: string, quad: QuadMemory): void {
             else travel(group, quad.targetRoom);
         }
     }
+    noteSquad(name, { note });
     trace(name, quad, group, note);
 }

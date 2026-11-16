@@ -23,6 +23,7 @@ import { DuoPath, STILL_TICKS, StillState, cachedStep, newPath, noteStep, stillF
 import { lootRamparts } from "./loot";
 import { CRITICAL_CLASS, TARGET_CLASS, TargetDescriptor, barrierCost, chooseTarget, targetClass } from "./targetChoice";
 import { cachedObstacles, routeRooms } from "./route";
+import { noteSquad } from "./squadTrace";
 
 export const DUO_ATTACKER = "duoAttacker";
 export const DUO_HEALER = "duoHealer";
@@ -325,6 +326,7 @@ function nextStep(attacker: Creep, name: string, duo: DuoMemory, healerPos?: Roo
     const room = attacker.room;
     if (room.name === duo.targetRoom) {
         const target = pickTarget(room, attacker.pos, Math.max(1, attackPower(attacker.body)), { takeover: duo.takeover });
+        noteSquad(name, { focus: target, note: target ? undefined : "no target" });
         if (!target) return null;
         if (attacker.pos.isNearTo(target)) return { pos: attacker.pos, target };
         const { matrix, version } = breachMatrix(room, target);
