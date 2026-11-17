@@ -94,6 +94,8 @@ export const creepRunnerModule = () => {
     for (const name in Game.creeps) {
         const creep = Game.creeps[name];
         if (creep.spawning) continue;
+        // No "creep attacked" email from the game: one intent per creep, once
+        if (!creep.memory.quiet && creep.notifyWhenAttacked(false) === OK) creep.memory.quiet = true;
         const role = creep.memory.role;
         const handler = role ? getRoleHandler(role) : undefined;
         if (!role || !handler) {
@@ -121,3 +123,10 @@ export const creepRunnerModule = () => {
         countStat(`creepTicks:${role}`);
     }
 };
+
+declare global {
+    interface CreepMemory {
+        /** notifyWhenAttacked(false) already applied */
+        quiet?: boolean;
+    }
+}
