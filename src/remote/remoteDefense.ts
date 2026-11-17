@@ -31,6 +31,7 @@ import {
 import {
     BoostStock,
     blinkyBody,
+    blinkyGroupSize,
     boostedResponse,
     DefenseBoost,
     defenseCandidates,
@@ -74,8 +75,18 @@ declare global {
 const DEFENDER_DELAY = 300;
 const MIN_DEFENSE_ENERGY = 5000;
 
+/** Ticks the first members of a pair wait at home for the second */
+const PAIR_WAIT = 300;
+/**
+ * Per member of a larger group: a 50-part blinky spawns in 150 ticks, the slack covers the refill of
+ * the extensions between members (else the first ones left without the last)
+ */
+const GROUP_WAIT_PER_MEMBER = 250;
+
 /** Ticks the first members of a group wait at home for the others */
-const GROUP_WAIT = 300;
+function groupWait(size: number): number {
+    return size <= 2 ? PAIR_WAIT : GROUP_WAIT_PER_MEMBER * size;
+}
 
 /**
  * Ticks a boosted remote defender waits for its boosts once out of the spawn (labs/boosts.ts default,
@@ -87,6 +98,8 @@ export type DefenseOption = SpawnOption & {
     targetRoom: string;
     response: DefenseResponse;
     group?: string;
+    /** Members of a blinky pair (2) or group */
+    groupSize?: number;
     boosts?: DefenderBoosts;
 };
 
@@ -95,13 +108,14 @@ export function groupMembers(home: string, group: string): Creep[] {
     return creepsByRole(home, REMOTE_DEFENDER).filter(c => c.memory.defenseGroup === group);
 }
 
-/** First members wait at home until the group is complete, at most GROUP_WAIT ticks */
+/** First members wait at home until the group is complete, at most groupWait ticks */
 export function waitingForGroup(creep: Creep): boolean {
     const group = creep.memory.defenseGroup;
     if (!group || !creep.memory.room || creep.memory.defenseGroupLeft) return false;
     const members = groupMembers(creep.memory.room, group);
-    const complete = members.length >= (creep.memory.defenseGroupSize ?? 1) && !members.some(c => c.spawning);
-    if (complete || Game.time - Number(group.split(":")[1]) > GROUP_WAIT) {
+    const size = creep.memory.defenseGroupSize ?? 1;
+    const complete = members.length >= size && !members.some(c => c.spawning);
+    if (complete || Game.time - Number(group.split(":")[1]) > groupWait(size)) {
         creep.memory.defenseGroupLeft = true;
         return false;
     }
@@ -117,14 +131,16 @@ function groupOptions(home: Room): DefenseOption[] {
         if (!group || seen.has(group) || !creep.memory.targetRoom) continue;
         seen.add(group);
         const members = groupMembers(home.name, group);
+        const groupSize = creep.memory.defenseGroupSize ?? 1;
         if (members.some(c => c.memory.defenseGroupLeft)) continue;
-        if (Game.time - Number(group.split(":")[1]) > GROUP_WAIT) continue;
-        if (members.length >= (creep.memory.defenseGroupSize ?? 1)) continue;
+        if (Game.time - Number(group.split(":")[1]) > groupWait(groupSize)) continue;
+        if (members.length >= groupSize) continue;
         // Hivemind: priority 4, weight 0; above the economy here so the first member waits less
-        const response = DefenseResponse.BLINKY_PAIR;
-        // The second member gets the first one's body and boosts
+        const response = groupSize > 2 ? DefenseResponse.BLINKY_GROUP : DefenseResponse.BLINKY_PAIR;
+        // The next members get the first one's body and boosts
         const boosts = creep.memory.defenseBoosts;
-        options.push({ role: REMOTE_DEFENDER, priority: 5, weight: 1, targetRoom: creep.memory.targetRoom, response, group, boosts });
+        const targetRoom = creep.memory.targetRoom;
+        options.push({ role: REMOTE_DEFENDER, priority: 5, weight: 1, targetRoom, response, group, groupSize, boosts });
     }
     return options;
 }
@@ -194,7 +210,11 @@ export function remoteDefenseOptions(home: Room): DefenseOption[] {
             continue;
         }
         const boosted = boostedDefense(home, enemies);
-        if (!boosted) continue;
+        if (!boosted) {
+            const group = groupDefense(home, room, enemies);
+            if (group) options.push(group);
+            continue;
+        }
         options.push({
             role: REMOTE_DEFENDER,
             priority: 3,
@@ -206,6 +226,32 @@ export function remoteDefenseOptions(home: Room): DefenseOption[] {
         });
     }
     return options;
+}
+
+/**
+ * Last resort (defenseModel.ts blinkyGroupSize): a group of plain blinkies, when the home keeps
+ * MIN_DEFENSE_ENERGY once they are paid and the hostiles live past the group's spawn time plus
+ * DEFENDER_DELAY (else they die before the group could earn its cost back)
+ */
+function groupDefense(home: Room, room: string, enemies: ReturnType<typeof remoteEnemyData>): DefenseOption | null {
+    const body = blinkyBody(spawnEnergyLimit(home));
+    const size = blinkyGroupSize(enemies, body);
+    if (!size) return null;
+    const cost = size * _.sum(body, p => BODYPART_COST[p]);
+    if (effectiveEnergy(home) < MIN_DEFENSE_ENERGY + cost) return null;
+    const expires = Memory.rooms?.[room]?.enemies?.expires ?? 0;
+    const spawns = Math.max(1, home.find(FIND_MY_SPAWNS).length);
+    const spawnTime = Math.ceil(size / spawns) * body.length * CREEP_SPAWN_TIME;
+    if (expires - Game.time < spawnTime + DEFENDER_DELAY) return null;
+    return {
+        role: REMOTE_DEFENDER,
+        priority: 3,
+        weight: 1,
+        targetRoom: room,
+        response: DefenseResponse.BLINKY_GROUP,
+        groupSize: size,
+        reason: `${size} blinkies vs ${room}`
+    };
 }
 
 /** Part type and BOOSTS effect name of each defense effect */
@@ -265,9 +311,13 @@ export function remoteDefenderBoosts(home: Room, option: DefenseOption, body: Bo
 export function remoteDefenderMemory(home: Room, option: DefenseOption): Partial<CreepMemory> {
     home.memory.recentDefender = { ...home.memory.recentDefender, [option.targetRoom]: Game.time };
     const memory: Partial<CreepMemory> = { role: REMOTE_DEFENDER, room: home.name, targetRoom: option.targetRoom };
-    if (option.response === DefenseResponse.BLINKY_PAIR) {
+    if (option.response === DefenseResponse.BLINKY_PAIR || option.response === DefenseResponse.BLINKY_GROUP) {
         memory.defenseGroup = option.group ?? `${option.targetRoom}:${Game.time}`;
-        memory.defenseGroupSize = 2;
+        memory.defenseGroupSize = option.groupSize ?? 2;
+        if (option.response === DefenseResponse.BLINKY_GROUP && !option.group) {
+            countStat("remoteDefense:group");
+            log.info("RemoteDefense", `${home.name}: ${memory.defenseGroupSize} blinkies for ${option.targetRoom}`);
+        }
     }
     if (option.boosts) {
         memory.defenseBoosts = option.boosts;
