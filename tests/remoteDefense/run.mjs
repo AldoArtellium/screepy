@@ -43,7 +43,8 @@ Object.assign(globalThis, {
 });
 
 const {
-    blinkyBody, boostedResponse, brawlerWins, defenseCandidates, defenseResponse, miniBrawlerBody, skipsEnergyGate, unarmedPlayers,
+    blinkyBody, blinkyGroupSize, boostedResponse, brawlerWins, defenseCandidates, defenseResponse, miniBrawlerBody, pickFocus,
+    skipsEnergyGate, unarmedPlayers,
 } = require(join(OUT, "remote", "defenseModel.js"));
 
 // Same bodies as remoteDefense.ts (energy limit 90% of the capacity)
@@ -140,6 +141,35 @@ check("W29N6-shaped player pair, mockup stock", boosted({ ...w29n6, players: tru
     ["blinky", "blinkyPair", "miniBlinky"]);
 check("invader core: never boosted", describe(boosted({ ...w29n6, hasInvaderCore: true }, 2300, mockupStock)), null);
 check("boosted TOUGH blinky body", blinkyBody(2070, undefined, 4).filter(p => p === "tough").length, 4);
+
+// shard0 W26N6 (2026-11-17, tick 79109739): a keeper room raid (backend createRaid: 2-5 small invaders,
+// each boosted at tier 3 one time in two): smallRanged (XKHO2 + XGHO2) + 2 smallRanged + 2 smallHealer
+// (XLHO2), RoomIntel damage 180, heal 480. No ladder step nor boosted defender (298 XKHO2 in stock:
+// 9 parts) wins: nothing was spawned while the group shot the haulers crossing the room.
+const w26n6 = { ...base, damage: 180, heal: 480, rangedDamage: 180, hits: 5467, ranged: true };
+const w27n6Stock = { XKHO2: 298, XLHO2: 3360, GHO2: 980, GO: 6375 };
+check("W26N6 group, 5600 capacity, unboosted ladder", respond(w26n6, 5600), null);
+check("W26N6 group, 5600 capacity, W27N6 stock", describe(boosted(w26n6, 5600, w27n6Stock, 6)), null);
+// Their heal x1.5 (720) against 15 RANGED_ATTACK a blinky at 5600 capacity (17 at 12900): 5 blinkies
+check("W26N6 group, 5600 capacity, blinky group", blinkyGroupSize(w26n6, blinky(5600)), 5);
+check("W26N6 group, 12900 capacity, blinky group", blinkyGroupSize(w26n6, blinky(12900)), 5);
+// Unboosted keeper room raid of 3 smallRanged + 2 smallHealer: 90 damage, 120 heal
+check("plain keeper raid, 5600 capacity, blinky group", blinkyGroupSize({ ...w26n6, damage: 90, rangedDamage: 90, heal: 120, hits: 5000 }, blinky(5600)), 3);
+// Worst raids stay out of reach of plain blinkies: 3 boosted healers (720 heal)
+check("3 boosted healers, 5600 capacity, blinky group", blinkyGroupSize({ ...w26n6, heal: 720 }, blinky(5600)), null);
+check("players never get a blinky group", blinkyGroupSize({ ...w26n6, players: true }, blinky(5600)), null);
+check("invader core never gets a blinky group", blinkyGroupSize({ ...w26n6, hasInvaderCore: true }, blinky(5600)), null);
+check("no blinky body, no group", blinkyGroupSize(w26n6, []), null);
+
+// Group focus: a healer in range first (it would heal the creep we shoot), then fewest hits, then the closest
+const ranged = (id, range, hits = 1000) => ({ id, heal: 0, hits, range });
+const healer = (id, range, heal, hits = 1000) => ({ id, heal, hits, range });
+check("focus: healer in range over a closer ranged", pickFocus([ranged("r", 1), healer("h", 3, 240)]), "h");
+check("focus: in range over a stronger healer out of range", pickFocus([ranged("r", 2), healer("h", 4, 240)]), "r");
+check("focus: strongest healer in range", pickFocus([healer("h1", 2, 60), healer("h2", 3, 240)]), "h2");
+check("focus: wounded first among equals", pickFocus([ranged("a", 2, 1000), ranged("b", 3, 400)]), "b");
+check("focus: closest when none in range", pickFocus([ranged("far", 9), healer("near", 5, 240)]), "near");
+check("focus: none", pickFocus([]), null);
 
 check("energy gate skipped: invaders, no storage", skipsEnergyGate(false, smallMelee), true);
 check("energy gate kept: invaders, storage", skipsEnergyGate(true, smallMelee), false);

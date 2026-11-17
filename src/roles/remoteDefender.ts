@@ -9,7 +9,9 @@ import { healWounded } from "../core/healing";
 import { stayInPlace, whenInRange } from "../core/movement";
 import { isFast } from "../defense/RoomDefense";
 import { trafficManager } from "../modules/TrafficManager";
+import { healPower } from "../military/combat";
 import { isRoomUnderAttack } from "../modules/RoomIntel";
+import { pickFocus } from "../remote/defenseModel";
 import { groupMembers, missingBoosts, REMOTE_DEFENDER, waitingForGroup } from "../remote/remoteDefense";
 import { SOURCE_KEEPER } from "../remote/keepers";
 import { countStat } from "../utils/stats";
@@ -49,7 +51,7 @@ export function runRemoteDefender(creep: Creep): void {
     const hostiles = creep.room.find(FIND_HOSTILE_CREEPS, {
         filter: c => c.owner.username !== SOURCE_KEEPER && (inTarget || c.pos.inRangeTo(creep, ENGAGE_RANGE))
     });
-    const enemy = creep.pos.findClosestByRange(hostiles);
+    const enemy = groupFocus(creep, hostiles) ?? creep.pos.findClosestByRange(hostiles);
     if ((!enemy || !enemy.pos.inRangeTo(creep, ENGAGE_RANGE)) && regroup(creep)) return;
     if (enemy) {
         engage(creep, enemy);
@@ -116,7 +118,9 @@ function engage(creep: Creep, target: Creep | Structure): void {
         const leader = groupLeader(creep);
         if (leader && leader !== creep) {
             trafficManager.requestMove(creep, leader, { range: 1, priority: 5 });
-            if (creep.pos.inRangeTo(target, 3)) creep.rangedAttack(target);
+            // The group's focus, else the best target in its own reach (a shot never wasted)
+            const shot = creep.pos.inRangeTo(target, 3) ? target : bestInReach(creep);
+            if (shot) creep.rangedAttack(shot);
             return;
         }
         // Kite melee hostiles: holding still once in range let a boosted invader walk up and strip
@@ -129,6 +133,38 @@ function engage(creep: Creep, target: Creep | Structure): void {
         return;
     }
     stayInPlace(creep);
+}
+
+/** Focus of each group this tick (heap): every member computes the same, the first one pays */
+const focusCache: Map<string, { tick: number; id: Id<Creep> | null }> = new Map();
+
+/**
+ * Hostile every member of a ranged group shoots (defenseModel.ts pickFocus, ranges from the leader):
+ * spread over the closest hostiles, a group's shots were all healed back by a 2-healer keeper room raid
+ */
+function groupFocus(creep: Creep, hostiles: Creep[]): Creep | null {
+    const group = creep.memory.defenseGroup;
+    if (!group || hostiles.length === 0 || creep.getActiveBodyparts(RANGED_ATTACK) === 0) return null;
+    const leader = groupLeader(creep) ?? creep;
+    if (leader.pos.roomName !== creep.pos.roomName) return null;
+    let cached = focusCache.get(group);
+    if (!cached || cached.tick !== Game.time) {
+        const id = pickFocus(
+            hostiles.map(c => ({ id: c.id, heal: healPower(c.body), hits: c.hits, range: leader.pos.getRangeTo(c) }))
+        ) as Id<Creep> | null;
+        cached = { tick: Game.time, id };
+        focusCache.set(group, cached);
+    }
+    return hostiles.find(c => c.id === cached!.id) ?? null;
+}
+
+/** Hostile in the creep's RANGED_ATTACK reach, by the group focus rule (follower out of reach of the focus) */
+function bestInReach(creep: Creep): Creep | null {
+    const inReach = creep.pos.findInRange(FIND_HOSTILE_CREEPS, 3, { filter: c => c.owner.username !== SOURCE_KEEPER });
+    const id = pickFocus(
+        inReach.map(c => ({ id: c.id, heal: healPower(c.body), hits: c.hits, range: creep.pos.getRangeTo(c) }))
+    );
+    return inReach.find(c => c.id === id) ?? null;
 }
 
 /** Leader of a creep's group (first member by name), null outside groups or when alone */

@@ -16,7 +16,9 @@ export const enum DefenseResponse {
     /** Blinky sized to the energy capacity */
     BLINKY = "blinky",
     /** Two blinkies leaving together (Hivemind RESPONSE_BLINKY_BLINKY_TRAIN, without the train) */
-    BLINKY_PAIR = "blinkyPair"
+    BLINKY_PAIR = "blinkyPair",
+    /** 3 to MAX_DEFENSE_GROUP plain blinkies leaving together (blinkyGroupSize), not in Hivemind */
+    BLINKY_GROUP = "blinkyGroup"
 }
 
 /** 5 ATTACK + 3 HEAL; heal weighs 3 against melee */
@@ -175,6 +177,44 @@ export function defenseResponse(
     if (power < blinkyPower(blinky) && blinkyWins(enemies, blinky, 1)) return DefenseResponse.BLINKY;
     if (power < 2 * blinkyPower(blinky) && blinkyWins(enemies, blinky, 2)) return DefenseResponse.BLINKY_PAIR;
     return null;
+}
+
+/** Largest blinky group a remote defense spawns */
+export const MAX_DEFENSE_GROUP = 5;
+
+/**
+ * Not in Hivemind (its ladder stops at 2-creep trains): the smallest group of 3 to MAX_DEFENSE_GROUP
+ * plain blinkies that wins against invaders, their healing x WIN_MARGIN like boostedResponse; null for
+ * players, invader cores or when even MAX_DEFENSE_GROUP loses. The last resort after the ladder and
+ * boostedResponse. shard0 W26N6 (2026-11-17): the backend raids keeper rooms with 2-5 small invaders,
+ * each boosted at tier 3 one time in two (3 smallRanged + 2 XLHO2 smallHealer: 480 heal); a blinky pair
+ * deals 300, nothing was spawned and the group shot the haulers crossing the room for its whole life.
+ */
+export function blinkyGroupSize(enemies: EnemyData, blinky: BodyPartConstant[]): number | null {
+    if (enemies.players || enemies.hasInvaderCore || blinky.length === 0) return null;
+    const judged = { ...enemies, heal: enemies.heal * WIN_MARGIN };
+    for (let count = 3; count <= MAX_DEFENSE_GROUP; count++) if (blinkyWins(judged, blinky, count)) return count;
+    return null;
+}
+
+/** A hostile a defender group may shoot: its healing per tick (boosts included) and range to the group leader */
+export interface FocusCandidate {
+    id: string;
+    heal: number;
+    hits: number;
+    range: number;
+}
+
+/**
+ * Target every member of a defender group shoots: within RANGED_ATTACK reach of the leader first, then
+ * the strongest healer (healers heal each other: split shots never beat a 2-healer group's 480 heal on
+ * one target), then the fewest hits, then the closest; out of reach, the closest
+ */
+export function pickFocus(candidates: FocusCandidate[]): string | null {
+    if (candidates.length === 0) return null;
+    const inReach = candidates.filter(c => c.range <= 3);
+    if (inReach.length === 0) return [...candidates].sort((a, b) => a.range - b.range)[0].id;
+    return [...inReach].sort((a, b) => b.heal - a.heal || a.hits - b.hits || a.range - b.range)[0].id;
 }
 
 // ------------------------------------------------------------------ boosts

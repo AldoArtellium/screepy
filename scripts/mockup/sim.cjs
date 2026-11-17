@@ -37,7 +37,8 @@ const MEMORY_INIT = (() => {
  * smallHealer, bigMelee, bigRanged, bigHealer), e.g. --raid 12000:bigMelee+bigRanged. The creeps
  * appear on the first exit tiles of the room and run the engine's invader AI. "@ROOM" after the bodies
  * puts them in another room of the fixture (a remote), e.g. --raid 12000:smallMelee@W7N4. A "*" after a body
- * boosts it like the backend's boosted invaders (RAID_BOOSTS), e.g. --raid 12000:smallMelee*@W7N4.
+ * boosts it like the backend's boosted invaders (RAID_BOOSTS), e.g. --raid 12000:smallMelee*@W7N4; "**" at
+ * tier 3 like a keeper room raid (RAID_BOOSTS_CENTER), e.g. --raid 4000:smallRanged**+smallHealer**@W6N4.
  */
 const RAIDS = (opt("raid", "") || "")
   .split(",")
@@ -58,6 +59,8 @@ const RAID_BODIES = {
 };
 /** Boosts of backend/lib/cronjobs.js createCreep for boosted invaders */
 const RAID_BOOSTS = { tough: "GO", ranged_attack: "KO", work: "ZH", attack: "UH", heal: "LO" };
+/** Boosts of a boosted invader in a sector center room (keeper rooms and the center): "**" after a body */
+const RAID_BOOSTS_CENTER = { tough: "XGHO2", ranged_attack: "XKHO2", work: "XZH2O", attack: "XUH2O", heal: "XLHO2" };
 /**
  * Enemy player (offense tests): "ROOM:RCL[:defenders[:ringHits]]", e.g. --enemy W8N3:3 or W8N3:5:2:100000.
  * A base around a spawn (no safe mode: a new player starts with one, where attacks fail with
@@ -1221,12 +1224,13 @@ async function main() {
       const exitTiles = exitTilesOf(raidRoom);
       for (const [i, type] of raid.bodies.entries()) {
         const [x, y] = exitTiles[(i * 3) % exitTiles.length];
-        const boosted = type.endsWith("*");
-        const body = RAID_BODIES[boosted ? type.slice(0, -1) : type];
+        const stars = type.length - type.replace(/\*+$/, "").length;
+        const boosts = stars >= 2 ? RAID_BOOSTS_CENTER : stars === 1 ? RAID_BOOSTS : {};
+        const body = RAID_BODIES[type.slice(0, type.length - stars)];
         if (!body) throw new Error(`Unknown raid body ${type}`);
         const name = `invader_${raidRoom}_${tick}_${i}`;
         await db["rooms.objects"].insert({
-          type: "creep", user: "2", body: body.map((t) => (boosted && RAID_BOOSTS[t] ? { type: t, hits: 100, boost: RAID_BOOSTS[t] } : { type: t, hits: 100 })), hits: body.length * 100,
+          type: "creep", user: "2", body: body.map((t) => (boosts[t] ? { type: t, hits: 100, boost: boosts[t] } : { type: t, hits: 100 })), hits: body.length * 100,
           hitsMax: body.length * 100, ticksToLive: 1500, ageTime, x, y, room: raidRoom, fatigue: 0, store: {}, storeCapacity: 0, name
         });
         names.push(name);
