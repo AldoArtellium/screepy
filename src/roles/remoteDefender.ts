@@ -24,6 +24,8 @@ const ENGAGE_RANGE = 5;
 const GROUP_RANGE = 2;
 /** Ranged defenders keep melee hostiles at this range */
 const KITE_RANGE = 3;
+/** A group leader's range to its focus: a follower at range 1 of it is still within RANGED_ATTACK's 3 */
+const GROUP_REACH = 2;
 
 export function runRemoteDefender(creep: Creep): void {
     const targetRoom = creep.memory.targetRoom;
@@ -127,6 +129,15 @@ function engage(creep: Creep, target: Creep | Structure): void {
         // the RANGED parts first (W29N8, a mini blinky out-healed 24 vs 80 at range 1)
         if (kite(creep, !!leader)) {
             if (creep.pos.inRangeTo(target, 3)) creep.rangedAttack(target);
+            return;
+        }
+        // A group leader closes to range 2: its followers stick at range 1, so all of them reach the focus.
+        // shard0 W26N6 2026-11-18: the leader held at range 3, its two followers at range 4 never shot, and
+        // one blinky's 170 against an XLHO2 healer's 240 held the keeper room raid (and no keeper killer)
+        // for 950+ ticks
+        if (leader) {
+            if (creep.pos.inRangeTo(target, 3)) creep.rangedAttack(target);
+            trafficManager.requestMove(creep, target, { range: GROUP_REACH, priority: 5, combat: true });
             return;
         }
         whenInRange(creep, 3, target, () => creep.rangedAttack(target));
