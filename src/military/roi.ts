@@ -190,6 +190,24 @@ export function energyBase<T extends BaseCandidate>(
 }
 
 /**
+ * Base whose capacity and boosts size a mission: the smallest feasible one (energyBase); with `preferTank`
+ * (the order by hand against towers that refill), the smallest whose squad tanks them first, when one does.
+ * shard0 2026-11-25 W29N8 (doorknobnob, RCL 4, one tower and a tower feeder): sized on W28N7 (no labs, no
+ * boosts), the quad needed a drain, the refills kept up and the mission was abandoned before the quad spawned
+ * (`military:drain:noProgress`), while a base with labs fields a quad that tanks one refilled tower.
+ */
+export function missionBase<T extends BaseCandidate>(
+    candidates: T[],
+    minRcl: number,
+    feasible: (base: T) => boolean,
+    tanks: (base: T) => boolean,
+    preferTank: boolean
+): T | null {
+    const tanking = preferTank ? energyBase(candidates, minRcl, base => feasible(base) && tanks(base)) : null;
+    return tanking ?? energyBase(candidates, minRcl, feasible);
+}
+
+/**
  * Boost routing of a squad member: a base without the mission's compounds for the member's boosted parts
  * leaves it to a base of the mission that holds them; when none does, any base spawns it (labs/boosts.ts
  * boostsWith falls back to the best in stock)

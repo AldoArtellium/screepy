@@ -272,7 +272,7 @@ check("an engaged room no longer a candidate is dropped", rooms(pickTargets([b, 
 
 // Colony missions: every base close to the rally spawns members of the same squad (shard0: W28N7 rally,
 // W29N7 next to it, W27N5 three rooms away)
-const { colonyBases, energyBase, offersMember, COLONY_RANGE } = require(join(OUT, "military", "roi.js"));
+const { colonyBases, energyBase, missionBase, offersMember, COLONY_RANGE } = require(join(OUT, "military", "roi.js"));
 const base = { capacity: 5600, rcl: 7, spawns: 1 };
 const colony = [
     { room: "W29N7", route: 1, ...base },
@@ -299,6 +299,16 @@ check("energy: an infeasible small base is skipped", pick(["W28N7", "W29N7"]) ==
 check("energy: capacity ties go to the closest", pick(["W29N7", "W27N5"]) === "W29N7");
 check("energy: bases out of range, RCL or spawn never count", pick(["W24N8", "W26N4", "W25N4", "W20N1"]) === null);
 check("energy: none feasible", pick([]) === null);
+
+// The order by hand against refilled towers (shard0 W29N8 2026-11-25): W28N7 (no labs) feasible by drain
+// only, W29N7 and W27N5 (labs) tank the tower
+const mission = (feasible, tanks, preferTank) =>
+    missionBase(colony, 4, b => feasible.includes(b.room), b => tanks.includes(b.room), preferTank)?.room ?? null;
+check("mission base: smallest feasible without preference", mission(["W28N7", "W29N7"], ["W29N7"], false) === "W28N7");
+check("mission base: the smallest that tanks when preferred", mission(["W28N7", "W29N7", "W27N5"], ["W29N7", "W27N5"], true) === "W29N7");
+check("mission base: none tanks, the smallest feasible", mission(["W28N7", "W29N7"], [], true) === "W28N7");
+check("mission base: tanking but infeasible is not taken", mission(["W28N7"], ["W29N7"], true) === "W28N7");
+check("mission base: none feasible", mission([], ["W29N7"], true) === null);
 
 check("boost routing: a plain member goes anywhere", offersMember(false, false, true));
 check("boost routing: a base with the compounds spawns it", offersMember(true, true, true));

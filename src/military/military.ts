@@ -42,7 +42,7 @@ import {
     SquadType
 } from "./sizing";
 import { AutoTargetEntry } from "./intel";
-import { BASES_REFRESH, BaseCandidate, colonyBases, energyBase, offersMember } from "./roi";
+import { BASES_REFRESH, BaseCandidate, colonyBases, missionBase, offersMember } from "./roi";
 import { chooseAutoTargets, releaseFallen } from "./targets";
 import { militaryCpuAverage, militaryCpuTooHigh } from "./cpuGuard";
 import { decisionBucket } from "../utils/throttle";
@@ -319,7 +319,14 @@ function startMission(target: string): void {
         plans.set(base.room, plan);
         return plan;
     };
-    const sizing = energyBase(candidates, squadMinRcl(), base => planOf(base).feasible);
+    // The order by hand against refilled towers: a squad that tanks them when a base fields one (roi.ts missionBase)
+    const sizing = missionBase(
+        candidates,
+        squadMinRcl(),
+        base => planOf(base).feasible,
+        base => planOf(base).tanks,
+        memory.attack === target && refills
+    );
     let plan: SquadPlan;
     let energy: number;
     if (sizing) {
@@ -354,7 +361,12 @@ function startMission(target: string): void {
         const probe = !plan.tanks && (hostileRoom(target)?.towers ?? 1) > 0;
         memory.quads = {
             ...memory.quads,
-            [`quad.${target}`]: { ...base, state: probe ? "probe" : "forming", ...(probe && { probeSince: Game.time }) }
+            [`quad.${target}`]: {
+                ...base,
+                state: probe ? "probe" : "forming",
+                ...(probe && { probeSince: Game.time }),
+                ...(plan.tanks && { tanks: true })
+            }
         };
     }
     log.info(
@@ -533,6 +545,7 @@ function upgradeDuo(memory: NonNullable<Memory["military"]>, name: string, duo: 
         members: [],
         state: probe ? "probe" : "forming",
         ...(probe && { probeSince: Game.time }),
+        ...(upgrade.tanks && { tanks: true }),
         boosts: upgrade.compounds,
         boostLosses: duo.losses
     };

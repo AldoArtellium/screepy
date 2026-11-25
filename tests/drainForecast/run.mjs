@@ -34,7 +34,7 @@ try {
 Object.assign(globalThis, { CREEP_SPAWN_TIME: 3 });
 
 const {
-    sampleEnergy, recordPoke, wasHit, etaToEmpty, quadLeadTime, drainDecision, restartPatience, refillsInBursts, BURST_REFILL,
+    sampleEnergy, recordPoke, wasHit, etaToEmpty, quadLeadTime, drainDecision, restartPatience, refillsInBursts, burstEndsMission, BURST_REFILL,
     RATE_WINDOW, NO_FIRE_TICKS, FORECAST_PATIENCE, MIN_RATE, SAMPLE_GAP,
 } = require(join(OUT, "military", "drainForecast.js"));
 
@@ -154,6 +154,10 @@ check("feeder of 5 at a time: drain goes on", !refillsInBursts(5));
 check("a shot's worth at once: drain goes on", !refillsInBursts(10));
 check("core refill of 990: hopeless", refillsInBursts(990));
 check("from BURST_REFILL: hopeless", refillsInBursts(BURST_REFILL) && !refillsInBursts(BURST_REFILL - 1));
+// shard0 2026-11-25 W29N8: a tower feeder of 4 CARRY brings 200 at once; a quad that tanks the tower goes on
+check("burst refill, drain mission: ended", burstEndsMission(undefined, 200) && burstEndsMission(false, 200));
+check("burst refill, quad that tanks: goes on", !burstEndsMission(true, 200) && !burstEndsMission(true, 990));
+check("small refills, drain mission: goes on", !burstEndsMission(false, 5));
 
 console.log(failures === 0 ? "\nall checks passed" : `\n${failures} check(s) failed`);
 process.exit(failures === 0 ? 0 : 1);
