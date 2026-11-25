@@ -81,6 +81,8 @@ export interface QuadMemory {
     boostLosses?: number;
     /** Takeover mission: the way to the controller is broken, a siege follows the success (siege.ts) */
     takeover?: boolean;
+    /** The plan's quad tanks the towers (sizing.ts SquadPlan.tanks): burst refills don't end it (drainer.ts) */
+    tanks?: boolean;
     /** Top-left tile of the formation, and since when the quad tries to pack there */
     anchor?: { x: number; y: number; room: string; since: number };
     /** Where the quad heals up: a few tiles inside the staging room, next to the exit it took */

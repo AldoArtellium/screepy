@@ -20,7 +20,7 @@ import {
     PROBE_TIMEOUT,
     quadLeadTime,
     recordPoke,
-    refillsInBursts,
+    burstEndsMission,
     sampleEnergy,
     wasHit
 } from "./drainForecast";
@@ -148,8 +148,9 @@ export function runDrainers(name: string, quad: QuadMemory): DrainDecision {
         // Before the quad comes: its escape judges the towers on the refills seen (combat.ts)
         observeTowerRefills(room);
     }
-    // Towers refilled in bursts (a stronghold's core): hopeless in every state, before a quad is lost to one
-    if (refillsInBursts(largestRefill(quad.targetRoom))) return "noProgress";
+    // Towers refilled in bursts (a stronghold's core): hopeless in every state, before a quad is lost to one,
+    // unless the quad tanks them (no drain needed)
+    if (burstEndsMission(quad.tanks, largestRefill(quad.targetRoom))) return "noProgress";
     // Decided while probing and while the quad waits at the border (only the giving up then: it goes
     // in once it sees the towers empty, quad.ts)
     if (quad.state !== "probe" && quad.state !== "wait") return "wait";

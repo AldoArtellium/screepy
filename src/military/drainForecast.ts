@@ -59,6 +59,15 @@ export function refillsInBursts(largestRefill: number): boolean {
 }
 
 /**
+ * Burst refills end a mission that counts on the drain, never one whose quad tanks the towers (sizing.ts
+ * SquadPlan.tanks: it out-heals them refilled or not). shard0 2026-11-25 W29N8: doorknobnob's tower feeder
+ * (4 CARRY) brings 200 at a time, the mission was abandoned with 0 losses (`military:drain:noProgress`).
+ */
+export function burstEndsMission(tanks: boolean | undefined, largestRefill: number): boolean {
+    return !tanks && refillsInBursts(largestRefill);
+}
+
+/**
  * The towers' total energy seen now: a new window each RATE_WINDOW ticks, averaged with the last one. After
  * more than SAMPLE_GAP ticks unseen (drainer dead or resting) the window restarts from now: the refills of
  * the gap, with nobody draining, would count against the drain.
