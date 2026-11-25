@@ -40,6 +40,7 @@ npm run test:mockup -- --preset rcl4|rcl5|rcl7         # fast-forwarded room (st
 npm run test:mockup -- --preset rcl6|rcl8|plan5..plan8 --labs --observer --minerals H:20000,X:10000   # plan-based, terminal, labs, observer (RCL 8)
 npm run test:mockup -- --raid 9000:smallMelee+smallRanged,13500:smallMelee*@W7N4   # invader raids ("*" boosted, "**" tier 3 like keeper rooms)
 npm run test:mockup -- --enemy W8N3:3[:defenders[:ringHits]] --enemy-refill 10    # enemy base (enemy-bot.js)
+npm run test:mockup -- --enemy W8N3:2 --enemy-safe-modes 1:2000:20000             # enemy safe modes, shortened
 npm run test:mockup -- --stronghold W7N4:1 | --siege W7N3:1500 | --blockers W7N3:8:500
 npm run test:mockup -- --claim W8N3:2 | --gcl 2 | --structures @file.json | --set-rcl 5
 npm run test:mockup -- --save-state s.json | --load-state s.json   # save / resume a world

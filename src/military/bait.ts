@@ -5,6 +5,7 @@
  * the cooldown window (~30000 ticks without one). shard0 2026-11-14: Blindfold safe-moded W25N7 31 ticks
  * after our boosted quad came in, doorknobnob W26N7 the tick our remote defenders crossed it.
  *
+ * The room set by hand (`Memory.military.attack`) is baited the same way, first (safeMode.ts manualAttackMode).
  * One bait at a time, from the closest base with a spawn. A bait that dies or runs out of time without a
  * safe mode counts as a failure (`failures`); after MAX_BAIT_FAILURES the room gets squads directly.
  */
@@ -13,9 +14,9 @@ import { effectiveEnergy } from "../core/roomState";
 import type { SpawnOption, SpawnRole } from "../spawning/spawnRoles";
 import { log } from "../utils/logger";
 import { countStat } from "../utils/stats";
-import { hostileRoom, militaryMemory, squadBases } from "./intel";
+import { hostileRoom, militaryMemory, recordVisibleRoom, squadBases } from "./intel";
 import { squadRoute } from "./route";
-import { attackMode, safeModePhase } from "./safeMode";
+import { AttackMode, attackMode, baitQueue, manualAttackMode, safeModePhase } from "./safeMode";
 
 export const BAIT = "bait";
 
@@ -82,10 +83,23 @@ function closestBase(roomName: string): string | undefined {
     return _.min(bases, r => Game.map.getRoomLinearDistance(r.name, roomName)).name;
 }
 
-/** A squad attacks the room (manual attack or a mission): no bait there */
+/**
+ * What the room set by hand gets now (safeMode.ts manualAttackMode): a bait while its safe mode is armed,
+ * nothing during a safe mode, a squad otherwise
+ */
+export function manualMode(roomName: string): AttackMode {
+    return manualAttackMode(hostileRoom(roomName), Game.time, baitFailures(roomName));
+}
+
+/** Rooms to bait in order: the manual target first, then the automatic ones (targets.ts) */
+function baitRooms(): string[] {
+    const manual = militaryMemory().attack;
+    return baitQueue(manual, manual ? manualMode(manual) : undefined, wanted);
+}
+
+/** A squad attacks the room (a mission): no bait there */
 function squadThere(roomName: string): boolean {
     const memory = militaryMemory();
-    if (memory.attack === roomName) return true;
     const missions = [...Object.values(memory.duos ?? {}), ...Object.values(memory.quads ?? {})];
     return missions.some(m => m.targetRoom === roomName);
 }
@@ -103,6 +117,8 @@ function end(roomName: string, bait: BaitMemory, result: BaitEnd, why: string): 
     delete bait.base;
     delete bait.sent;
     if (result === "failed") bait.failures++;
+    // The bait leaves the room now: the intel must hold the safe mode, or the room looks armed again
+    if (result === "safeMode") recordVisibleRoom(roomName);
     // A burnt charge shows the owner reacts to baits
     if (result === "safeMode") bait.failures = 0;
     countStat(`military:bait:${result}`);
@@ -112,7 +128,8 @@ function end(roomName: string, bait: BaitMemory, result: BaitEnd, why: string): 
 /** Why the bait under way ends now, else null */
 function baitEnd(roomName: string, bait: BaitMemory): [BaitEnd, string] | null {
     if (safeModeSeen(roomName)) return ["safeMode", "safe mode burnt"];
-    if (!stillArmed(roomName) || (wantedKnown && !wanted.includes(roomName)))
+    const judged = wantedKnown || roomName === militaryMemory().attack;
+    if (!stillArmed(roomName) || (judged && !baitRooms().includes(roomName)))
         return ["dropped", "no longer a target to bait"];
     if (squadThere(roomName)) return ["dropped", "a squad attacks it"];
     if (bait.sent && baitCreeps(roomName).length === 0) return ["failed", "bait gone without a safe mode"];
@@ -124,7 +141,8 @@ function baitEnd(roomName: string, bait: BaitMemory): [BaitEnd, string] | null {
 /** Every tick: ends the bait under way, starts the next one */
 export function runBaits(): void {
     const memory = militaryMemory();
-    if (!memory.baits && wanted.length === 0) return;
+    const queue = baitRooms();
+    if (!memory.baits && queue.length === 0) return;
     const all = baits();
     let active = false;
     for (const [roomName, bait] of Object.entries(all)) {
@@ -136,7 +154,10 @@ export function runBaits(): void {
         else active = true;
     }
     if (!active) {
-        const next = wanted.find(room => stillArmed(room) && !squadThere(room) && !!closestBase(room));
+        // The intel records the safe mode up to 10 ticks after the bait saw it: no new bait meanwhile
+        const next = queue.find(
+            room => stillArmed(room) && !safeModeSeen(room) && !squadThere(room) && !!closestBase(room)
+        );
         if (next) {
             const bait = all[next] ?? { failures: 0 };
             bait.since = Game.time;

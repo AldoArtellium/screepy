@@ -359,6 +359,12 @@ export function updateMilitaryIntel(): void {
     for (const name in rooms) if (Game.time - rooms[name].t > FORGET_AFTER) delete rooms[name];
 }
 
+/** Records a room in sight now, between two RECORD_EVERY ticks (a bait that just saw the safe mode, bait.ts) */
+export function recordVisibleRoom(roomName: string): void {
+    const room = Game.rooms[roomName];
+    if (room) recordRoom(room, ourRooms());
+}
+
 export function hostileRoom(roomName: string): HostileRoom | undefined {
     return militaryMemory().rooms?.[roomName];
 }

@@ -47,7 +47,7 @@ import { chooseAutoTargets, releaseFallen } from "./targets";
 import { militaryCpuAverage, militaryCpuTooHigh } from "./cpuGuard";
 import { decisionBucket } from "../utils/throttle";
 import { refillEngaged } from "./safeMode";
-import { runBaits } from "./bait";
+import { manualMode, runBaits } from "./bait";
 
 export { militaryMemory } from "./intel";
 
@@ -191,7 +191,8 @@ function finish(kind: "duo" | "quad", name: string, mission: Mission, result: "s
     ];
     if (kind === "duo") delete memory.duos[name];
     else delete memory.quads?.[name];
-    if (memory.attack === mission.targetRoom) delete memory.attack;
+    // The order by hand outlives its target's safe mode: the squad goes again in the window after it
+    if (memory.attack === mission.targetRoom && result !== "safeMode") delete memory.attack;
     if (memory.targets) {
         memory.targets = memory.targets.filter(t => t.room !== mission.targetRoom);
         if (memory.targets.length === 0) delete memory.targets;
@@ -399,6 +400,25 @@ function targetStillHeld(roomName: string): boolean {
     return intel.spawns > 0 || (intel.coreLevel ?? 0) > 0;
 }
 
+/** Last mode logged for the manual target (heap) */
+let manualLogged: string | undefined;
+
+/**
+ * The target set by hand waits for its bait or the end of its safe mode (bait.ts manualMode); automatic
+ * targets were filtered on the same phases by targets.ts
+ */
+function manualHeld(target: string): boolean {
+    if (militaryMemory().attack !== target) return false;
+    const mode = manualMode(target);
+    const key = `${target}:${mode}`;
+    if (key !== manualLogged) {
+        manualLogged = key;
+        if (mode !== "squad")
+            log.info("Military", `Attack on ${target} by hand: ${mode === "bait" ? "bait first" : "waits for the end of its safe mode"}`);
+    }
+    return mode !== "squad";
+}
+
 /** Missions at once by default, the manual attack included */
 const DEFAULT_MAX_MISSIONS = 2;
 
@@ -458,7 +478,8 @@ function runMilitary(): void {
     runBaits();
     runNukeStrikes();
     // A target with our nuke in flight: its squad starts so as to arrive around the impact
-    for (const target of currentTargets()) if (!hasMission(target) && !missionHeldByNuke(target)) startMission(target);
+    for (const target of currentTargets())
+        if (!hasMission(target) && !missionHeldByNuke(target) && !manualHeld(target)) startMission(target);
     for (const { name, mission } of missionsInOrder()) {
         refreshBases(name, mission);
         resolveTakeover(mission);

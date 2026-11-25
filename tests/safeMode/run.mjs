@@ -31,7 +31,7 @@ try {
     // Type errors outside this file (global declarations) don't prevent emitting
 }
 
-const { safeModePhase, attackMode, refillEngaged, SAFE_WINDOW_MIN, MAX_BAIT_FAILURES } = require(join(OUT, "military", "safeMode.js"));
+const { safeModePhase, attackMode, manualAttackMode, baitQueue, refillEngaged, SAFE_WINDOW_MIN, MAX_BAIT_FAILURES } = require(join(OUT, "military", "safeMode.js"));
 
 let failures = 0;
 const check = (name, ok, detail) => {
@@ -61,6 +61,24 @@ check("armed: bait first", attackMode("armed", 0) === "bait");
 check(`armed after ${MAX_BAIT_FAILURES} failed baits: squad (the owner doesn't react to a bait)`, attackMode("armed", MAX_BAIT_FAILURES) === "squad");
 check("active: wait", attackMode("active", 0) === "wait");
 check("closing: wait", attackMode("closing", 0) === "wait");
+
+// Manual attack (Memory.military.attack): shard0 2026-11-25 W29N8 of doorknobnob, RCL 4, 3 charges, no cooldown
+const w29n8 = { owner: "doorknobnob", safeModeAvailable: 3 };
+check("manual on an armed player room: bait first", manualAttackMode(w29n8, now, 0) === "bait");
+check(`manual after ${MAX_BAIT_FAILURES} failed baits: squad`, manualAttackMode(w29n8, now, MAX_BAIT_FAILURES) === "squad");
+check(
+    "manual during the safe mode: wait (the order is kept)",
+    manualAttackMode({ ...w29n8, safeMode: now + 20000, safeModeCooldown: now + 50000, safeModeAvailable: 2 }, now, 0) === "wait"
+);
+check(
+    "manual after the safe mode, in the cooldown: squad",
+    manualAttackMode({ ...w29n8, safeMode: now - 1, safeModeCooldown: now + 30000, safeModeAvailable: 2 }, now, 0) === "squad"
+);
+check("manual on a room never seen: squad (the former behaviour)", manualAttackMode(undefined, now, 0) === "squad");
+check("manual on a room without owner (invader core): squad", manualAttackMode({ safeModeAvailable: 3 }, now, 0) === "squad");
+check("bait queue: the manual target first", baitQueue("W29N8", "bait", ["W24N3", "W29N8"]).join(",") === "W29N8,W24N3");
+check("bait queue: the manual target in squad mode is not baited", baitQueue("W29N8", "squad", ["W24N3"]).join(",") === "W24N3");
+check("bait queue: no manual target", baitQueue(undefined, undefined, ["W24N3"]).join(",") === "W24N3");
 
 // shard0 2026-11-14: W25N7 safe-moded, released by targetStillHeld, then re-added by the refill of
 // targets with a mission: the quad poked under safe mode ~310 ticks until watchDrain abandoned it
