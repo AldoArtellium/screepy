@@ -291,6 +291,21 @@ function obstacleMatrix(room: Room): CostMatrix {
 }
 
 /**
+ * The attacker's search around its healer's tile, else through it (the pair swaps places): shard0 W29N7
+ * 2026-11-25, the attacker spawned among extensions with its healer on the one free tile next to it, every
+ * search came back empty and the duo stood still in `advance` (~350 ticks, one `duoSearch` a tick)
+ */
+function searchAroundHealer(
+    healerPos: RoomPosition | undefined,
+    search: (avoid?: RoomPosition) => PathFinderPath
+): PathFinderPath {
+    const result = search(healerPos);
+    if (result.path[0] || !healerPos) return result;
+    countStat("military:duoThroughHealer");
+    return search(undefined);
+}
+
+/**
  * Next tile of the attacker towards another room (`range` of its center), on the duo's cached path
  * when it still applies, else from a new search held to the room route
  */
@@ -304,15 +319,17 @@ function travelStep(attacker: Creep, name: string, goalRoom: string, range: numb
     const key = `travel:${goalRoom}`;
     const cached = cachedStep(paths.get(name), key, attacker.pos, Game.time, healerPos, allowed);
     if (cached) return cached;
-    const roomCallback = travelCallback(room, goalRoom, healerPos ? [healerPos] : [], healerPos);
-    if (!roomCallback) return null;
+    const members = healerPos ? [healerPos] : [];
+    if (!travelCallback(room, goalRoom, members, healerPos)) return null;
     countStat("military:duoSearch");
-    const result = PathFinder.search(attacker.pos, { pos: new RoomPosition(25, 25, goalRoom), range }, {
-        plainCost: 2,
-        swampCost: 10,
-        maxOps,
-        roomCallback
-    });
+    const result = searchAroundHealer(healerPos, avoid =>
+        PathFinder.search(attacker.pos, { pos: new RoomPosition(25, 25, goalRoom), range }, {
+            plainCost: 2,
+            swampCost: 10,
+            maxOps,
+            roomCallback: travelCallback(room, goalRoom, members, avoid)!
+        })
+    );
     if (!result.path[0]) {
         paths.delete(name);
         return null;
@@ -334,12 +351,14 @@ function nextStep(attacker: Creep, name: string, duo: DuoMemory, healerPos?: Roo
         const cached = cachedStep(paths.get(name), key, attacker.pos, Game.time, healerPos);
         if (cached) return { pos: cached, target };
         countStat("military:duoSearch");
-        const result = PathFinder.search(attacker.pos, { pos: target.pos, range: 1 }, {
-            maxRooms: 1,
-            plainCost: 2,
-            swampCost: 10,
-            roomCallback: roomName => (roomName === room.name ? avoiding(matrix, roomName, healerPos) : false)
-        });
+        const result = searchAroundHealer(healerPos, avoid =>
+            PathFinder.search(attacker.pos, { pos: target.pos, range: 1 }, {
+                maxRooms: 1,
+                plainCost: 2,
+                swampCost: 10,
+                roomCallback: roomName => (roomName === room.name ? avoiding(matrix, roomName, avoid) : false)
+            })
+        );
         if (!result.path[0]) {
             paths.delete(name);
             return null;
@@ -463,8 +482,11 @@ function movePair(attacker: Creep, healer: Creep, to: RoomPosition | null, solo 
     }
     trafficManager.requestStep(attacker, to, ATTACKER_PRIORITY);
     noteStep(paths.get(attacker.memory.duo ?? ""), attacker.pos, Game.time);
-    // The healer keeps adjacent: it takes the attacker's tile unless it is already next to the new one
-    if (healer.pos.isNearTo(to) && to.roomName === healer.pos.roomName) hold(healer, HEALER_PRIORITY, targetRoom);
+    // The healer keeps adjacent: it takes the attacker's tile unless it is already next to the new one; on
+    // the new one itself (searchAroundHealer: the attacker's way out), the pair swaps
+    const swap = healer.pos.isEqualTo(to);
+    const adjacent = healer.pos.isNearTo(to) && to.roomName === healer.pos.roomName;
+    if (!swap && adjacent) hold(healer, HEALER_PRIORITY, targetRoom);
     else moveHealer(healer, attacker.pos, 0);
 }
 
