@@ -7,6 +7,10 @@ module.exports.loop = function () {
     const room = Game.rooms[name];
     if (!room.controller || !room.controller.my) continue;
     const hostiles = room.find(FIND_HOSTILE_CREEPS);
+    // Memory.safeModes (sim.cjs --enemy-safe-modes): a safe mode the tick an armed creep comes in
+    const armed = hostiles.some((c) => c.body.some((p) => [ATTACK, RANGED_ATTACK, WORK, CLAIM].includes(p.type)));
+    const c = room.controller;
+    if (Memory.safeModes && armed && !c.safeMode && !c.safeModeCooldown && c.safeModeAvailable > 0) c.activateSafeMode();
     const towers = room.find(FIND_MY_STRUCTURES, { filter: (s) => s.structureType === STRUCTURE_TOWER });
     for (const tower of towers) {
       const target = tower.pos.findClosestByRange(hostiles);

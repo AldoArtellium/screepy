@@ -94,6 +94,31 @@ const refillTrack = { given: 0, stock: 0, minTowerEnergy: null, emptyTicks: 0 };
  */
 const ENEMY_DOWNGRADE = Number(opt("enemy-downgrade", 100000));
 const controllerTrack = { last: null, changes: [] };
+/**
+ * --enemy-safe-modes N[:DURATION[:COOLDOWN]] (needs --enemy): the enemy controller starts with N safe mode
+ * charges and enemy-bot.js activates one the tick an armed hostile creep (ATTACK, RANGED_ATTACK, WORK, CLAIM)
+ * is in its room, like doorknobnob on shard0 (W26N7 safe-moded the tick our remote defenders crossed it).
+ * The engine's 20000 / 50000 ticks don't fit a run: each activation is cut to DURATION (default 2000) and its
+ * cooldown to COOLDOWN (default 5000) ticks after it, in the database the bot reads. Activations are logged
+ * and listed in the report (`enemy.safeModeLog`).
+ */
+const ENEMY_SAFE_MODES = opt("enemy-safe-modes", null);
+const [SAFE_CHARGES, SAFE_DURATION, SAFE_COOLDOWN] = ENEMY_SAFE_MODES
+  ? [0, 2000, 5000].map((fallback, i) => Number(ENEMY_SAFE_MODES.split(":")[i] || fallback))
+  : [0, 0, 0];
+const safeModeLog = [];
+
+/** Cuts a fresh enemy safe mode to SAFE_DURATION and its cooldown to SAFE_COOLDOWN (see ENEMY_SAFE_MODES) */
+async function shortenEnemySafeMode(server, enemy, tick) {
+  const { db } = server.common.storage;
+  const c = await db["rooms.objects"].findOne({ room: enemy.room, type: "controller" });
+  if (!c || !c.safeMode) return;
+  const time = await server.world.gameTime;
+  if (c.safeMode - time <= SAFE_DURATION) return;
+  await db["rooms.objects"].update({ _id: c._id }, { $set: { safeMode: time + SAFE_DURATION, safeModeCooldown: time + SAFE_COOLDOWN } });
+  safeModeLog.push({ tick, left: c.safeModeAvailable });
+  log(`Enemy safe mode at tick ${tick}: until ${time + SAFE_DURATION}, cooldown ${time + SAFE_COOLDOWN}, ${c.safeModeAvailable} left`);
+}
 
 /** Logs every change of the enemy room's controller level or owner, and each attack (upgrade block set) */
 async function trackEnemyController(server, enemy, tick) {
@@ -332,7 +357,7 @@ async function setupEnemy(server, fixture, spec) {
   const enemy = await server.world.addBot({ username: "enemy", room, x: spot.x, y: spot.y, gcl: 10, modules: { main: code } });
   const { db, env } = server.common.storage;
   const blockers = BLOCKERS && BLOCKERS.split(":");
-  const memory = { defenders: Number(defendersText || 0) };
+  const memory = { defenders: Number(defendersText || 0), safeModes: SAFE_CHARGES > 0 };
   if (blockers) memory.blockers = { room: blockers[0], count: Number(blockers[1]), from: Number(blockers[2] || 1), spawned: 0 };
   if (ENEMY_REMOTE) {
     const [remoteRoom, fromText] = ENEMY_REMOTE.split(":");
@@ -345,7 +370,7 @@ async function setupEnemy(server, fixture, spec) {
   }
   await env.set(env.keys.MEMORY + enemy.id, JSON.stringify(memory));
   const time = await server.world.gameTime;
-  await db["rooms.objects"].update({ room, type: "controller" }, { $set: { level: rcl, progress: 0, downgradeTime: time + ENEMY_DOWNGRADE, safeModeAvailable: 0, safeMode: null } });
+  await db["rooms.objects"].update({ room, type: "controller" }, { $set: { level: rcl, progress: 0, downgradeTime: time + ENEMY_DOWNGRADE, safeModeAvailable: SAFE_CHARGES, safeMode: null, safeModeCooldown: null } });
   await db.rooms.update({ _id: room }, { $set: { active: true } });
   const wall = (x, y) => (Number(r.terrain[y * 50 + x]) & 1) === 1;
   const taken = new Set([spot.y * 50 + spot.x, ...r.objects.map((o) => o.y * 50 + o.x)]);
@@ -1269,6 +1294,7 @@ async function main() {
     }
     await runTick(server);
     if (enemy) await trackEnemyController(server, enemy, tick);
+    if (enemy && SAFE_CHARGES > 0) await shortenEnemySafeMode(server, enemy, tick);
     if (SIEGE && enemy && tick % 5 === 0) {
       // Siege energy: the enemy's spawn and extensions full again (its spawn time is the limit)
       for (const type of ["spawn", "extension"]) {
@@ -1445,7 +1471,7 @@ async function main() {
     cpu: { avg: cpuAvg, max: cpuMax, intentsPerTick, officialEstimate: officialCpu, byRole: roleCpu },
     raids: raidLog,
     keepers: keeperTrack,
-    enemy: enemy ? { ...(await enemyStatus(server, enemy)), controllerLog: controllerTrack.changes } : null,
+    enemy: enemy ? { ...(await enemyStatus(server, enemy)), controllerLog: controllerTrack.changes, ...(ENEMY_SAFE_MODES && { safeModeLog }) } : null,
     stronghold: stronghold ? await strongholdStatus(server, stronghold) : null,
     nukes: NUKES.map(nukeReport),
     leftovers: leftovers ? await structuresLeft(server, leftovers) : null,

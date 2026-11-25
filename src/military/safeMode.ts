@@ -44,6 +44,28 @@ export function attackMode(phase: SafeModePhase, baitFailures: number): AttackMo
 }
 
 /**
+ * The room set by hand (`Memory.military.attack`): a player's room follows the same phases as an automatic
+ * target (bait while a charge is armed, wait during a safe mode or a closing cooldown), and keeps the
+ * order across its safe mode. shard0 2026-11-25: doorknobnob claimed our remote W29N8 (RCL 4, 3 charges);
+ * its W26N7 was safe-moded the tick our remote defenders crossed it, so a squad sent at once would only
+ * burn a charge and drop the order. A room never seen, without owner or with an invader core: squad.
+ */
+export function manualAttackMode(
+    facts: (SafeModeFacts & { owner?: string }) | undefined,
+    now: number,
+    baitFailures: number
+): AttackMode {
+    if (!facts?.owner) return "squad";
+    return attackMode(safeModePhase(facts, now), baitFailures);
+}
+
+/** Rooms to bait in order: the manual target first while it waits for a bait, then the automatic ones */
+export function baitQueue(manual: string | undefined, manualMode: AttackMode | undefined, wanted: string[]): string[] {
+    if (!manual || manualMode !== "bait") return wanted;
+    return [manual, ...wanted.filter(room => room !== manual)];
+}
+
+/**
  * Engaged targets added back while a slot is free: those with a mission, never one under safe mode
  * (`safeModed`). Before, any target with a mission came back, so a safe-moded target kept its quad poking
  * (shard0 W25N7 2026-11-14, ~310 ticks until the drain watch). A room whose last spawn fell stays: its
