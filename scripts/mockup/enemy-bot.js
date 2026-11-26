@@ -69,7 +69,7 @@ function runRemote() {
     if (creep.spawning) continue;
     if (creep.name.startsWith("rharv")) {
       if (creep.room.name !== r.room) {
-        creep.moveTo(new RoomPosition(25, 25, r.room), { reusePath: 10, range: 20 });
+        travelTo(creep, new RoomPosition(25, 25, r.room), 20);
         continue;
       }
       const source = creep.room.find(FIND_SOURCES)[0];
@@ -78,7 +78,7 @@ function runRemote() {
     } else if (creep.name.startsWith("rres")) {
       const room = Game.rooms[r.room];
       const target = room && room.controller ? room.controller.pos : new RoomPosition(25, 25, r.room);
-      if (!creep.pos.isNearTo(target)) creep.moveTo(target, { reusePath: 10, range: 1 });
+      if (!creep.pos.isNearTo(target)) travelTo(creep, target, 1);
     }
   }
 }
@@ -215,6 +215,27 @@ function runSiege() {
   }
 }
 
+/**
+ * Moves towards a position in another room by a room route that avoids Memory.avoid (sim.cjs: our room,
+ * whose towers shoot MOVE-only creeps: a player sends them around it), unless it is the destination
+ */
+function travelTo(creep, target, range) {
+  if (creep.room.name !== target.roomName) {
+    const avoid = Memory.avoid || [];
+    const route = Game.map.findRoute(creep.room.name, target.roomName, {
+      routeCallback: (room) => (room !== target.roomName && avoid.includes(room) ? Infinity : 1)
+    });
+    if (route !== ERR_NO_PATH && route.length > 0) {
+      const exit = creep.pos.findClosestByPath(route[0].exit);
+      if (exit) {
+        creep.moveTo(exit, { reusePath: 5, maxRooms: 1 });
+        return;
+      }
+    }
+  }
+  creep.moveTo(target, { reusePath: 5, range, maxRooms: 1 });
+}
+
 /** Free tiles next to the controller and sources of a visible room, controller first */
 function blockingTiles(room) {
   const terrain = room.getTerrain();
@@ -262,6 +283,6 @@ function runBlockers() {
     }
     const tile = tiles[creep.memory.tile];
     const target = tile ? new RoomPosition(tile.x, tile.y, b.room) : new RoomPosition(25, 25, b.room);
-    if (!creep.pos.isEqualTo(target)) creep.moveTo(target, { reusePath: 5, range: tile ? 0 : 5 });
+    if (!creep.pos.isEqualTo(target)) travelTo(creep, target, tile ? 0 : 5);
   }
 }

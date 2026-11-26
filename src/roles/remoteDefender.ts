@@ -10,7 +10,7 @@ import { stayInPlace, whenInRange } from "../core/movement";
 import { isFast } from "../defense/RoomDefense";
 import { trafficManager } from "../modules/TrafficManager";
 import { healPower } from "../military/combat";
-import { isRoomUnderAttack } from "../modules/RoomIntel";
+import { isRoomUnderAttack, pressingPlayerOf } from "../modules/RoomIntel";
 import { pickFocus } from "../remote/defenseModel";
 import { groupMembers, missingBoosts, REMOTE_DEFENDER, waitingForGroup } from "../remote/remoteDefense";
 import { SOURCE_KEEPER } from "../remote/keepers";
@@ -53,7 +53,8 @@ export function runRemoteDefender(creep: Creep): void {
     const hostiles = creep.room.find(FIND_HOSTILE_CREEPS, {
         filter: c => c.owner.username !== SOURCE_KEEPER && (inTarget || c.pos.inRangeTo(creep, ENGAGE_RANGE))
     });
-    const enemy = groupFocus(creep, hostiles) ?? creep.pos.findClosestByRange(hostiles);
+    const enemy =
+        groupFocus(creep, hostiles) ?? controllerPresser(creep, hostiles) ?? creep.pos.findClosestByRange(hostiles);
     if ((!enemy || !enemy.pos.inRangeTo(creep, ENGAGE_RANGE)) && regroup(creep)) return;
     if (enemy) {
         engage(creep, enemy);
@@ -72,7 +73,8 @@ export function runRemoteDefender(creep: Creep): void {
     }
     // Remote clear: heal the harvesters and haulers hit in the fight first (no tower there, a damaged part does nothing)
     if (healWounded(creep, { move: true })) return;
-    if (!isRoomUnderAttack(targetRoom)) {
+    // A pressed remote (controllerPressure.ts): their blockers come back, the defender stays on guard
+    if (!isRoomUnderAttack(targetRoom) && !pressingPlayerOf(targetRoom)) {
         // Forget the target: else, back out of it, the defender walked to it again (endless bounce
         // on the room edge)
         delete creep.memory.targetRoom;
@@ -97,7 +99,27 @@ function regroup(creep: Creep): boolean {
 }
 
 /** Heals the most wounded adjacent group member (Hivemind brawler), else pre-heals itself near hostiles */
+/**
+ * No armed hostile: their claimers first, then their creeps parked at the controller (controllerPressure.ts,
+ * shard0 W29N8: blockers kept our reserver off while a claimer ate the reservation), else the closest
+ */
+function controllerPresser(creep: Creep, hostiles: Creep[]): Creep | null {
+    const controller = creep.room.controller;
+    if (!controller || controller.my) return null;
+    const armed = (c: Creep) =>
+        c.body.some(p => p.hits > 0 && (p.type === ATTACK || p.type === RANGED_ATTACK || p.type === HEAL));
+    if (hostiles.some(armed)) return null;
+    const claimers = hostiles.filter(c => c.getActiveBodyparts(CLAIM) > 0);
+    if (claimers.length > 0) return creep.pos.findClosestByRange(claimers);
+    return creep.pos.findClosestByRange(hostiles.filter(c => c.pos.isNearTo(controller)));
+}
+
 function healGroup(creep: Creep): void {
+    // heal cancels attack in the same tick (engine processor/intents/creeps/intents.js: attack yields to heal):
+    // a melee defender next to a hostile attacks. Before, the pre-heal below cancelled every hit of a mini
+    // brawler (ATTACK + HEAL) since 2026-10-19 (mockup W8N3 2026-11-26: 400+ ticks at range 1 of a 100-hit
+    // MOVE blocker, 3526 attack intents, the blocker untouched)
+    if (creep.getActiveBodyparts(ATTACK) > 0 && meleeTargetAdjacent(creep)) return;
     const group = creep.memory.defenseGroup;
     const allies = group && creep.memory.room ? groupMembers(creep.memory.room, group) : [creep];
     // rangedHeal would cancel rangedAttack (same action pipeline): adjacent allies only
@@ -107,6 +129,16 @@ function healGroup(creep: Creep): void {
         return;
     }
     if (creep.hits < creep.hitsMax || creep.room.find(FIND_HOSTILE_CREEPS).length > 0) creep.heal(creep);
+}
+
+/** A hostile creep (not a keeper) or an invader core within melee range */
+function meleeTargetAdjacent(creep: Creep): boolean {
+    if (creep.pos.findInRange(FIND_HOSTILE_CREEPS, 1, { filter: c => c.owner.username !== SOURCE_KEEPER }).length > 0)
+        return true;
+    const cores = creep.pos.findInRange(FIND_HOSTILE_STRUCTURES, 1, {
+        filter: s => s.structureType === STRUCTURE_INVADER_CORE
+    });
+    return cores.length > 0;
 }
 
 function engage(creep: Creep, target: Creep | Structure): void {

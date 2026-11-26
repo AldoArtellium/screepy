@@ -41,6 +41,7 @@ npm run test:mockup -- --preset rcl6|rcl8|plan5..plan8 --labs --observer --miner
 npm run test:mockup -- --raid 9000:smallMelee+smallRanged,13500:smallMelee*@W7N4   # invader raids ("*" boosted, "**" tier 3 like keeper rooms)
 npm run test:mockup -- --enemy W8N3:3[:defenders[:ringHits]] --enemy-refill 10    # enemy base (enemy-bot.js)
 npm run test:mockup -- --enemy W8N3:2 --enemy-safe-modes 1:2000:20000             # enemy safe modes, shortened
+npm run test:mockup -- --enemy W8N2:3 --enemy-remote W8N3:2000:attack --blockers W8N3:3:2000   # pressure on our remote
 npm run test:mockup -- --stronghold W7N4:1 | --siege W7N3:1500 | --blockers W7N3:8:500
 npm run test:mockup -- --claim W8N3:2 | --gcl 2 | --structures @file.json | --set-rcl 5
 npm run test:mockup -- --save-state s.json | --load-state s.json   # save / resume a world
@@ -115,7 +116,7 @@ Convention everywhere (`src/core/options.ts` `getBestOption`): **higher priority
 - Dispatcher (`src/dispatcher/`): source / destination providers; a creep's order in `creep.memory.order`, reservations per tick in `src/core/roomState.ts`.
 - Planner (`src/planner/`): Hivemind steps and variations scored by `RoomPlanScorer.ts`; bump `PLAN_VERSION` (`RoomPlan.ts`) to replan every room. Offline: `node tests/planner/run.mjs`.
 - Construction (`src/construction/`): Hivemind build order; idle rooms skipped until something changes.
-- Remote mining (`src/remote/`): selection every 20 ticks ranked by net energy per spawn part, paths in segment 5 (shared trunks), one home per remote room, measured balance exclusions, contested rooms, seized rooms (`remoteSeize.ts`), remote defense with boosted responses. CPU budget: one 95% share of the limit, the bucket as hysteresis (9000 to add a room, below 8000 to drop one), one change per 1000 ticks (`remoteIncome.ts` `budgetRooms`). `cpuPressure()` (budget capped, or CPU above 85%) is the single CPU signal the visuals and the rescout read.
+- Remote mining (`src/remote/`): selection every 20 ticks ranked by net energy per spawn part, paths in segment 5 (shared trunks), one home per remote room, measured balance exclusions, contested rooms (ceded to stronger players; others pressing our remotes are fought, `controllerPressure.ts`), seized rooms (`remoteSeize.ts`), remote defense with boosted responses. CPU budget: one 95% share of the limit, the bucket as hysteresis (9000 to add a room, below 8000 to drop one), one change per 1000 ticks (`remoteIncome.ts` `budgetRooms`). `cpuPressure()` (budget capped, or CPU above 85%) is the single CPU signal the visuals and the rescout read.
 - Deliberate deviations from Hivemind are each listed with their measurement in `docs/decisions/economy.md`.
 
 ### Resources: terminal, market, labs (`docs/decisions/resources.md`)

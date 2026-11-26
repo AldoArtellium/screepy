@@ -389,6 +389,16 @@ function checkAlerts(state: ReportState): void {
         if (!owned.has(name)) alert(state, `lost:${name}`, `${name} is no longer owned`);
     }
     state.hadSpawn = withSpawn;
+    // Another player at the controller of one of our remotes (RoomIntel.ts, controllerPressure.ts)
+    for (const [room, entry] of Object.entries(Memory.remotePressure ?? {})) {
+        if (Game.time - entry.seen > ALERT_CHECK_INTERVAL) continue;
+        alert(
+            state,
+            `pressure:${room}:${entry.player}`,
+            `remote ${room} pressed by ${entry.player} ` +
+                `(${entry.claimers} claimer(s), ${entry.blockers} blocker(s)): defended`
+        );
+    }
 
     const errors = _.countBy(
         (Memory.moduleErrors ?? []).filter(e => e.tick > state.alertCheck),

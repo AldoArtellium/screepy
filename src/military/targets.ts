@@ -141,7 +141,7 @@ function holdings(): RoomHolding[] {
 }
 
 /** Rooms seen owned by each player (military intel and static intel, playerThreat.ts playerRoomCounts) */
-function playerRooms(): { [player: string]: number } {
+export function playerRooms(): { [player: string]: number } {
     const seen: OwnedRoomSeen[] = Object.entries(militaryMemory().rooms ?? {}).map(([room, r]) => ({
         room,
         owner: r.owner,

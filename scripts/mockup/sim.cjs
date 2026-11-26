@@ -160,7 +160,9 @@ async function refillEnemyTowers(server, enemy, tick) {
  * Remote of the enemy player (needs --enemy): "ROOM[:fromTick]", e.g. --enemy-remote W7N4. From fromTick
  * (default 1) the enemy keeps a harvester (2 WORK) on ROOM's first source and a reserver parked next to
  * its controller (a MOVE creep: the spawn has 300 energy; while it stands there this script adds the
- * reservation 2 CLAIM parts would, every 10 ticks), like doorknobnob's W27N8 on shard0.
+ * reservation 2 CLAIM parts would, every 10 ticks), like doorknobnob's W27N8 on shard0. "ROOM:fromTick:attack"
+ * (one of our remotes): while our reservation stands, the parked reserver takes 2 ticks per tick off it
+ * instead, like attackController with 2 CLAIM parts (shard0 W29N8, doorknobnob 2026-11).
  * The report adds `enemy.remote`: creeps spawned / alive in ROOM, ticks the room was reserved by the
  * enemy and by us, the reservation at the end.
  */
@@ -184,8 +186,14 @@ async function reserveEnemyRemote(server, enemy, tick) {
     (c) => /^rres/.test(c.name) && Math.abs(c.x - controller.x) <= 1 && Math.abs(c.y - controller.y) <= 1
   );
   if (!parked) return;
-  // Their reserver only reserves a free or already theirs controller (ours: it would attack it first)
-  if (reservation && reservation.user !== enemy.id && reservation.endTime > time) return;
+  // Their reserver only reserves a free or already theirs controller. With ":attack" it attacks ours first,
+  // like attackController with 2 CLAIM parts (-2 ticks per tick; shard0 W29N8, doorknobnob 2026-11)
+  if (reservation && reservation.user !== enemy.id && reservation.endTime > time) {
+    if (ENEMY_REMOTE.split(":")[2] !== "attack") return;
+    await db["rooms.objects"].update({ _id: controller._id }, { $set: { reservation: { ...reservation, endTime: reservation.endTime - 20 } } });
+    remoteTrack.attacked = (remoteTrack.attacked || 0) + 20;
+    return;
+  }
   // Like reserveController with 2 CLAIM parts: +2 ticks per tick, capped at CONTROLLER_RESERVE_MAX
   const current = reservation && reservation.user === enemy.id && reservation.endTime > time ? reservation.endTime : time;
   const endTime = Math.min(current + 20, time + 5000);
@@ -357,7 +365,8 @@ async function setupEnemy(server, fixture, spec) {
   const enemy = await server.world.addBot({ username: "enemy", room, x: spot.x, y: spot.y, gcl: 10, modules: { main: code } });
   const { db, env } = server.common.storage;
   const blockers = BLOCKERS && BLOCKERS.split(":");
-  const memory = { defenders: Number(defendersText || 0), safeModes: SAFE_CHARGES > 0 };
+  // avoid: our room, around which the enemy's remote creeps and blockers travel (enemy-bot.js travelTo)
+  const memory = { defenders: Number(defendersText || 0), safeModes: SAFE_CHARGES > 0, avoid: [ROOM] };
   if (blockers) memory.blockers = { room: blockers[0], count: Number(blockers[1]), from: Number(blockers[2] || 1), spawned: 0 };
   if (ENEMY_REMOTE) {
     const [remoteRoom, fromText] = ENEMY_REMOTE.split(":");
@@ -800,6 +809,7 @@ async function enemyStatus(server, enemy) {
       alive: creeps.filter((c) => /^r(harv|res)/.test(c.name)).length,
       enemyReservedTicks: remoteTrack.enemyTicks,
       ourReservedTicks: remoteTrack.ourTicks,
+      ourReservationAttacked: remoteTrack.attacked || 0,
       reservationAtEnd: reservation ? `${reservation.user === enemy.id ? "enemy" : "us"} ${reservation.endTime - time}` : "none"
     };
   }

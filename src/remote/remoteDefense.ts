@@ -16,6 +16,7 @@ import { creepsByRole, effectiveEnergy } from "../core/roomState";
 import { BoostEffect, BoostPlan, boostableParts, boostsWith, canBoost, operationalLabs } from "../labs/boosts";
 import { tierOf } from "../military/boostNeed";
 import { energyPrice } from "../modules/MarketManager";
+import { pressingPlayerOf } from "../modules/RoomIntel";
 import type { SpawnOption } from "../spawning/spawnRoles";
 import { log } from "../utils/logger";
 import { countStat } from "../utils/stats";
@@ -150,6 +151,7 @@ function groupOptions(home: Room): DefenseOption[] {
  * we seized (remoteSeize.ts): RoomIntel leaves WORK / CARRY creeps out of the room's threat abroad and
  * `unarmedPlayers` skips reservers, so the normal defense never fights them, and their reservation
  * blocks our harvesters and their reserver our remote spawns. Armed creeps go through the normal response.
+ * The same against a player pressing one of our remotes (controllerPressure.ts, shard0 W29N8 2026-11).
  */
 function seizeDefenseOptions(home: Room): DefenseOption[] {
     const options: DefenseOption[] = [];
@@ -158,7 +160,9 @@ function seizeDefenseOptions(home: Room): DefenseOption[] {
         const roomName = source.room;
         if (seen.has(roomName)) continue;
         seen.add(roomName);
-        if (!seizedFrom(roomName)) continue;
+        // Seized from them, or one of ours they press (controllerPressure.ts: claimers and blockers at the controller)
+        const why = seizedFrom(roomName) ? "seize" : pressingPlayerOf(roomName) ? "pressure" : undefined;
+        if (!why) continue;
         const room = Game.rooms[roomName];
         if (!room) continue;
         const players = room.find(FIND_HOSTILE_CREEPS, { filter: c => !NPC_OWNERS.includes(c.owner.username) });
@@ -167,14 +171,14 @@ function seizeDefenseOptions(home: Room): DefenseOption[] {
         const recent = home.memory.recentDefender?.[roomName] ?? -Infinity;
         if (Game.time - recent < DEFENDER_DELAY) continue;
         if (creepsByRole(home.name, REMOTE_DEFENDER).some(c => c.memory.targetRoom === roomName)) continue;
-        countStat("remoteDefense:seize");
+        countStat(`remoteDefense:${why}`);
         options.push({
             role: REMOTE_DEFENDER,
             priority: 3,
             weight: 1,
             targetRoom: roomName,
             response: DefenseResponse.MINI_BRAWLER,
-            reason: `seize ${roomName}: ${players.length} creep(s) of ${players[0].owner.username}`
+            reason: `${why} ${roomName}: ${players.length} creep(s) of ${players[0].owner.username}`
         });
     }
     return options;

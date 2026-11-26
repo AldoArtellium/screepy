@@ -24,6 +24,7 @@ try {
             "--types", "screeps,lodash",
             join(ROOT, "src", "remote", "remoteRooms.ts"),
             join(ROOT, "src", "remote", "keepers.ts"),
+            join(ROOT, "src", "remote", "controllerPressure.ts"),
         ],
         { stdio: "pipe" }
     );
@@ -253,6 +254,42 @@ check("else a container next to the source", pickSourceContainer(src, { x: 7, y:
 check("not one 2 tiles away", pickSourceContainer(src, { x: 7, y: 36 }, [{ id: "c", x: 8, y: 37 }]) === undefined);
 check("the one closest to the path's tile", pickSourceContainer(src, { x: 7, y: 36 }, [{ id: "a", x: 5, y: 38 }, { id: "d", x: 7, y: 37 }]) === "d");
 check("no path tile: next to the source", pickSourceContainer(src, undefined, [{ id: "a", x: 6, y: 36 }]) === "a");
+
+// Controller pressure on our remotes (remote/controllerPressure.ts): shard0 W29N8 2026-11, doorknobnob's
+// creeps at the controller of W29N7's remote, one with CLAIM; the contest rule ceded the room
+{
+    const { pressingPlayer, controllerCrowd, defendsRemote, notePressure, pressedBy, PRESSURE_TTL } = require(
+        join(OUT, "remote", "controllerPressure.js")
+    );
+    const w29n8 = [
+        { owner: "doorknobnob", claims: true, atController: true },
+        { owner: "doorknobnob", claims: false, atController: true },
+        { owner: "doorknobnob", claims: false, atController: true },
+        { owner: "doorknobnob", claims: false, atController: false }
+    ];
+    check("pressing player: their creeps at the controller", pressingPlayer(w29n8, ME) === "doorknobnob");
+    check("pressing player: ours and NPCs never", pressingPlayer([
+        { owner: ME, claims: true, atController: true },
+        { owner: "Invader", claims: true, atController: true }
+    ], ME) === undefined);
+    check("pressing player: a creep passing away from the controller doesn't count",
+        pressingPlayer([{ owner: "doorknobnob", claims: true, atController: false }], ME) === undefined);
+    const crowd = controllerCrowd(w29n8, "doorknobnob");
+    check("crowd: 1 claimer, 2 blockers (the one away not counted)", crowd.claimers === 1 && crowd.blockers === 2);
+    check("defend: our remote, a player no stronger", defendsRemote(true, false));
+    check("cede: a stronger player (W28N4, Blindfold)", !defendsRemote(true, true));
+    check("cede: a room we don't mine", !defendsRemote(false, false));
+    const entries = {};
+    check("pressure: a new episode", notePressure(entries, "W29N8", "doorknobnob", 1000, crowd));
+    check("pressure: the same episode later", !notePressure(entries, "W29N8", "doorknobnob", 1500, { claimers: 0, blockers: 3 }));
+    check("pressure: last sighting kept", entries.W29N8.seen === 1500 && entries.W29N8.since === 1000 && entries.W29N8.blockers === 3);
+    check("pressure: held until PRESSURE_TTL after the last sighting",
+        pressedBy(entries.W29N8, 1500 + PRESSURE_TTL - 1) === "doorknobnob" && pressedBy(entries.W29N8, 1500 + PRESSURE_TTL) === undefined);
+    check("pressure: another player starts a new episode", notePressure(entries, "W29N8", "Blindfold", 1600, crowd));
+    // Their reservation no longer blocks the room while pressed (passed as releasedFrom)
+    check("pressed room: the presser's reservation doesn't block",
+        !isRemoteBlocked("W29N8", { reserver: "doorknobnob" }, ME, false, "doorknobnob"));
+}
 
 console.log(failures === 0 ? "\nall checks passed" : `\n${failures} check(s) failed`);
 process.exit(failures === 0 ? 0 : 1);

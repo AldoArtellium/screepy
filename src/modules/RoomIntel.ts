@@ -18,6 +18,18 @@ import {
     ReleaseEntry,
     releaseFrom
 } from "../remote/remoteRooms";
+import {
+    ControllerCreep,
+    controllerCrowd,
+    defendsRemote,
+    notePressure,
+    PressureEntry,
+    pressedBy,
+    pressingPlayer
+} from "../remote/controllerPressure";
+import { looksStronger } from "../military/playerThreat";
+import { playerRooms } from "../military/targets";
+import { minedRemoteRoomNames } from "../remote/RemoteMining";
 import { jitter } from "../utils/jitter";
 import { log } from "../utils/logger";
 import { countStat } from "../utils/stats";
@@ -31,12 +43,17 @@ declare global {
         remoteContested?: { [room: string]: ContestEntry };
         /** Rooms released from a player whose room our squad destroyed (remote/remoteRooms.ts releaseFrom) */
         remoteReleased?: { [room: string]: ReleaseEntry };
+        /** Our remotes whose controller another player presses, defended (remote/controllerPressure.ts) */
+        remotePressure?: { [room: string]: PressureEntry };
     }
 }
 
-/** The player whose reservation no longer blocks the room, while the release lasts */
+/**
+ * The player whose reservation no longer blocks the room: released (while the release lasts), or pressing
+ * one of our remotes (controllerPressure.ts: our reserver attacks their reservation)
+ */
 export function releasedPlayer(roomName: string): string | undefined {
-    return releaseFrom(Memory.remoteReleased?.[roomName], Game.time)?.player;
+    return releaseFrom(Memory.remoteReleased?.[roomName], Game.time)?.player ?? pressingPlayerOf(roomName);
 }
 
 /** Releases rooms from a player (military.ts, a successful attack) and forgets their contests there */
@@ -71,15 +88,43 @@ function recordContest(room: Room): void {
         owner: c.owner.username,
         harvests:
             c.getActiveBodyparts(WORK) > 0 && (sources ??= room.find(FIND_SOURCES)).some(s => c.pos.isNearTo(s)),
-        claims: c.getActiveBodyparts(CLAIM) > 0 && c.pos.isNearTo(controller)
+        claims: c.getActiveBodyparts(CLAIM) > 0 && c.pos.isNearTo(controller),
+        atController: c.pos.isNearTo(controller)
     }));
-    const player = contestingPlayer({ reserver, creeps }, Memory.username, releaseFrom(Memory.remoteReleased?.[room.name], Game.time));
+    const released = releaseFrom(Memory.remoteReleased?.[room.name], Game.time);
+    const contester = contestingPlayer({ reserver, creeps }, Memory.username, released);
+    // One of our remotes: a player no stronger than us pressing it is fought, not ceded (controllerPressure.ts)
+    const presser = contester ?? pressingPlayer(creeps, Memory.username);
+    if (presser && presser !== released?.player && recordPressure(room, presser, creeps)) return;
+    const player = contester;
     if (!player) return;
     Memory.remoteContested ??= {};
     if (noteContest(Memory.remoteContested, room.name, player, Game.time, jitter(CONTEST_TTL))) {
         countStat("remote:contested");
         log.info("RoomIntel", `${room.name} contested by ${player}: no remote mining there for ~${CONTEST_TTL} ticks`);
     }
+}
+
+/**
+ * A player pressing one of our remotes (controllerPressure.ts): defended when they look no stronger than
+ * us, recorded in Memory.remotePressure (no contest). False: the contest rule applies.
+ */
+function recordPressure(room: Room, player: string, creeps: ControllerCreep[]): boolean {
+    if (!minedRemoteRoomNames().has(room.name)) return false;
+    const owned = _.filter(Game.rooms, r => !!r.controller?.my).length;
+    if (!defendsRemote(true, looksStronger(playerRooms()[player] ?? 0, owned))) return false;
+    Memory.remotePressure ??= {};
+    const crowd = controllerCrowd(creeps, player);
+    if (notePressure(Memory.remotePressure, room.name, player, Game.time, crowd)) {
+        countStat("remote:pressure");
+        log.warn("RoomIntel", `${room.name} pressed by ${player} (${crowd.claimers} claimer(s), ${crowd.blockers} blocker(s)): defended`);
+    }
+    return true;
+}
+
+/** The player pressing one of our remotes, while the pressure lasts (their reservation doesn't block it) */
+export function pressingPlayerOf(roomName: string): string | undefined {
+    return pressedBy(Memory.remotePressure?.[roomName], Game.time);
 }
 
 /** Another player mined or reserved the room within the last ~20000 ticks */
@@ -99,8 +144,14 @@ function dangerous(room: Room): Creep[] {
 }
 
 export const roomIntelModule = () => {
-    if ((Memory.remoteContested || Memory.remoteReleased) && Game.time - lastContestPrune >= CONTEST_PRUNE_INTERVAL) {
+    const prunable = Memory.remoteContested || Memory.remoteReleased || Memory.remotePressure;
+    if (prunable && Game.time - lastContestPrune >= CONTEST_PRUNE_INTERVAL) {
         lastContestPrune = Game.time;
+        if (Memory.remotePressure) {
+            for (const roomName in Memory.remotePressure)
+                if (!pressedBy(Memory.remotePressure[roomName], Game.time)) delete Memory.remotePressure[roomName];
+            if (Object.keys(Memory.remotePressure).length === 0) delete Memory.remotePressure;
+        }
         if (Memory.remoteContested) {
             pruneContests(Memory.remoteContested, Game.time);
             if (Object.keys(Memory.remoteContested).length === 0) delete Memory.remoteContested;
